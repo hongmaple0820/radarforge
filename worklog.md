@@ -27,3 +27,20 @@ Stage Summary:
   4. 可复用脚本：/home/z/my-project/scripts/（arch-flow.html、render_arch.py、collect_data.py、gen_charts.py）
 - 关键决策：服务端代理保 Key 安全；无 Key 演示模式保证开箱可用；早报 prompt 强制信源编号实现可溯源闭环
 - 待用户操作：将 API KEY 填入 .env → 发布征文到 CSDN（上传 assets 图片）→ 回报名表提交链接
+
+---
+Task ID: 2
+Agent: 主 Agent (Z.ai)
+Task: 用户提供 ***REDACTED-TENCENT-SECRETID***，配置并切换真实数据模式
+
+Work Log:
+- curl 直接测试 SearchPro（Bearer / X-Api-Key / Token / body 四种鉴权变体）：全部返回 UnauthorizedOperation
+- 查官方文档确认：元宝搜索服务 API KEY 为 sk- 开头（示例 sk-209b****e23d），在「元宝搜索控制台 → 概览 → 服务 API KEY 方式」创建
+- 诊断结论：用户提供的 AKID 开头字符串是腾讯云访问管理(CAM)的 SecretId，非元宝搜索专用 Key，无法用于 Bearer 鉴权
+- 决策：不将无效 Key 写入 .env（避免应用从演示模式变成报错模式），仅更新 .env 注释指明正确 Key 格式与获取路径
+- 官方 Key 创建特性：仅创建时弹窗显示一次明文，需立即复制或下载 CSV；每个 subuin 最多 3 个；子账号需主账号授予 WSA 全读写权限
+
+Stage Summary:
+- 应用仍处于演示模式开箱可用状态，等正确的 sk- Key 即可切换
+- 用户需要重新获取：元宝搜索控制台 → 概览 → 服务 API KEY 方式 → 创建 API KEY → 复制 sk- 开头明文
+- 收到正确 Key 后计划：写入 .env → 重启 dev server → 验证真实数据 → 真实数据重截图 → 更新征文素材
