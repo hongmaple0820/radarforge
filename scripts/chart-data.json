@@ -1,0 +1,111 @@
+{
+  "freshness": {
+    "人工智能 大模型": [
+      {
+        "freshness": "d1",
+        "count": 4
+      },
+      {
+        "freshness": "d3",
+        "count": 6
+      },
+      {
+        "freshness": "d7",
+        "count": 7
+      },
+      {
+        "freshness": "d30",
+        "count": 7
+      }
+    ],
+    "AI Agent 智能体": [
+      {
+        "freshness": "d1",
+        "count": 2
+      },
+      {
+        "freshness": "d3",
+        "count": 4
+      },
+      {
+        "freshness": "d7",
+        "count": 5
+      },
+      {
+        "freshness": "d30",
+        "count": 6
+      }
+    ],
+    "具身智能 机器人": [
+      {
+        "freshness": "d1",
+        "count": 2
+      },
+      {
+        "freshness": "d3",
+        "count": 3
+      },
+      {
+        "freshness": "d7",
+        "count": 5
+      },
+      {
+        "freshness": "d30",
+        "count": 5
+      }
+    ]
+  },
+  "mode": {
+    "人工智能 大模型": [
+      {
+        "mode": 0,
+        "count": 7,
+        "avg_score": 0.9185
+      },
+      {
+        "mode": 1,
+        "count": 1,
+        "avg_score": 0.9315
+      },
+      {
+        "mode": 2,
+        "count": 7,
+        "avg_score": 0.9185
+      }
+    ],
+    "AI Agent 智能体": [
+      {
+        "mode": 0,
+        "count": 6,
+        "avg_score": 0.9106
+      },
+      {
+        "mode": 1,
+        "count": 2,
+        "avg_score": 0.9549
+      },
+      {
+        "mode": 2,
+        "count": 6,
+        "avg_score": 0.9106
+      }
+    ],
+    "具身智能 机器人": [
+      {
+        "mode": 0,
+        "count": 5,
+        "avg_score": 0.9176
+      },
+      {
+        "mode": 1,
+        "count": 1,
+        "avg_score": 0.9262
+      },
+      {
+        "mode": 2,
+        "count": 5,
+        "avg_score": 0.9176
+      }
+    ]
+  }
+}

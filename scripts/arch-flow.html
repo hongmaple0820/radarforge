@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --text: #111827;
+    --text-sub: #6B7280;
+    --text-muted: #9CA3AF;
+    --bg: #FFFFFF;
+    --border: #E5E7EB;
+    --connector: #94A3B8;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', 'SimHei', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  #root { width: 980px; margin: 0 auto; padding: 48px 44px 40px; background: #FFFFFF; }
+
+  .flow-title {
+    font-size: 24px; font-weight: 700; color: var(--text);
+    text-align: center; margin-bottom: 6px;
+  }
+  .flow-subtitle {
+    font-size: 13px; color: var(--text-sub);
+    text-align: center; margin-bottom: 36px;
+  }
+
+  .phase-group {
+    background: #F8FAFC; border-radius: 12px; padding: 20px 24px 18px;
+    border: 1px solid #EEF2F7;
+  }
+  .phase-title {
+    font-size: 16px; font-weight: 700; padding: 10px 16px;
+    border-radius: 8px; margin-bottom: 14px;
+    display: flex; align-items: baseline; justify-content: space-between;
+  }
+  .phase-title .phase-tag {
+    font-size: 11.5px; font-weight: 500; opacity: 0.75;
+    font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  }
+  .phase-steps { display: flex; flex-direction: column; gap: 8px; padding-left: 12px; }
+  .phase-step {
+    font-size: 14px; font-weight: 400; color: var(--text);
+    padding: 9px 14px; background: white; border-radius: 6px;
+    border: 1px solid var(--border);
+    display: flex; align-items: center;
+  }
+  .phase-step .step-num {
+    display: inline-flex; width: 22px; height: 22px; line-height: 22px;
+    align-items: center; justify-content: center;
+    border-radius: 50%; font-size: 12px; font-weight: 600;
+    margin-right: 10px; flex-shrink: 0;
+  }
+  .phase-step code {
+    font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 12px; background: #F1F5F9; color: #334155;
+    padding: 1px 6px; border-radius: 4px; margin: 0 3px;
+  }
+  .phase-step .step-note {
+    margin-left: auto; font-size: 11.5px; color: var(--text-muted); flex-shrink: 0; padding-left: 12px;
+    font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  }
+
+  /* 蓝灰同色系渐进（4 阶段 Scheme A） */
+  .phase-1 .phase-title { background: #F0F4F8; color: #334155; border-left: 4px solid #64748B; }
+  .phase-1 .step-num { background: #E2E8F0; color: #475569; }
+  .phase-2 .phase-title { background: #E8EDF2; color: #1E3A5F; border-left: 4px solid #5B7A99; }
+  .phase-2 .step-num { background: #DBEAFE; color: #1E3A5F; }
+  .phase-3 .phase-title { background: #E0E7EF; color: #1E3050; border-left: 4px solid #4A6B8A; }
+  .phase-3 .step-num { background: #D0D9E4; color: #1E3050; }
+  .phase-4 .phase-title { background: #D8E0EA; color: #172540; border-left: 4px solid #3A5C7A; }
+  .phase-4 .step-num { background: #C7D2E0; color: #172540; }
+
+  .arrow-row {
+    text-align: center; color: var(--connector);
+    font-size: 22px; line-height: 1; margin: 10px 0;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+  }
+  .arrow-row .arrow-label {
+    font-size: 11.5px; color: var(--text-sub);
+    background: #F8FAFC; border: 1px solid var(--border);
+    padding: 2px 10px; border-radius: 10px;
+  }
+
+  .foot-note {
+    margin-top: 26px; font-size: 11.5px; color: var(--text-muted);
+    text-align: center; line-height: 1.7;
+  }
+</style>
+</head>
+<body>
+<div id="root">
+  <div class="flow-title">「AI 资讯雷达」系统架构与数据流</div>
+  <div class="flow-subtitle">Next.js 16 App Router · 服务端 Key 代理 · 元宝搜索 SearchPro · LLM 早报汇总</div>
+
+  <div class="phase-group phase-1">
+    <div class="phase-title">
+      <span>阶段一 · 浏览器端（React 客户端组件）</span>
+      <span class="phase-tag">Frontend</span>
+    </div>
+    <div class="phase-steps">
+      <div class="phase-step"><span class="step-num">1</span>话题栏：选择 / 新增 / 删除追踪话题<span class="step-note">GET/POST/DELETE /api/topics</span></div>
+      <div class="phase-step"><span class="step-num">2</span>控制面板：设置 <code>Freshness</code>（时效）· <code>Mode</code>（信源模式）· <code>Industry</code>（垂直领域）· <code>Cnt</code>（条数）</div>
+      <div class="phase-step"><span class="step-num">3</span>话题或参数变化自动触发检索<span class="step-note">POST /api/search（Key 不进前端）</span></div>
+    </div>
+  </div>
+
+  <div class="arrow-row">↓ <span class="arrow-label">JSON 请求体</span></div>
+
+  <div class="phase-group phase-2">
+    <div class="phase-title">
+      <span>阶段二 · 服务端代理层（Next.js Route Handler）</span>
+      <span class="phase-tag">API Layer</span>
+    </div>
+    <div class="phase-steps">
+      <div class="phase-step"><span class="step-num">4</span>入参校验：query 非空 · 长度 ≤ 500 字符 · 参数取值范围检查</div>
+      <div class="phase-step"><span class="step-num">5</span>双模式路由：已配置 <code>WSA_API_KEY</code> → 真实调用；未配置 → 高保真演示数据（UI 明确标识）</div>
+      <div class="phase-step"><span class="step-num">6</span>错误码映射：<code>UnauthorizedOperation</code> → 401 · <code>ResourceNotFound</code> → 403 · 15s 超时中断</div>
+    </div>
+  </div>
+
+  <div class="arrow-row">↓ <span class="arrow-label">Bearer 鉴权 + JSON 入参</span></div>
+
+  <div class="phase-group phase-3">
+    <div class="phase-title">
+      <span>阶段三 · 腾讯云元宝搜索 SearchPro</span>
+      <span class="phase-tag">Yuanbao Search</span>
+    </div>
+    <div class="phase-steps">
+      <div class="phase-step"><span class="step-num">7</span>检索请求：POST <code>api.wsa.cloud.tencent.com/SearchPro</code></div>
+      <div class="phase-step"><span class="step-num">8</span>返回 <code>Pages</code>：JSON 字符串数组，逐条二次解析出标题 / 摘要 / 信源 / 时间 / 相关度</div>
+      <div class="phase-step"><span class="step-num">9</span>携带 <code>RequestId</code> · <code>Version</code> · 端到端耗时回传前端展示</div>
+    </div>
+  </div>
+
+  <div class="arrow-row">↓ <span class="arrow-label">结构化结果 + 资讯卡片</span></div>
+
+  <div class="phase-group phase-4">
+    <div class="phase-title">
+      <span>阶段四 · 呈现与增值</span>
+      <span class="phase-tag">Output</span>
+    </div>
+    <div class="phase-steps">
+      <div class="phase-step"><span class="step-num">10</span>资讯卡片流：按相关度 / 时间排序，favicon 加载失败自动回退字母头像</div>
+      <div class="phase-step"><span class="step-num">11</span>信源统计面板：结果条数 · 平均相关度 · 站点分布 · RequestId</div>
+      <div class="phase-step"><span class="step-num">12</span>AI 早报：POST <code>/api/briefing</code>，LLM 按 [n] 信源编号汇总当期资讯</div>
+    </div>
+  </div>
+
+  <div class="foot-note">
+    数据持久化：Prisma ORM + SQLite（话题表）｜早报生成：z-ai-web-dev-sdk（仅服务端）｜演示模式与真实调用共用同一数据结构
+  </div>
+</div>
+</body>
+</html>
