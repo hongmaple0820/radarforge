@@ -13,3 +13,21 @@ model Topic {
   name      String   @unique
   createdAt DateTime @default(now())
 }
+
+// 选题池候选（2.0 工作流起点：雷达选题 → 入池 → 写作 → 发布）
+model IdeaCandidate {
+  id        String   @id @default(cuid())
+  title     String
+  // 切入角度 / 为什么值得写
+  angle     String?
+  // 来源: radar 雷达卡片一键入池 / manual 手动录入 / agent Agent 推荐
+  source    String   @default("manual")
+  // 溯源链接（radar 来源时的资讯 URL）
+  sourceRef String?
+  // 潜力分 0-100（后续由 Agent 结合热度/相关度评估）
+  score     Int?
+  // 流转状态: new 新入池 / shortlist 入选 / writing 撰写中 / published 已发布 / dropped 已放弃
+  status    String   @default("new")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

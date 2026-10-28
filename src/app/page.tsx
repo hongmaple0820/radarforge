@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { useToast } from '@/hooks/use-toast'
@@ -12,7 +13,9 @@ import { ControlPanel, type SearchControls } from '@/components/radar/control-pa
 import { NewsCard } from '@/components/radar/news-card'
 import { StatsPanel, type SearchMeta } from '@/components/radar/stats-panel'
 import { BriefingPanel } from '@/components/radar/briefing-panel'
-import { Radar, RefreshCw, SearchX, TriangleAlert } from 'lucide-react'
+import { IdeasPanel } from '@/components/workbench/ideas-panel'
+import { ExtensionsPanel } from '@/components/workbench/extensions-panel'
+import { Radar, RefreshCw, SearchX, TriangleAlert, Lightbulb, Blocks } from 'lucide-react'
 import type { WsaPage } from '@/lib/wsa'
 
 interface SearchState {
@@ -142,6 +145,31 @@ export default function Home() {
     }
   }
 
+  /** 雷达资讯卡片一键入池（工作流 2.0：雷达 → 选题池） */
+  async function handleAddIdea(page: WsaPage) {
+    try {
+      const res = await fetch('/api/ideas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: page.title,
+          angle: (page.passage || '').slice(0, 200),
+          source: 'radar',
+          sourceRef: page.url,
+          score: Math.round((page.score ?? 0) * 100),
+        }),
+      })
+      const data = await res.json()
+      if (!data.ok) {
+        toast({ title: '未能入池', description: data.message || '该选题可能已在池中' })
+        return
+      }
+      toast({ title: '已加入选题池', description: page.title.slice(0, 48) })
+    } catch (e) {
+      toast({ title: '未能入池', description: (e as Error)?.message, variant: 'destructive' })
+    }
+  }
+
   async function handleGenerateBriefing() {
     if (search.pages.length === 0 || !search.queriedTopic) return
     setBriefingLoading(true)
@@ -205,8 +233,34 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-7xl flex-1 space-y-5 px-4 py-5 sm:px-6 sm:py-6">
-        {/* 话题栏 */}
+      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-5 sm:px-6 sm:py-6">
+        <Tabs defaultValue="radar" className="space-y-5">
+          <TabsList className="grid h-10 w-full max-w-md grid-cols-3 rounded-lg border border-slate-200 bg-white p-1">
+            <TabsTrigger
+              value="radar"
+              className="gap-1.5 rounded-md text-xs font-medium data-[state=active]:bg-slate-800 data-[state=active]:text-white"
+            >
+              <Radar className="h-3.5 w-3.5" />
+              资讯雷达
+            </TabsTrigger>
+            <TabsTrigger
+              value="ideas"
+              className="gap-1.5 rounded-md text-xs font-medium data-[state=active]:bg-slate-800 data-[state=active]:text-white"
+            >
+              <Lightbulb className="h-3.5 w-3.5" />
+              选题池
+            </TabsTrigger>
+            <TabsTrigger
+              value="extensions"
+              className="gap-1.5 rounded-md text-xs font-medium data-[state=active]:bg-slate-800 data-[state=active]:text-white"
+            >
+              <Blocks className="h-3.5 w-3.5" />
+              扩展体系
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="radar" className="space-y-5">
+            {/* 话题栏 */}
         <section aria-label="话题追踪">
           {topics.length === 0 ? (
             <div className="flex gap-2">
@@ -312,7 +366,9 @@ export default function Home() {
                 </Card>
               ))
             ) : sortedPages.length > 0 ? (
-              sortedPages.map((p, i) => <NewsCard key={`${p.url}-${i}`} page={p} index={i} />)
+              sortedPages.map((p, i) => (
+                <NewsCard key={`${p.url}-${i}`} page={p} index={i} onAddIdea={handleAddIdea} />
+              ))
             ) : (
               !search.error && (
                 <Card className="border-dashed border-slate-300 bg-white shadow-none">
@@ -336,13 +392,23 @@ export default function Home() {
             />
           </aside>
         </div>
+          </TabsContent>
+
+          <TabsContent value="ideas" className="space-y-5">
+            <IdeasPanel />
+          </TabsContent>
+
+          <TabsContent value="extensions" className="space-y-5">
+            <ExtensionsPanel />
+          </TabsContent>
+        </Tabs>
       </main>
 
       <footer className="mt-auto border-t border-slate-200 bg-white">
         <div className="mx-auto max-w-7xl px-4 py-4 text-center text-[11px] leading-relaxed text-slate-400 sm:px-6">
           数据来源: 腾讯云元宝搜索 SearchPro API（全网公开资源 + 腾讯内容生态）｜ Next.js 16 + TypeScript + Prisma 构建
           <br />
-          演示模式下返回高保真模拟数据，配置环境变量 WSA_API_KEY 后即切换为真实调用
+          资讯雷达 2.0 · 工作台：选题池 · 模型网关 · Agent Skills · MCP 扩展体系
         </div>
       </footer>
     </div>

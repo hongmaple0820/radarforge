@@ -3,7 +3,8 @@
 import { useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { ExternalLink, Clock } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { ExternalLink, Clock, Lightbulb, Check } from 'lucide-react'
 import type { WsaPage } from '@/lib/wsa'
 
 /** 解析元宝搜索返回的多种日期格式: 2026-10-27 09:15:00 / 2025/02/26 09:37:00 */
@@ -63,8 +64,24 @@ function SiteAvatar({ site, favicon }: { site: string; favicon?: string }) {
   )
 }
 
-export function NewsCard({ page, index }: { page: WsaPage; index: number }) {
+export function NewsCard({
+  page,
+  index,
+  onAddIdea,
+}: {
+  page: WsaPage
+  index: number
+  /** 工作流 2.0：一键加入选题池 */
+  onAddIdea?: (page: WsaPage) => Promise<void> | void
+}) {
+  const [added, setAdded] = useState(false)
   const date = parseDate(page.date)
+
+  async function handleAdd() {
+    if (!onAddIdea || added) return
+    await onAddIdea(page)
+    setAdded(true)
+  }
 
   return (
     <Card className="group border-slate-200 bg-white shadow-none transition-all hover:border-teal-300 hover:shadow-md">
@@ -81,7 +98,24 @@ export function NewsCard({ page, index }: { page: WsaPage; index: number }) {
               {relativeTime(date)}
             </span>
           )}
-          <span className="ml-auto">
+          <span className="ml-auto flex items-center gap-1.5">
+            {onAddIdea && (
+              <Button
+                size="sm"
+                variant="outline"
+                className={`h-6 gap-1 px-2 text-[11px] ${
+                  added
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
+                    : 'border-slate-200 text-slate-500 hover:border-teal-400 hover:text-teal-700'
+                }`}
+                onClick={handleAdd}
+                disabled={added}
+                aria-label="加入选题池"
+              >
+                {added ? <Check className="h-3 w-3" /> : <Lightbulb className="h-3 w-3" />}
+                {added ? '已入池' : '加选题'}
+              </Button>
+            )}
             <ScoreBadge score={page.score ?? 0} />
           </span>
         </div>

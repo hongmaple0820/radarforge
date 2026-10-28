@@ -66,3 +66,26 @@ Stage Summary:
 - 本地环境就位：~/.claude/skills 与 ~/.agents/skills 各 12 个 skill（wewrite 十件套 + huashu 双件），pi CLI 1.4.0，wewrite CLI 4.2.1；仓库源码存于 /home/z/my-project/skill-pool/
 - 核心设计决策：借鉴而非依赖（dsh 协议族模式折进自研网关；pi 四模式之 SDK 思路对应 Next.js API 路由）；A 代码绘制零成本 / B 模型生成双渲染路径；claims 来源账本与雷达 [n] 引用同构复用
 - 待办衔接：元宝搜索 sk- Key 仍待用户提供（AKID 串不可用）；方案 Phase 1（模型网关 v1 + 选题池 + write/review skill）可随时启动
+
+---
+Task ID: 4
+Agent: 主 Agent (Z.ai)
+Task: 用户三点回复：①方案满意 ②提供真实 sk- Key ③希望学 dsh 支持插件/skills/MCP——执行「Key 切真实数据 + 扩展体系落地 + Phase 1 开工」
+
+Work Log:
+- 真实 Key sk-9aae…写入 .env 并 curl 直连 SearchPro 验证：鉴权通过，10 条真实结果（RequestId 54336d36…）
+- fullstack-dev 技能加载 + init 脚本初始化，dev server 后台就绪
+- Phase 1 模型网关 v1 落地：src/lib/gateway/（types 四类 Provider 接口 / registry 运行时注册表 + healthAll 并发探活 / bootstrap 幂等装配）+ providers/wsa-search.ts（包 1.0 wsa.ts，代码零废弃）+ providers/zai-llm.ts（收口 z-ai-web-dev-sdk）
+- Skills 加载器：src/lib/skills/loader.ts 双目录扫描（~/.claude/skills + 项目 skills）+ 手写 frontmatter 解析（修复 indexOf 行定位隐患改为下标驱动）；实测 81 个技能（用户级 12 + 项目级 69 个系统技能池）
+- MCP 客户端：src/lib/mcp/client.ts 完整 JSON-RPC 2.0/stdio（initialize 握手/tools list+call/超时/进程退出批量 reject）+ config.ts 配置读取 + scripts/echo-mcp-server.mjs 样板服务器 + config/mcp.json
+- 选题池：Prisma IdeaCandidate 表（db:push + db:generate）+ /api/ideas CRUD 路由（状态流转/去重）+ workbench/ideas-panel.tsx
+- UI 工作台：主页改造为三 Tab（资讯雷达/选题池/扩展体系）+ extensions-panel.tsx 三面板（网关探活/技能卡片/MCP 工具）+ news-card 加「加选题」按钮（一键入池闭环）
+- 踩坑修复：Prisma client 未重新 generate 导致 db.ideaCandidate undefined → bun run db:generate + 重启 dev server；node strip-types 不支持 TS parameter property → MCP 直连测试改用 bun
+- 端到端验证 8 项 API + Agent Browser UI 4 项全通过；lint src 零错误；截图 workbench-extensions.png / workbench-radar-real.png 存档
+- 方案文档更新：第九章行动项标注完成、新增第十章「扩展体系：插件、Skills 与 MCP（学 dsh）」6 小节 + 附录 A 落地实录
+
+Stage Summary:
+- 雷达已切换真实数据模式（mock: false，延迟 220~520ms）
+- Phase 1 交付 10 新文件 + 3 改造：模型网关（2 Provider 探活健康）/ Skills（81 个可发现）/ MCP（echo tools/call 回显成功）/ 选题池（CRUD+去重+UI 闭环）
+- 对用户「学 dsh 支持插件/skills/MCP」的答复落地为三层扩展体系：Provider 插件层 + Agent Skills 层 + MCP 工具层，文档第十章详述协同与 Phase 4 插件包契约
+- 下一步建议：Phase 2 Agent 运行时（skill 注入 + run 记录）；CSDN 征文可用真实数据重截图后发布

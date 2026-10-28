@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "echo": {
+      "command": "node",
+      "args": ["scripts/echo-mcp-server.mjs"],
+      "description": "内置回显测试服务器：验证 MCP 握手 / 工具枚举 / 工具调用全链路"
+    }
+  }
+}

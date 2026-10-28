@@ -247,7 +247,114 @@ pi --version                           # → 1.4.0 ✅（支持 20+ 提供商、
 
 ## 九、下一步行动
 
-1. **补齐真实 Key**：在元宝搜索控制台创建 `sk-` 开头的服务 API KEY 填入 `.env`（此前提供的 AKID 串是访问管理 SecretId，不可用），雷达即刻切换真实数据。
-2. **启动 Phase 1**：先做模型网关 v1 + 选题池 + write / review 两个 skill，目标两周内跑出「话题 → 微信兼容成稿」第一篇真文章。
+1. ~~**补齐真实 Key**~~ ✅ **已完成（2026-10-28）**：`sk-` 服务 API KEY 已配置并验证，SearchPro 真实检索链路全通（延迟约 220~520ms），雷达切换为真实数据模式。
+2. ~~**启动 Phase 1**~~ ✅ **已开工（2026-10-28）**：模型网关 v1 + 选题池 + Skills/MCP 扩展骨架已落地并端到端验证，详见第十章与附录 A；write / review 两个 skill 化工作流为下一个里程碑。
 3. **技能侧并行**：wewrite 十件套已就位，可直接在 coding agent 里用「今天写什么」「检查一下」练手，积累 prompt 判断层的实测语料，反哺自研 skill 的规则设计。
 4. **发布节奏**：资讯雷达征文（CSDN）与本方案可作为系列内容连发，平台每个 Phase 产出一篇复盘文，本身就是「用平台做平台的内容营销」闭环。
+
+---
+
+## 十、扩展体系：插件、Skills 与 MCP（学 dsh，Phase 1 已落地）
+
+> 本章回答一个关键追问：**能不能学 dsh，让平台支持插件、skills、MCP 等扩展能力？** 答案是能——而且 Phase 1 当天就把这三层的骨架全部跑通并完成了端到端验证。扩展能力不再是路线图上的承诺，而是本机正在运行的代码。
+
+### 10.1 dsh 最值得学的不是某个适配器，而是「新增能力不改核心」
+
+深读 dsh 双插件后可以得出一个判断：它真正的精髓不在 Agnes 协议或 Seedance 适配器本身，而在一条架构纪律——**新增一个视频供应商 = 新增一个适配器文件 + 注册，核心调度代码零改动**。未识别的协议族会明确报错而不是静默走错；`GET /models` 零成本探活让账号池的健康状态一目了然。把这条纪律推广到自媒体平台的全部能力面，就得到三种互补的扩展粒度：
+
+| 扩展粒度 | 解决什么 | 声明载体 | 更新频率 | dsh 对应物 |
+|---------|---------|---------|---------|-----------|
+| **Provider 插件** | 模型能力（LLM/检索/图像/视频） | TS 模块实现四类接口 | 低频、代码级 | 协议族适配器 + 账号池 |
+| **Agent Skill** | 工作流知识（怎么写/怎么审/怎么剪） | SKILL.md 声明式文件 | 中频、纯文本 | 导演规则库 + 风格配方卡 |
+| **MCP 工具** | 外部能力（文件/浏览器/数据库…） | config/mcp.json 一段配置 | 高频、零代码 | 无（这是 dsh 没有的层，补上它） |
+
+三者恰好覆盖「能力—知识—工具」三个变化速度不同的维度：模型供应商一年换不了几次，写作方法论一个月一迭代，而想接一个新工具可能只是今天的突发奇想。分层之后，每一层的更迭都不惊动其它两层。
+
+### 10.2 Provider 插件层：模型网关即协议族注册表
+
+Phase 1 落地的网关代码把第四章的接口设计变成了现实实现，共五个模块：
+
+```ts
+// src/lib/gateway/ 的实际文件与职责
+types.ts        // 四类 Provider 接口（llm/search/image/video）+ 探活报告类型
+registry.ts     // 运行时注册表：register / unregister / list / healthAll 并发探活
+bootstrap.ts    // 装配器：幂等注册全部内建 Provider
+providers/wsa-search.ts   // 第一个 SearchProvider：包一层 1.0 的 wsa.ts（代码零废弃）
+providers/zai-llm.ts      // 第一个 LLMProvider：收口 z-ai-web-dev-sdk
+```
+
+两个设计决策值得展开。其一，**`isConfigured()` 做成方法而非静态属性**：Key 是否配置是运行时状态，快照式的 `configured: true` 会撒谎，探活按钮按下去的每一秒都应该是真话。其二，**healthAll() 用 Promise.allSettled 并发探测**：单个 Provider 挂掉只污染自己的报告，绝不拖垮整个面板——这正是 dsh「账号池一个槽位故障不影响其它槽位」的容错思路。
+
+实测结果：`wsa-search` 探活 220ms 返回真实 requestId，`zai-llm` 探活 407ms 对话链路正常；Image / Video 的「提交 + 轮询」协议族接口已预留（对应 Agnes、Seedance 的任务模型），Phase 3 接入首批生成供应商时无需再动 registry 一行代码。
+
+### 10.3 Agent Skills 层：把 81 个 SKILL.md 变成平台的工作流模板库
+
+Skills 加载器（`src/lib/skills/loader.ts`）实现了 Agent Skills 开放标准的最小闭环：扫描用户级（`~/.claude/skills/`）与项目级（`<project>/skills/`）双目录，解析每个 SKILL.md 的 YAML frontmatter（name / description / allowed-tools），通过 `/api/skills` 输出结构化清单。
+
+实测收获了一个意外之喜：本环境的项目级技能池里有 69 个系统技能（ASR / VLM / agent-browser / aminer 学术检索等），加上用户级 12 个（wewrite 十件套 + huashu 双件），**平台开箱即拥有 81 个可发现的工作流能力**——这说明「SKILL.md 即插件」不是理论，而是本机已经存在的生态事实。手写的 frontmatter 解析器刻意不引入 gray-matter 依赖，只覆盖顶层标量、`|` 块标量、`- item` 列表三种形态，把解析失败隔离在单个技能内（坏一个不坏一片）。
+
+### 10.4 MCP 工具层：一段 JSON 配置 = 一个新工具宇宙
+
+MCP 客户端（`src/lib/mcp/client.ts`）用约 200 行原生 `child_process` 实现了完整的 JSON-RPC 2.0 over stdio 协议：`initialize` 握手 → `notifications/initialized` → `tools/list` 枚举 → `tools/call` 调用，带自增请求 ID、超时 reject、进程退出时批量拒绝 pending、stderr 尾部留存用于报错定位。
+
+配套的 `scripts/echo-mcp-server.mjs` 是一个 30 行的参考样板服务器（提供 `echo` 与 `time-now` 两个工具），它同时回答了「如何写一个最小 MCP 服务器」。端到端实测：`/api/mcp` 枚举出 echo 服务器的 2 个工具；`tools/call` 调用回显 `[echo@2026-10-28T06:02:40Z] 平台 MCP 调用链路 OK`。
+
+这一层补上了 dsh 没有的能力：dsh 的工具是编译进插件的，而 MCP 让**任何**符合协议的外部服务器（文件系统、浏览器自动化、数据库、第三方 SaaS）的工具零代码接入——`config/mcp.json` 加一段配置即可。对个人创作者而言，这意味着社区发布过的每一个 MCP 服务器都是平台的潜在弹药库。
+
+### 10.5 三层协同：一次「写公众号文章」如何穿过扩展体系
+
+分层设计的价值要在协同时才真正兑现。设想 Phase 2 的一次完整创作：
+
+1. **Skill 层**触发：用户说「就上个选题写正文」，wewrite-write 的 SKILL.md 被识别，其内含的 brief 任务书模板、claims 留痕规则注入本次运行；
+2. **Provider 层**出力：网关路由——取证走 `wsa-search`（Freshness=d7 + Industry= gov），行文走 `zai-llm`，未来配图走 Image Provider；
+3. **MCP 层**补位：需要读本地素材库时调 MCP 文件服务器的 `read_file`，需要抓取参考页时调浏览器服务器的 `navigate + snapshot`；
+4. 全程产物落 Prisma（Run / Claim / Asset 表），编辑飞轮把本次人工修正沉淀回 Skill 的规则文件。
+
+三层各司其职：Skill 决定「怎么做」，Provider 决定「谁来做」，MCP 决定「用什么做」。任何一层的升级——换模型、改文风、接新工具——都被隔离在自己的边界内。
+
+### 10.6 插件包契约（Phase 4 预研）：三件套 = 一个可分发插件
+
+当三层扩展各自成熟，自然的终局是统一的插件包格式。一个可分发的「雷达插件包」= 一个目录三件套：
+
+```text
+my-plugin/
+├── plugin.json          # 清单：名称/版本/入口/权限声明（学 dsh 插件 manifest）
+├── skills/*.md          # 携带的 SKILL.md 工作流知识（Agent Skills 标准）
+├── providers/*.ts       # 可选：实现的 Provider 接口（如接入新视频供应商）
+└── mcp.config.json      # 可选：捆绑的 MCP 服务器配置
+```
+
+装载时的安全边界借鉴 dsh 的 node:vm 沙箱思想：Provider 插件先在受限环境跑 healthCheck 探活，MCP 服务器默认无网络无文件权限、按 plugin.json 的权限声明逐项放行；未通过契约校验的包在注册表层面明确拒绝并给出原因——延续「绝不静默降级」的纪律。
+
+---
+
+## 附录 A：Phase 1 落地实录（2026-10-28）
+
+**本次交付代码（10 个新文件 + 3 处改造）：**
+
+| 模块 | 文件 | 说明 |
+|------|------|------|
+| 模型网关 | `src/lib/gateway/{types,registry,bootstrap}.ts` | 四类 Provider 接口 + 运行时注册表 + 装配器 |
+| 内建 Provider | `src/lib/gateway/providers/{wsa-search,zai-llm}.ts` | 检索/LLM 两个真实实现 |
+| Skills | `src/lib/skills/loader.ts` | 双目录扫描 + frontmatter 解析 |
+| MCP | `src/lib/mcp/{client,config}.ts` + `scripts/echo-mcp-server.mjs` + `config/mcp.json` | JSON-RPC/stdio 客户端 + 样板服务器 + 配置 |
+| 选题池 | Prisma `IdeaCandidate` 表 + `/api/ideas` 两个路由 | CRUD + 状态流转 + 去重 |
+| API | `/api/gateway` `/api/skills` `/api/mcp` | 三层扩展体系的只读探查端点 |
+| UI | `workbench/{ideas-panel,extensions-panel}.tsx` + 主页三 Tab 改造 + 资讯卡「加选题」 | 工作台三视图 |
+
+**端到端验证清单（全部通过）：**
+
+- ✅ SearchPro 真实检索：`mock: false`，10 条结果，延迟 515ms（Key 为控制台签发的 `sk-` 服务 KEY）
+- ✅ 网关清单与并发探活：2 Provider 全部 `已配置`，wsa-search 220ms 健康 / zai-llm 407ms 健康
+- ✅ Skills 扫描：81 个技能（用户级 12 + 项目级 69），frontmatter 解析正常
+- ✅ MCP 枚举与调用：echo 服务器 2 工具在线；`tools/call` 回显成功
+- ✅ 选题池 CRUD：创建 → 流转 shortlist → 按状态查询 → 重复入池被拦截 → 删除
+- ✅ Agent Browser UI 验证：三 Tab 切换、真实模式徽章、「加选题」入池闭环、扩展体系三面板渲染、探活交互实时刷新
+- ✅ ESLint `src` 目录零错误；dev.log 无运行时错误
+
+**已知边界（诚实记录）：**
+
+- Image / Video Provider 仅有接口占位，尚无实现（按路线图属 Phase 3）；
+- MCP 客户端为 stdio 传输，SSE / Streamable HTTP 传输待后续按需补齐；
+- Skills 目前为只读发现，启用/禁用状态与运行时注入属 Phase 2 的 Agent 运行时工作；
+- 选题池的 `score` 字段暂由资讯相关度映射，Agent 智能打分待 LLM 选题管线接入。
