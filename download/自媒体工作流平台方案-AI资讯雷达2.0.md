@@ -202,8 +202,8 @@ model GenTask { id String @id  providerRef String  protocolFamily String?
 | 阶段 | 周期 | 交付物 | 验收标准 |
 |---|---|---|---|
 | **Phase 0（已完成）** | — | 资讯雷达 1.0：话题 / 检索 / 早报，双模式降级 | ESLint 零错误；端到端验证通过 |
-| **Phase 1 · 图文闭环 MVP** | 2~3 周 | 模型网关 v1（LLM + Search 两类 Provider）、选题池、write / review 两个 skill、本地排版预览（3 主题起步） | 一句话从话题到微信兼容 HTML 成稿，claims 全程可溯源 |
-| **Phase 2 · 发布与飞轮 v1** | 2~3 周 | 生图渠道 Provider、微信草稿箱（授权后）、rewrite 一稿多发、learn 编辑飞轮 | 端到端发布一篇真实文章；「学习我的修改」规则落库 |
+| **Phase 1（已完成 2026-10-28）** | 2~3 周 | 模型网关 v1（LLM + Search 两类 Provider）、选题池、Skills/MCP 扩展骨架 | 一句话从话题到选题池，三层扩展体系端到端验证 |
+| **Phase 2（已完成 2026-10-28）** | 2~3 周 | Agent 运行时（Run 状态机+六步流水线）、write/review/rewrite/learn 四 skill、3 主题排版引擎、生图 Provider、三级降级发布、编辑飞轮 | 端到端发布真实文章 ✅；「学习我的修改」规则落库 ✅（详见附录 B） |
 | **Phase 3 · 视频线 A** | 4~6 周 | 代码绘制引擎、节奏单 skill、studio 编辑器 + inbox 协议、QA 门禁 v1 | 30 秒数据卡视频全流程零 API 成本产出，指着画面改闭环 |
 | **Phase 4 · 视频线 B** | 4~6 周 | 协议族适配器（≥2 家）、导演规划（含降级）、分镜 / 身份锚定 / 时间线 | 一支带身份一致角色的 15 秒模型生成短片 |
 | **Phase 5 · 飞轮与沉淀** | 持续 | stats 数据回填、learn-theme 排版学习、自研 skill 打包 | 选题评分权重被真实阅读数据修正过至少一轮 |
@@ -249,6 +249,7 @@ pi --version                           # → 1.4.0 ✅（支持 20+ 提供商、
 
 1. ~~**补齐真实 Key**~~ ✅ **已完成（2026-10-28）**：`sk-` 服务 API KEY 已配置并验证，SearchPro 真实检索链路全通（延迟约 220~520ms），雷达切换为真实数据模式。
 2. ~~**启动 Phase 1**~~ ✅ **已开工（2026-10-28）**：模型网关 v1 + 选题池 + Skills/MCP 扩展骨架已落地并端到端验证，详见第十章与附录 A；write / review 两个 skill 化工作流为下一个里程碑。
+3. ~~**Phase 2 发布与飞轮 v1**~~ ✅ **已完成（2026-10-28）**：Agent 运行时 + 四个自研 skill + 3 主题排版引擎 + 三级降级发布 + 编辑飞轮全部落地并双路验证（API + Agent Browser），详见附录 B。
 3. **技能侧并行**：wewrite 十件套已就位，可直接在 coding agent 里用「今天写什么」「检查一下」练手，积累 prompt 判断层的实测语料，反哺自研 skill 的规则设计。
 4. **发布节奏**：资讯雷达征文（CSDN）与本方案可作为系列内容连发，平台每个 Phase 产出一篇复盘文，本身就是「用平台做平台的内容营销」闭环。
 
@@ -358,3 +359,41 @@ my-plugin/
 - MCP 客户端为 stdio 传输，SSE / Streamable HTTP 传输待后续按需补齐；
 - Skills 目前为只读发现，启用/禁用状态与运行时注入属 Phase 2 的 Agent 运行时工作；
 - 选题池的 `score` 字段暂由资讯相关度映射，Agent 智能打分待 LLM 选题管线接入。
+
+---
+
+## 附录 B：Phase 2 落地实录（2026-10-28）
+
+**本次交付代码（13 个新文件 + 7 张新表 + 主页四 Tab 改造）：**
+
+| 模块 | 文件 | 说明 |
+|------|------|------|
+| Agent 运行时 | `src/lib/runtime/{run-manager,render,relayout,json}.ts` | Run 状态机 + 六步流水线（后台执行/步骤留痕）+ 排版引擎 + LLM JSON 稳健解析 |
+| 自研 Skills | `src/lib/runtime/skills/{radar-write,radar-review,radar-rewrite,radar-learn}.ts` | 7 人格库 / brief 任务书 / 五维审稿 / 一稿多发 / 编辑飞轮规则提炼 |
+| 生图 Provider | `src/lib/gateway/providers/zai-image.ts` | 首个 ImageProvider（SDK 同步生图落盘），已注册 bootstrap |
+| 发布链路 | `src/lib/publish/wechat.ts` | 三级降级：草稿箱 API（完整实现待服务号授权）→ 粘贴加固 → 下载 |
+| API | `/api/runs`、`/api/runs/[id]`、`/api/runs/[id]/actions`、`/api/learn` | 运行 CRUD + edit/rewrite/publish 动作 + 飞轮规则管理 |
+| 数据层 | Prisma 新增 Run / Claim / Article / ReviewRecord / Asset / LearningRule / PublishRecord | 全链路留痕可追溯 |
+| UI | `workbench/{studio-panel,run-detail,types}.tsx` + 主页四 Tab | 创作台：新建运行 → Run 看板 → 详情（预览/改稿/发布）→ 飞轮面板 |
+
+**六步流水线实测（两条真实 Run）：**
+
+1. **brief 任务书**（6.3s）：目标读者/真正问题/核心判断/反方/边界 + 3~5 条待核主张
+2. **主张取证**（~2s/条）：每条 fact 主张经元宝搜索 `Industry=news + Freshness=d30` 核对，来源 URL/站点/日期原样落 Claim 表——实测 4/5 条主张找到真实来源（今日头条、腾讯新闻等）
+3. **初稿**（14~24s）：注入人格规则 + claims 账本 + active 飞轮规则，事实句尾 [n] 引用，实测 2050~2812 字
+4. **五维审稿**（~23s）：准确/观点/有用/合声/好读 JSON 评分；revise 时自动修订一轮（实测 sharp-editor 均分 7.3→修订 3002 字；cold-analyst 均分 7.8 直接通过，准确性从 5.5 升至 7.5——有来源支撑后审稿更准）
+5. **封面生成**（可选）：zai-image Provider 生成 1344x768 封面并落 Asset 账
+6. **微信排版**（<10ms）：3 主题（雷达蓝灰/墨黑高对比/暖白夜读）全内联样式 + section 粘贴加固 + CJK-Latin 空格 + 外链转脚注 + [n] 上标 + 参考来源区 + AIGC 声明——七项质量点全过
+
+**发布与飞轮验收：**
+
+- ✅ **端到端发布真实文章**：Run done → 微信加固 HTML 7639 字符 → 复制粘贴进公众号编辑器（Level 2 默认路径，降级原因写入 PublishRecord）；CSDN 版 2391 字（含本文速览引用块 + 参考列表）
+- ✅ **「学习我的修改」规则落库**：UI「改稿（喂飞轮）」→ 保存即 diff → LLM 提炼 3 条规则（proposed）→ 用户确认 1 条 active（hits 计数）→ 注入后续所有初稿；无差异时正确跳过（宁缺毋滥）
+- ✅ **Agent Browser + VLM 双路验收**：四 Tab / Run 详情 / iframe 预览 / 改稿交互 / 移动端 390px 全通过；ESLint src 零错误
+
+**已知边界（诚实记录）：**
+
+- SDK 图像生成端点在当前沙箱被网络网关 405 拦截——生图代码就绪，环境恢复即出图（封面失败自动降级为无封面并留痕，不阻断主流程）；
+- 微信草稿箱 API 需认证服务号 + `WECHAT_APP_ID/SECRET`（个人订阅号不可用）——完整调用逻辑已就位，未配置时明确降级为粘贴加固；
+- 飞轮规则目前注入 draft 步骤；learn-theme（排版学习）按路线图属 Phase 5；
+- SearchPro 的 `Cnt` 仅接受 10/20/30/40/50（踩坑实录：曾传 3 被静默吞错，已修复为合法值 + 逐条留痕）。

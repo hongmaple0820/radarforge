@@ -8,6 +8,7 @@
 import { providerRegistry } from './registry'
 import { wsaSearchProvider } from './providers/wsa-search'
 import { zaiLlmProvider } from './providers/zai-llm'
+import { zaiImageProvider } from './providers/zai-image'
 
 let ready = false
 
@@ -15,5 +16,6 @@ export function ensureGatewayReady(): void {
   if (ready) return
   providerRegistry.register(wsaSearchProvider)
   providerRegistry.register(zaiLlmProvider)
+  providerRegistry.register(zaiImageProvider)
   ready = true
 }

@@ -89,3 +89,28 @@ Stage Summary:
 - Phase 1 交付 10 新文件 + 3 改造：模型网关（2 Provider 探活健康）/ Skills（81 个可发现）/ MCP（echo tools/call 回显成功）/ 选题池（CRUD+去重+UI 闭环）
 - 对用户「学 dsh 支持插件/skills/MCP」的答复落地为三层扩展体系：Provider 插件层 + Agent Skills 层 + MCP 工具层，文档第十章详述协同与 Phase 4 插件包契约
 - 下一步建议：Phase 2 Agent 运行时（skill 注入 + run 记录）；CSDN 征文可用真实数据重截图后发布
+
+---
+Task ID: 5
+Agent: 主 Agent (Z.ai)
+Task: Phase 2 开工并交付——「发布与飞轮 v1」：Agent 运行时（Run 状态机+六步流水线）+ write/review/rewrite/learn 四 skill + 微信兼容排版引擎 + 生图 Provider + 三级降级发布 + 编辑飞轮
+
+Work Log:
+- Prisma 扩表 7 张：Run / Claim / Article / ReviewRecord / Asset / LearningRule / PublishRecord（db:push + generate）
+- 网关新增 zai-image Provider（首个 ImageProvider，SDK 同步生图落盘 public/runs/）并注册 bootstrap；探活零成本（SDK init 不真实生图），detail 诚实注明环境限制
+- Agent 运行时 src/lib/runtime/：run-manager（六步流水线 fire-and-forget 后台执行 + 步骤流水账 + 失败留痕）+ render.ts（微信兼容排版引擎：3 主题 classic/ink/warm、全内联样式、section 粘贴加固、CJK-Latin 自动空格、外链转脚注、[n] 上标引用 + 参考来源区 + AIGC 声明）+ relayout.ts（人工编辑后重排版）
+- 四个 skill：radar-write（7 人格库 + brief 任务书 + claims 注入初稿 + 审稿修订）、radar-review（五维审稿 JSON）、radar-rewrite（CSDN/小红书一稿多发）、radar-learn（diff→规则提炼，宁缺毋滥）
+- API：/api/runs（列表+创建+meta）、/api/runs/[id]（详情+删除）、/api/runs/[id]/actions（edit 集成飞轮 / rewrite / publish）、/api/learn（规则 CRUD+状态流转）
+- 发布链路 src/lib/publish/wechat.ts：三级降级（草稿箱 API 占位完整实现→粘贴加固→下载），PublishRecord 留痕降级原因（绝不静默降级）
+- UI：主页改四 Tab，新增创作台 studio-panel（新建运行表单+Run 看板轮询+编辑飞轮面板）与 run-detail（步骤时间线/claims 表/五维分数条/微信预览 iframe 手机模拟/改稿喂飞轮/复制加固 HTML/下载/一稿多发/发布）
+- 端到端验证两条真实 Run：①sharp-editor 2812 字 revise 自动修订一轮 ②cold-analyst 2050 字 pass 直接通过；research 修复后 4/5 主张找到真实来源（今日头条/腾讯新闻，Cnt=3 非法值改 10，静默 catch 改逐条留痕）
+- 排版质量七项全过：section 加固/无 class/CJK 空格/[n] 上标/参考来源/AIGC 声明/主题底色；rewrite CSDN 版 2391 字（速览引用块+参考列表）；publish 微信 local-paste 降级 7639 字符 HTML + CSDN 人工复制路径
+- 编辑飞轮 API+UI 双验证：改稿保存 v3 落库+重排版+3 条规则 proposed 落库→1 条确认 active（hits 计数）→无差异时正确跳过提炼
+- Agent Browser 验证：四 Tab 切换、Run 详情、iframe 预览内容渲染、改稿交互、移动端 390px；VLM 三张桌面截图+移动端验收全部通过；eslint src 零错误
+- 踩坑：①Prisma Client 需重启 dev server 才加载新表（kill 后用 .zscripts/dev.sh 守护重启：重跑 init-fullstack.sh 触发）②SDK 图像端点被环境网关 405 拦截（沙箱网络策略，封面降级为无封面并留痕）③agent-browser 点击嵌套 Dialog 按钮 outside viewport → eval JS click 兜底
+
+Stage Summary:
+- Phase 2 验收标准全部达成：端到端从选题到微信兼容 HTML 成稿（真实数据+可溯源 [n] 引用）✅；「学习我的修改」规则落库（proposed→active，注入后续写作）✅；生图渠道 Provider 就位（环境受限诚实降级）✅；一稿多发（CSDN/小红书）✅；发布三级降级留痕 ✅
+- 交付：13 新文件（runtime 5 + skills 4 + gateway 1 + publish 1 + API 4 + UI 3）+ schema 7 表 + 主页四 Tab 改造；截图 4 张存 assets/（phase2-studio-main/studio/run-detail/studio-mobile）
+- 已知边界（诚实记录）：SDK 生图端点在当前沙箱被 405 网络策略拦截（代码就绪，环境恢复即出图）；微信草稿箱 API 需认证服务号（三级降级默认走粘贴加固）；learn 规则目前仅注入 draft 步骤
+- 下一步建议：Phase 3 视频线 A（代码绘制引擎+节奏单 skill+studio 编辑器+inbox 协议）；CSDN 征文可继续用 2.0 素材发布

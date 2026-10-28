@@ -31,3 +31,105 @@ model IdeaCandidate {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+// 创作运行（一次「选题 → 成稿」的完整流水线，wewrite runs 概念的 DB 形态）
+model Run {
+  id        String   @id @default(cuid())
+  ideaId    String?
+  title     String
+  // 运行类型: article 图文（video 属 Phase 3）
+  kind      String   @default("article")
+  // 写作人格（wewrite 风格层）与排版主题
+  persona   String   @default("midnight-friend")
+  theme     String   @default("classic")
+  // 是否生成封面（生图渠道）
+  withCover Boolean  @default(false)
+  // 状态机: pending → running → done / failed（blocked 预留给人工确认环节）
+  status    String   @default("pending")
+  // 步骤流水账: [{key,label,status,detail,latencyMs}]
+  steps     Json?
+  error     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// 主张账本（claims 来源留痕）：每条关键主张经元宝搜索核对后落库
+model Claim {
+  id         String   @id @default(cuid())
+  runId      String
+  // 四分类: fact 事实 | inference 推断 | opinion 观点 | experience 经验
+  claimType  String
+  text       String
+  // 取证检索词
+  query      String?
+  // 元宝搜索返回的来源原样留痕: [{title,url,site,date,score}]
+  sourceJson Json?
+  verified   Boolean?
+  createdAt  DateTime @default(now())
+}
+
+// 文章版本（初稿 / 审稿修订 / 多平台改写，一稿多发的载体）
+model Article {
+  id        String   @id @default(cuid())
+  runId     String
+  version   Int      @default(1)
+  // 目标平台: wechat | csdn | xiaohongshu
+  target    String   @default("wechat")
+  format    String   @default("markdown")
+  // Markdown 源文（改写类目标也为 Markdown，便于二次编辑）
+  content   String
+  // wechat 目标时的微信兼容加固 HTML
+  html      String?
+  note      String?
+  createdAt DateTime @default(now())
+}
+
+// 审稿记录（五维判断：准确/观点/有用/合声/好读）
+model ReviewRecord {
+  id          String   @id @default(cuid())
+  runId       String
+  articleId   String
+  scores      Json
+  summary     String
+  suggestions Json?
+  // pass 通过 | revise 需改稿
+  verdict     String
+  createdAt   DateTime @default(now())
+}
+
+// 生成资产（封面图等，Provider 记账）
+model Asset {
+  id        String   @id @default(cuid())
+  runId     String?
+  kind      String
+  provider  String?
+  path      String
+  prompt    String?
+  costCents Int      @default(0)
+  meta      Json?
+  createdAt DateTime @default(now())
+}
+
+// 编辑飞轮规则（「学习我的修改」沉淀，谨慎升级：proposed → active）
+model LearningRule {
+  id        String   @id @default(cuid())
+  runId     String?
+  ruleText  String
+  examples  Json?
+  // proposed 待确认 | active 生效（注入后续写作）| dismissed 已忽略
+  status    String   @default("proposed")
+  hits      Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+// 发布记录（三级降级链留痕：draft-api → local-paste → download）
+model PublishRecord {
+  id          String   @id @default(cuid())
+  runId       String
+  articleId   String?
+  platform    String
+  mode        String
+  externalUrl String?
+  note        String?
+  createdAt   DateTime @default(now())
+}

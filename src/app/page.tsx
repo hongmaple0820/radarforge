@@ -15,7 +15,8 @@ import { StatsPanel, type SearchMeta } from '@/components/radar/stats-panel'
 import { BriefingPanel } from '@/components/radar/briefing-panel'
 import { IdeasPanel } from '@/components/workbench/ideas-panel'
 import { ExtensionsPanel } from '@/components/workbench/extensions-panel'
-import { Radar, RefreshCw, SearchX, TriangleAlert, Lightbulb, Blocks } from 'lucide-react'
+import { StudioPanel } from '@/components/workbench/studio-panel'
+import { Radar, RefreshCw, SearchX, TriangleAlert, Lightbulb, Blocks, PenLine } from 'lucide-react'
 import type { WsaPage } from '@/lib/wsa'
 
 interface SearchState {
@@ -235,7 +236,7 @@ export default function Home() {
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-5 sm:px-6 sm:py-6">
         <Tabs defaultValue="radar" className="space-y-5">
-          <TabsList className="grid h-10 w-full max-w-md grid-cols-3 rounded-lg border border-slate-200 bg-white p-1">
+          <TabsList className="grid h-10 w-full max-w-xl grid-cols-4 rounded-lg border border-slate-200 bg-white p-1">
             <TabsTrigger
               value="radar"
               className="gap-1.5 rounded-md text-xs font-medium data-[state=active]:bg-slate-800 data-[state=active]:text-white"
@@ -249,6 +250,13 @@ export default function Home() {
             >
               <Lightbulb className="h-3.5 w-3.5" />
               选题池
+            </TabsTrigger>
+            <TabsTrigger
+              value="studio"
+              className="gap-1.5 rounded-md text-xs font-medium data-[state=active]:bg-slate-800 data-[state=active]:text-white"
+            >
+              <PenLine className="h-3.5 w-3.5" />
+              创作台
             </TabsTrigger>
             <TabsTrigger
               value="extensions"
@@ -398,6 +406,10 @@ export default function Home() {
             <IdeasPanel />
           </TabsContent>
 
+          <TabsContent value="studio" className="space-y-5">
+            <StudioPanel />
+          </TabsContent>
+
           <TabsContent value="extensions" className="space-y-5">
             <ExtensionsPanel />
           </TabsContent>
@@ -408,7 +420,7 @@ export default function Home() {
         <div className="mx-auto max-w-7xl px-4 py-4 text-center text-[11px] leading-relaxed text-slate-400 sm:px-6">
           数据来源: 腾讯云元宝搜索 SearchPro API（全网公开资源 + 腾讯内容生态）｜ Next.js 16 + TypeScript + Prisma 构建
           <br />
-          资讯雷达 2.0 · 工作台：选题池 · 模型网关 · Agent Skills · MCP 扩展体系
+          资讯雷达 2.0 · 工作台：选题池 · 创作台（Agent 运行时 + 编辑飞轮）· 模型网关 · Skills · MCP
         </div>
       </footer>
     </div>
