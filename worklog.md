@@ -44,3 +44,25 @@ Stage Summary:
 - 应用仍处于演示模式开箱可用状态，等正确的 sk- Key 即可切换
 - 用户需要重新获取：元宝搜索控制台 → 概览 → 服务 API KEY 方式 → 创建 API KEY → 复制 sk- 开头明文
 - 收到正确 Key 后计划：写入 .env → 重启 dev server → 验证真实数据 → 真实数据重截图 → 更新征文素材
+
+---
+Task ID: 3
+Agent: 主 Agent (Z.ai)
+Task: 基于五个标杆项目（wewrite / huashu×2 / dsh×2 / pi-agent）的研究，产出「AI 搜索驱动的自媒体工作流平台」详案级方案；本地安装相关 skills 并验证
+
+Work Log:
+- AskUserQuestion 确认 8 项决策：Markdown / 详案级 / 渐进演进 / 图文+视频双线 / 研究+装+方案 / 深读仓库再定 / 多供应商抽象 / 个人创作者；备注关键：**不融合 dsh 而是借鉴学习，打造自己的 agent**
+- 研究 wewrite v4.2.1（三层解耦 Prompt/Runtime/State、9 模块流水线、brief/claims 留痕、编辑飞轮、18 主题、一稿多发）
+- 研究 huashu-motion（视频即 index.html、导演规则实测方法论、om studio 指着画面改 + inbox.jsonl 协议、ABC 记谱作曲、QA 门禁）与 huashu-art-motion（36 风格 53 配方卡、9 解说语法、8 参数化片段）
+- 深读 dsh-imagegen-video（无限画布节点体系、协议族适配器、导演规划降级链、身份锚定、node:vm 代码渲染路径）与 dsh-agnes-multimodal（账号池=RPM 槽位、GET /models 探活、附件 offload）
+- 调研 pi-agent 1.4.0（pi-ai 统一多供应商 API、pi-agent-core、四模式 TUI/print/RPC/SDK、Agent Skills 标准）
+- 安装验证：wewrite CLI 4.2.1（uv 装自本地源，官方 PyPI 直连）+ 10 skills 符号链接到 ~/.claude/skills 与 ~/.agents/skills；huashu-motion 0.3.1 与 huashu-art-motion 1.2.0（codeload tarball + 手动链接）；pi 1.4.0（npm 全局）——共 12 skills + 1 CLI 全部验证通过
+- 踩坑：GitHub git 直连 GnuTLS 中断 → codeload tarball 兜底；清华镜像 wheel 403 → 官方源；npx skills add 超时 → tarball 手动链接
+- charts skill（已读 SKILL.md + playwright-css.md + _rules.md 全链）生成两张配图：platform-architecture.png（五层架构 + 外部服务虚线边界，Scheme B 蓝灰渐进）、content-pipeline.png（Layout C 双轨流水线，元宝搜索 4 处接入点徽章标注）；VLM 验收双双通过（零重叠/零截断/对齐良好）
+- 撰写详案级方案（6295 中文字 / 9 章 / 2 图 / 4 代码块 / 6 表格）：含五标杆借鉴要点、五层架构、模型网关 TS 接口、Agent 运行时设计、图文/视频双流水线、inbox 协议 JSON、Prisma 九表扩展、元宝搜索四层集成参数表、Phase 1-5 路线图、风险对策、安装实录
+
+Stage Summary:
+- 交付物：/home/z/my-project/download/自媒体工作流平台方案-AI资讯雷达2.0.md + assets/platform-architecture.png + assets/content-pipeline.png
+- 本地环境就位：~/.claude/skills 与 ~/.agents/skills 各 12 个 skill（wewrite 十件套 + huashu 双件），pi CLI 1.4.0，wewrite CLI 4.2.1；仓库源码存于 /home/z/my-project/skill-pool/
+- 核心设计决策：借鉴而非依赖（dsh 协议族模式折进自研网关；pi 四模式之 SDK 思路对应 Next.js API 路由）；A 代码绘制零成本 / B 模型生成双渲染路径；claims 来源账本与雷达 [n] 引用同构复用
+- 待办衔接：元宝搜索 sk- Key 仍待用户提供（AKID 串不可用）；方案 Phase 1（模型网关 v1 + 选题池 + write/review skill）可随时启动

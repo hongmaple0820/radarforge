@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --text: #111827;
+    --text-sub: #6B7280;
+    --text-muted: #9CA3AF;
+    --bg: #FFFFFF;
+    --border: #E5E7EB;
+    --connector: #94A3B8;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', 'SimHei', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  #root { width: 1080px; margin: 0 auto; padding: 48px 44px 40px; background: #FFFFFF; }
+
+  .flow-title {
+    font-size: 24px; font-weight: 700; color: var(--text);
+    text-align: center; margin-bottom: 6px;
+  }
+  .flow-subtitle {
+    font-size: 13px; color: var(--text-sub);
+    text-align: center; margin-bottom: 34px;
+  }
+
+  .phase-group {
+    background: #F8FAFC; border-radius: 12px; padding: 18px 22px 16px;
+    border: 1px solid #EEF2F7;
+  }
+  .phase-title {
+    font-size: 16px; font-weight: 700; padding: 9px 16px;
+    border-radius: 8px; margin-bottom: 14px;
+    display: flex; align-items: baseline; justify-content: space-between;
+  }
+  .phase-title .phase-tag {
+    font-size: 11.5px; font-weight: 500; opacity: 0.75;
+    font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  }
+
+  .arrow { text-align: center; color: #94A3B8; font-size: 22px; line-height: 1; margin: 10px 0; }
+  .arrow .arrow-note {
+    font-size: 11.5px; color: var(--text-muted); vertical-align: 4px;
+    margin-left: 10px; font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  }
+
+  /* 层内步骤网格 */
+  .layer-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding-left: 10px; }
+  .layer-grid .cell {
+    font-size: 13.5px; font-weight: 400; color: var(--text);
+    padding: 9px 12px; background: white; border-radius: 6px;
+    border: 1px solid var(--border); line-height: 1.5;
+  }
+  .cell b { font-weight: 600; }
+  .cell .cell-note { display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+  .cell .src-badge {
+    display: inline-block; font-size: 10.5px; font-weight: 600;
+    background: #F0FDF4; color: #0F766E; border: 1px solid #99F6E4;
+    padding: 0 6px; border-radius: 999px; margin-left: 6px; vertical-align: 1px;
+  }
+  .layer-grid.two { grid-template-columns: repeat(2, 1fr); }
+
+  /* 工作流层：双生产线 */
+  .track-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding-left: 10px; }
+  .track {
+    background: white; border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .track-title {
+    font-size: 14px; font-weight: 700; margin-bottom: 9px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .track-title .track-chip {
+    font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
+    font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  }
+  .chip-a { background: #DBEAFE; color: #1E40AF; }
+  .chip-b { background: #E0E7EF; color: #1E3050; }
+  .track-steps { display: flex; flex-wrap: wrap; gap: 7px; }
+  .tstep {
+    font-size: 12.5px; color: #374151; background: #F8FAFC;
+    border: 1px solid #E5E7EB; border-radius: 5px; padding: 5px 9px;
+  }
+  .tstep .t-num {
+    display: inline-flex; width: 17px; height: 17px; line-height: 17px;
+    align-items: center; justify-content: center; border-radius: 50%;
+    font-size: 10.5px; font-weight: 600; margin-right: 5px;
+    background: #E2E8F0; color: #475569;
+  }
+  .flywheel-strip {
+    margin: 12px 10px 0; padding: 8px 14px;
+    background: #F8FAFC; border: 1px dashed #CBD5E1; border-radius: 6px;
+    font-size: 12.5px; color: #475569; text-align: center;
+  }
+  .flywheel-strip b { color: #334155; }
+
+  /* 数据层小胶囊 */
+  .pill-row { display: flex; flex-wrap: wrap; gap: 8px; padding-left: 10px; }
+  .pill {
+    font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 12px; color: #334155; background: white;
+    border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px;
+  }
+
+  /* 外部服务（虚线 = 边界外） */
+  .external-group {
+    border: 1.5px dashed #CBD5E1; border-radius: 12px;
+    padding: 16px 22px 14px; background: #FFFFFF;
+  }
+  .external-title {
+    font-size: 14px; font-weight: 700; color: #475569; margin-bottom: 12px;
+    display: flex; align-items: baseline; justify-content: space-between;
+  }
+  .external-title .phase-tag {
+    font-size: 11.5px; font-weight: 500; color: var(--text-muted);
+    font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  }
+  .ext-grid { display: grid; grid-template-columns: 1.25fr 1fr 1fr; gap: 10px; padding-left: 10px; }
+  .ext-cell {
+    font-size: 13px; color: #374151; background: #F8FAFC;
+    border: 1px solid var(--border); border-radius: 6px; padding: 9px 12px; line-height: 1.5;
+  }
+  .ext-cell.wsa { background: #F0FDF4; border: 1px solid #99F6E4; }
+  .ext-cell.wsa b { color: #0F766E; }
+  .ext-cell b { font-weight: 600; }
+  .ext-cell .cell-note { display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+
+  /* Scheme B：中性灰底 + 蓝色渐进（5 层） */
+  .phase-1 .phase-title { background: #F8FAFC; color: #334155; border-left: 4px solid #94A3B8; }
+  .phase-2 .phase-title { background: #F1F5F9; color: #334155; border-left: 4px solid #7B8FA3; }
+  .phase-3 .phase-title { background: #E8EDF3; color: #2D4156; border-left: 4px solid #6B809A; }
+  .phase-4 .phase-title { background: #E2E8F0; color: #283C52; border-left: 4px solid #5B7590; }
+  .phase-5 .phase-title { background: #DAE1EB; color: #23364D; border-left: 4px solid #4B6A87; }
+
+  .footnote {
+    margin-top: 22px; padding-top: 14px; border-top: 1px solid #EEF2F7;
+    display: flex; gap: 24px; justify-content: center; font-size: 12px; color: #4B5563;
+  }
+  .footnote .fn-item { display: flex; align-items: center; gap: 7px; }
+  .fn-dot { width: 11px; height: 11px; border-radius: 3px; border: 1.5px solid; }
+</style>
+</head>
+<body>
+<div id="root">
+  <div class="flow-title">AI 资讯雷达 2.0 · 自媒体工作流平台总体架构</div>
+  <div class="flow-subtitle">元宝搜索作为情报底座 · 借鉴 wewrite / huashu / dsh / pi-agent 的可复用模式 · 渐进演进于现有 Next.js 应用</div>
+
+  <div class="phase-group phase-1">
+    <div class="phase-title"><span>界面层 · Web 工作台</span><span class="phase-tag">Next.js 16 + React 19（现有代码库演进）</span></div>
+    <div class="layer-grid">
+      <div class="cell"><b>资讯雷达仪表盘</b><span class="cell-note">话题追踪 / 参数化检索 / 早报 — 已上线</span></div>
+      <div class="cell"><b>工作流看板</b><span class="cell-note">Runs 任务流 · 看板式进度 · 断点续跑</span></div>
+      <div class="cell"><b>可视化编辑器</b><span class="cell-note">指着画面改 · 评论带坐标回传<span class="src-badge">借鉴 om studio</span></span></div>
+      <div class="cell"><b>无限画布素材库</b><span class="cell-note">图 / 文 / 视频 / 分镜节点<span class="src-badge">借鉴 dsh 画布</span></span></div>
+      <div class="cell"><b>设置中心</b><span class="cell-note">供应商密钥池 · 写作人格 · 排版主题</span></div>
+      <div class="cell"><b>素材与资产库</b><span class="cell-note">图片灯箱 · 视频网格 · 标签画廊</span></div>
+    </div>
+  </div>
+
+  <div class="arrow">↓<span class="arrow-note">界面只调内部 API，密钥不出服务端</span></div>
+
+  <div class="phase-group phase-2">
+    <div class="phase-title"><span>工作流层 · 内容生产线</span><span class="phase-tag">借鉴 wewrite 九模块 + huashu 导演方法</span></div>
+    <div class="track-row">
+      <div class="track">
+        <div class="track-title">图文生产线<span class="track-chip chip-a">A · 公众号</span></div>
+        <div class="track-steps">
+          <span class="tstep"><span class="t-num">1</span>选题会</span>
+          <span class="tstep"><span class="t-num">2</span>文章任务书</span>
+          <span class="tstep"><span class="t-num">3</span>素材与主张账本</span>
+          <span class="tstep"><span class="t-num">4</span>初稿（人格注入）</span>
+          <span class="tstep"><span class="t-num">5</span>五维审稿</span>
+          <span class="tstep"><span class="t-num">6</span>配图</span>
+          <span class="tstep"><span class="t-num">7</span>排版（18 主题）</span>
+          <span class="tstep"><span class="t-num">8</span>草稿箱发布</span>
+        </div>
+      </div>
+      <div class="track">
+        <div class="track-title">视频生产线<span class="track-chip chip-b">B · 短视频</span></div>
+        <div class="track-steps">
+          <span class="tstep"><span class="t-num">1</span>节奏单脚本</span>
+          <span class="tstep"><span class="t-num">2</span>分镜与身份锚定</span>
+          <span class="tstep"><span class="t-num">3</span>渲染路径A · 代码绘制</span>
+          <span class="tstep"><span class="t-num">4</span>渲染路径B · 模型生成</span>
+          <span class="tstep"><span class="t-num">5</span>配乐作曲</span>
+          <span class="tstep"><span class="t-num">6</span>QA 门禁</span>
+          <span class="tstep"><span class="t-num">7</span>多画幅导出</span>
+        </div>
+      </div>
+    </div>
+    <div class="flywheel-strip"><b>双线共用飞轮：</b>多平台一稿多发（小红书 / 抖音改写）→ 阅读数据回填 → 编辑飞轮学习「我的修改」→ 反哺选题池</div>
+  </div>
+
+  <div class="arrow">↓<span class="arrow-note">每段流水线 = 一个可独立调用的 Skill</span></div>
+
+  <div class="phase-group phase-3">
+    <div class="phase-title"><span>Agent 运行时层</span><span class="phase-tag">借鉴 pi-agent-core + Agent Skills 开放标准</span></div>
+    <div class="layer-grid">
+      <div class="cell"><b>技能包系统</b><span class="cell-note">SKILL.md 声明式技能 · 按需加载</span></div>
+      <div class="cell"><b>工具注册表</b><span class="cell-note">search / image / video / render / publish</span></div>
+      <div class="cell"><b>任务状态机</b><span class="cell-note">Runs 可恢复 · 多任务并行不互扰</span></div>
+      <div class="cell"><b>上下文工程</b><span class="cell-note">项目指令注入 · 超限自动压缩</span></div>
+      <div class="cell"><b>双入口调用</b><span class="cell-note">HTTP API（Web）+ CLI（本地）共用同一运行时</span></div>
+      <div class="cell"><b>评论收件箱</b><span class="cell-note">编辑器评论 → 任务队列 · 定位到节点<span class="src-badge">借鉴 inbox.jsonl</span></span></div>
+    </div>
+  </div>
+
+  <div class="arrow">↓<span class="arrow-note">运行时不感知供应商差异，只面对统一接口</span></div>
+
+  <div class="phase-group phase-4">
+    <div class="phase-title"><span>模型网关层 · 多供应商抽象</span><span class="phase-tag">借鉴 pi-ai 统一 API + dsh 协议族适配</span></div>
+    <div class="layer-grid two">
+      <div class="cell"><b>LLM 供应商适配</b><span class="cell-note">GLM / OpenAI / Claude / DeepSeek — 流式事件 + 会话内切换</span></div>
+      <div class="cell"><b>生图渠道</b><span class="cell-note">文生图 / 图生图 / 多参考图（≤5 张）</span></div>
+      <div class="cell"><b>生视频协议族</b><span class="cell-note">按协议族适配「提交 + 轮询」异步链路<span class="src-badge">借鉴 dsh</span></span></div>
+      <div class="cell"><b>密钥池 · 成本 · 降级链</b><span class="cell-note">RPM 槽位轮询 · 用量记账 · 模型失败 → 本地规则兜底</span></div>
+    </div>
+  </div>
+
+  <div class="arrow">↓</div>
+
+  <div class="phase-group phase-5">
+    <div class="phase-title"><span>数据与状态层</span><span class="phase-tag">Prisma + SQLite（个人创作者单机优先）</span></div>
+    <div class="pill-row">
+      <span class="pill">topics 话题</span>
+      <span class="pill">ideas 选题池</span>
+      <span class="pill">runs 任务</span>
+      <span class="pill">articles 文章</span>
+      <span class="pill">claims 来源账本</span>
+      <span class="pill">assets 素材</span>
+      <span class="pill">publish_records 发布</span>
+      <span class="pill">style_profiles 风格</span>
+      <span class="pill">provider_configs 供应商</span>
+      <span class="pill">gen_tasks 异步生成任务</span>
+    </div>
+  </div>
+
+  <div class="arrow" style="margin: 14px 0 10px;">⇅<span class="arrow-note">鉴权与调用边界：密钥仅在服务端，外部服务永远在虚线之外</span></div>
+
+  <div class="external-group">
+    <div class="external-title"><span>外部服务（跨信任边界）</span><span class="phase-tag">dashed = 平台边界外</span></div>
+    <div class="ext-grid">
+      <div class="ext-cell wsa"><b>腾讯元宝搜索 SearchPro</b><span class="cell-note">话题监控 · 素材核对 · 数据卡 · Industry=gov/news 权威信源过滤</span></div>
+      <div class="ext-cell"><b>微信公众号 API</b><span class="cell-note">草稿箱推送 · 数据分析回填</span></div>
+      <div class="ext-cell"><b>多平台分发</b><span class="cell-note">小红书 / 抖音（人工辅助发布）</span></div>
+    </div>
+  </div>
+
+  <div class="footnote">
+    <div class="fn-item"><div class="fn-dot" style="border-color:#0F766E;background:#F0FDF4;"></div>元宝搜索接入点（情报底座）</div>
+    <div class="fn-item"><div class="fn-dot" style="border-color:#7B8FA3;background:#F1F5F9;"></div>自研模块（渐进演进新增）</div>
+    <div class="fn-item"><div class="fn-dot" style="border-color:#CBD5E1;background:#FFFFFF;border-style:dashed;"></div>外部服务（鉴权隔离）</div>
+  </div>
+</div>
+</body>
+</html>
