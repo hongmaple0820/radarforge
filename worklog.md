@@ -273,3 +273,10 @@ wewrite 集成（MIT，纯增量吸收）：
 - 作曲配乐为三预设合成垫（方案中「ABC 记谱完整作曲」仍列远期，工作量大收益边际）
 - art 艺术动画 36 风格全量维持首批 8 语法×8 色板（方案 9.3 明示不现实）
 - 指着改分段物料自 v3 渲染起留存；此前的旧成片需整体重渲一次才可指着改（UI 诚实提示）
+
+## 2026-10-29 · 预览启动运维记录
+
+- 容器于 08:30 重启后，Prisma Client 生成产物丢失（`@prisma/client did not initialize yet`），11 个 API 500
+- 修复：`bun run db:generate`（6.19.2 重生成，首次因瞬时网络抖动失败，重试成功）+ `bun run db:push` 同步确认
+- 复验：首页 + 11 个 GET 端点全 200，dev.log 零错误；agent-browser 实测四 Tab（情报中心/创作台/插件生态/设置中心）渲染与切换正常，图文/视频双线、7 人格、导演三方向、Agnes/pi-ai 供应商卡片均在线
+- 截图：download/preview-home.png、download/preview-settings.png
