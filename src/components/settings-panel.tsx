@@ -229,7 +229,11 @@ export function SettingsPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ scope, accountId }),
       })
-      const json = await res.json()
+      // 防御：路由缺失/网关返回 HTML 时给出可读错误，而非「Unexpected token '<'」
+      if (!res.ok && res.status !== 200) throw new Error(`HTTP ${res.status}（${res.headers.get("content-type")?.includes("html") ? "返回了 HTML 页面" : "接口异常"}）`)
+      const json = await res.json().catch(() => {
+        throw new Error(`非 JSON 响应（HTTP ${res.status}），请检查服务状态`)
+      })
       setTests((t) => ({ ...t, [key]: json }))
       const nameMap: Record<string, string> = { llm: "LLM", search: "AI 搜索", image: "生图", agnes: "Agnes 账号", video: "视频模型" }
       if (json.ok) toast({ title: `${nameMap[scope] ?? scope} 连通正常`, description: json.detail?.slice(0, 60) })

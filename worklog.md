@@ -319,3 +319,15 @@ wewrite 集成（MIT，纯增量吸收）：
 - UI 徽章全部由「演示」转「真实」；截图 download/real-mode-home.png
 
 **Provider 终态**：yuanbao-search healthy(50 calls) / zai-llm healthy(100 calls) / zai-image healthy；Agnes 三通道待用户配置账号池
+
+## 2026-10-29 · 「Unexpected token '<', "<!DOCTYPE"」错误修复
+
+**用户报错**：设置中心操作报 `Unexpected token '<', "<!DOCTYPE "...`
+
+**根因**：`/api/settings/test` 路由缺失（目录下只有 route.ts 与 models-json）——设置中心「测试连通」按钮 POST 该路径，Next.js 404 返回 **HTML 错误页**，前端 `res.json()` 把 HTML 当 JSON 解析 → 抛出该错误。属回归脚本未覆盖的端点缺口。
+
+**修复**：
+1. 新增 `src/app/api/settings/test/route.ts`：五 scope 真实连通测试——search（SearchPro 实查 10 条）/ llm（按 mode 分派真实 chat）/ image（真实出图+即测即删）/ agnes（单账号 probeAccount 或池 health）/ video（ffmpeg 版本或 agnes-video health）；统一返回 {ok, latencyMs, detail?, error?}
+2. settings-panel.tsx 前端防御：res.ok 与 content-type 检查，HTML/非 JSON 响应转为可读错误文案
+
+**验证**：API 五 scope 实测（search 222ms 10 条真实结果 / llm 334ms 回复「正常」/ image 73s 真实出图 41KB 含 WAF 重试穿透 / video ffmpeg 7.1.5 / agnes 如实报未启用）；浏览器端到端「测试连通」「真实查询一条」按钮均正常弹 toast；tsc/ESLint 双零；截图 download/settings-test-fixed.png
