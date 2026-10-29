@@ -69,6 +69,17 @@ export interface StoryboardScene {
   broll: string // B-roll 素材建议
 }
 
+/** 选定方向的轻量摘要（随分镜存储，供渲染取色与恢复） */
+export interface DirectionBrief {
+  key: string
+  kind: string
+  name: string
+  language: string
+  accent: string
+  base: string
+  feel: string
+}
+
 export interface Storyboard {
   title: string
   hook: string // 前 3 秒钩子
@@ -76,9 +87,21 @@ export interface Storyboard {
   scenes: StoryboardScene[]
   bgm: string // 音乐风格建议
   caption: string // 发布文案 + 话题标签
+  direction?: DirectionBrief
 }
 
-export function storyboardMessages(markdown: string, platform: string): ChatMessage[] {
+export function storyboardMessages(markdown: string, platform: string, direction?: DirectionBrief): ChatMessage[] {
+  const dirBlock = direction
+    ? [
+        "",
+        "【已选定导演方向（分镜必须贯彻它的语言与节奏）】",
+        `方向 ${direction.key} · ${direction.name}（${direction.kind === "amplify" ? "B·放大" : direction.kind === "unexpected" ? "C·意外" : "A·贴合"}）`,
+        `语言与技法：${direction.language}`,
+        `节奏：${direction.feel}`,
+        `主视觉色 #${direction.accent.replace("#", "")}（场景卡/字幕强调都用这个色系）`,
+        "分镜的 visual 要按这个方向的语言写（怎么动、什么材质），不是通用描述；分镜节奏长短要对齐方向 feel 的快慢。",
+      ].join("\n")
+    : ""
   return [
     {
       role: "system",
@@ -99,10 +122,135 @@ export function storyboardMessages(markdown: string, platform: string): ChatMess
         `  "bgm": "音乐风格建议",`,
         `  "caption": "发布文案 #标签"`,
         `}`,
+      ].join("\n") + dirBlock,
+    },
+    { role: "user", content: markdown.slice(0, 9000) },
+  ]
+}
+
+// ---------- 导演三方向提案（学 huashu-motion director §4：A·Fit / B·Amplify / C·Unexpected） ----------
+
+export interface DirectionProposal {
+  key: "A" | "B" | "C"
+  kind: "fit" | "amplify" | "unexpected"
+  name: string // 方向名（两~五字，有辨识度）
+  language: string // motion language + 技法亮点（怎么动）
+  logline: string // 一句话讲整片：钩子 + 结尾
+  why: string // 为什么适合这个内容（信息形态 + 个性一句话）
+  feel: string // 节奏感：连续/蒙太奇/混剪 · 快慢 · 前 3 秒无声看什么
+  palette: { accent: string; base: string; note: string } // 主色 / 底色（hex）+ 用色来源说明
+  depth: boolean // 是否空间纵深方向（三方向中恰好一个）
+  recommended: boolean // 导演推荐
+}
+
+export function directionsMessages(markdown: string, platform: string): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: [
+        "你是宣传片导演（学 huashu-motion 的导演工作流）。通读这篇内容，为它提出三个真正不同的视频方向，供用户三选一。",
+        `目标平台：${platform}，成片 45~75 秒。`,
+        "三方向规则（严格执行）：",
+        "- A · Fit（贴合）：信息形态与内容个性指向的、稳妥而优秀的语言。是安全选择。",
+        "- B · Amplify（放大）：同一信息推向更大胆的语言——一镜到底 / 大字报字体当主角 / 更快节奏蒙太奇 / 空间纵深，任选其一。能量比 A 高。",
+        "- C · Unexpected（意外）：换一种仍然承载信息、契合气质的意外语言——艺术史重构 / 角色小故事 / 编辑拼贴 / 日常器物开场等。仍要讲这件事本身，不是为新奇而新奇。",
+        "- 恰好一个方向使用「空间纵深」（把界面/数据/物件放进空间里运镜），其余两个以平面语言为主。",
+        "- 三个方向的差异必须在「语言与材质」，不许只是换配色；能量轴也要有差异，至少一个是快节奏蒙太奇版。",
+        "- 每个方向 palette.accent 取内容自然衍生色（主题色/数据色/情绪色），base 一深一浅要有别，note 一句话说明颜色从哪来。",
+        "- 推荐标记 recommended：按内容形态选一个最合适的（不默认 A）。",
+        "每字段都短而具体（feel 要提到前 3 秒无声时观众看到什么）。严格输出 JSON（不要 markdown 代码块）：",
+        `{`,
+        `  "directions": [`,
+        `    { "key": "A", "kind": "fit", "name": "证据链", "language": "节奏卡点 + 数据砸入（语言 + 技法）", "logline": "一句话：钩子→…→结尾", "why": "信息形态+个性 → 该语言", "feel": "蒙太奇 · 120BPM · 前3秒：大数字砸满屏", "palette": { "accent": "#38bdf8", "base": "#0b1220", "note": "科技蓝取自数据图表" }, "depth": false, "recommended": false },`,
+        `    { "key": "B", "kind": "amplify", "name": "…", "language": "…", "logline": "…", "why": "…", "feel": "…", "palette": { "accent": "…", "base": "…", "note": "…" }, "depth": true, "recommended": true },`,
+        `    { "key": "C", "kind": "unexpected", "name": "…", "language": "…", "logline": "…", "why": "…", "feel": "…", "palette": { "accent": "…", "base": "…", "note": "…" }, "depth": false, "recommended": false }`,
+        `  ]`,
+        `}`,
       ].join("\n"),
     },
     { role: "user", content: markdown.slice(0, 9000) },
   ]
+}
+
+const HEX_RE = /^#[0-9a-fA-F]{6}$/
+
+export function parseDirections(raw: unknown): DirectionProposal[] {
+  if (!raw || typeof raw !== "object") return []
+  const o = raw as Record<string, unknown>
+  const list = Array.isArray(o.directions) ? o.directions : []
+  const out: DirectionProposal[] = []
+  const seenKind = new Set<string>()
+  for (const item of list) {
+    const x = item as Record<string, unknown>
+    const kindRaw = String(x.kind ?? "")
+    const kind: DirectionProposal["kind"] = kindRaw === "amplify" ? "amplify" : kindRaw === "unexpected" ? "unexpected" : "fit"
+    if (seenKind.has(kind)) continue
+    seenKind.add(kind)
+    const p = (x.palette ?? {}) as Record<string, unknown>
+    const accent = HEX_RE.test(String(p.accent)) ? String(p.accent) : "#f59e0b"
+    const base = HEX_RE.test(String(p.base)) ? String(p.base) : "#0b1220"
+    out.push({
+      key: kind === "fit" ? "A" : kind === "amplify" ? "B" : "C",
+      kind,
+      name: String(x.name ?? "").slice(0, 24) || "未命名方向",
+      language: String(x.language ?? "").slice(0, 160),
+      logline: String(x.logline ?? "").slice(0, 160),
+      why: String(x.why ?? "").slice(0, 160),
+      feel: String(x.feel ?? "").slice(0, 160),
+      palette: { accent, base, note: String(p.note ?? "").slice(0, 120) },
+      depth: Boolean(x.depth),
+      recommended: Boolean(x.recommended),
+    })
+  }
+  return out.slice(0, 3)
+}
+
+// ---------- 指着改：单场景修订（学 huashu-motion studio「指着帧提意见」） ----------
+
+export function sceneReviseMessages(scene: StoryboardScene, sb: Storyboard, feedback: string): ChatMessage[] {
+  const dirNote = sb.direction ? `整片方向：${sb.direction.key} · ${sb.direction.name}（${sb.direction.language}；节奏：${sb.direction.feel}）` : "整片方向：未指定"
+  return [
+    {
+      role: "system",
+      content: [
+        "你是视频剪辑师。用户看了成片后指着这一个分镜提了修改意见，你只改这一个分镜，其它分镜不动。",
+        dirNote,
+        "要求：",
+        "- 严格针对意见修改 subtitle / narration / visual / seconds 中的相关字段；意见没提到的字段原样保留",
+        "- seconds 随口播长度自然调整（2~12 秒），事实数字保留原文不得新增",
+        "- reason 一句话说清改了什么",
+        "严格输出 JSON（不要 markdown 代码块）：",
+        `{ "id": ${scene.id}, "seconds": 5, "visual": "...", "narration": "...", "subtitle": "...", "broll": "...", "reason": "改动说明" }`,
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: [
+        `视频标题：${sb.title}（钩子：${sb.hook}）`,
+        `当前分镜 #${scene.id}（${scene.seconds}s）：`,
+        `字幕：${scene.subtitle}`,
+        `口播：${scene.narration}`,
+        `画面：${scene.visual}`,
+        `素材：${scene.broll}`,
+        "",
+        `用户指着这个分镜说：${feedback}`,
+      ].join("\n"),
+    },
+  ]
+}
+
+export function parseSceneRevision(raw: unknown, fallback: StoryboardScene): { scene: StoryboardScene; reason: string } {
+  const x = (raw ?? {}) as Record<string, unknown>
+  const scene: StoryboardScene = {
+    id: fallback.id,
+    seconds: Math.min(20, Math.max(1, Number(x.seconds) || fallback.seconds)),
+    visual: String(x.visual ?? fallback.visual).slice(0, 200),
+    narration: String(x.narration ?? fallback.narration).slice(0, 300),
+    subtitle: String(x.subtitle ?? fallback.subtitle).slice(0, 30),
+    broll: String(x.broll ?? fallback.broll).slice(0, 120),
+  }
+  const reason = String(x.reason ?? "").slice(0, 200) || "已按意见调整"
+  return { scene, reason }
 }
 
 // ---------- 视频成片（TTS 口播音色清单，客户端与服务端共用） ----------
@@ -204,6 +352,19 @@ export function parseArtSpecs(raw: unknown): ArtSpecItem[] {
 export function parseStoryboard(raw: unknown): Storyboard | null {
   if (!raw || typeof raw !== "object") return null
   const o = raw as Record<string, unknown>
+  const d = (o.direction ?? null) as Record<string, unknown> | null
+  const direction: DirectionBrief | undefined =
+    d && typeof d === "object"
+      ? {
+          key: String(d.key ?? "A").slice(0, 1),
+          kind: ["fit", "amplify", "unexpected"].includes(String(d.kind)) ? String(d.kind) : "fit",
+          name: String(d.name ?? "").slice(0, 24),
+          language: String(d.language ?? "").slice(0, 160),
+          accent: HEX_RE.test(String(d.accent)) ? String(d.accent) : "#f59e0b",
+          base: HEX_RE.test(String(d.base)) ? String(d.base) : "#0b1220",
+          feel: String(d.feel ?? "").slice(0, 160),
+        }
+      : undefined
   const scenesRaw = Array.isArray(o.scenes) ? o.scenes : []
   const scenes: StoryboardScene[] = scenesRaw
     .map((s, i) => {
@@ -227,5 +388,6 @@ export function parseStoryboard(raw: unknown): Storyboard | null {
     scenes: scenes.slice(0, 12),
     bgm: String(o.bgm ?? "").slice(0, 80),
     caption: String(o.caption ?? "").slice(0, 300),
+    ...(direction ? { direction } : {}),
   }
 }

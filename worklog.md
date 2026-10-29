@@ -218,3 +218,58 @@ wewrite 集成（MIT，纯增量吸收）：
 - pi-ai 目录外 model id 走宽松匹配或自定义 baseUrl；带真实 key 的 pi-ai 各供应商以用户自配为准（沙箱只验证了回退链与目录 API）
 - art 艺术动画为 8 语法×8 色板首批（36 风格全量与 A3 指着改编辑器列 Phase 6 路线图）
 - dev server 一次静默退出（无错误日志，疑沙箱资源回收），重启后全绿；非代码缺陷
+
+## 2026-10-29 · Phase 6 落地：dsh 融合 + 指着改编辑器 + 文风学习 + BGM 合成（方案既定路线全闭环）
+
+背景：Phase 4/5 收官后用户授权「依次高标准严格执行落地，全部完成后通知我」，本棒执行方案文档既定的 Phase 6（远期项提前兑现）：A3 宣传片风三方向创作流 + 指着改编辑器 + learn-theme 文风学习 + dsh 插件壳 + 作曲配乐务实版。研究底料：skill-pool/ 留存的 huashu-motion 完整 skill 包（director.md §4 三方向规范 / studio 指着改协议）与 wewrite 仓库（wewrite-learn exemplar 语义），dsh 双仓库经 codeload tarball 补齐（dsh-agnes-multimodal 完整：cordis.patch.yml + ctx.tools.register 形态）。
+
+### 交付一 · 导演三方向提案（学 huashu-motion director §4）
+- radar-rewrite.ts 新增 directionsMessages/parseDirections：LLM 产 3 方向（A·Fit 贴合 / B·Amplify 放大 / C·Unexpected 意外），差异约束在「语言与材质」非配色；恰好一个 depth 空间纵深方向；palette（accent/base/note）+ logline/why/feel；recommended 导演推荐标记
+- storyboardMessages 支持方向注入（分镜 prompt 贯彻方向语言与节奏）；sceneSvg 调色板化（paletteFor：accent 派生场景卡主色/进度点/glow；浅色 base 自动回退深色底保文字可读——hexLuma 判定）
+- actions 新增 storyboard-directions；storyboard 接受 direction；video-panel 三方向卡 UI（kind 徽章 + palette 色带 + logline/语言/节奏/为何适合 + 推荐⭐ + 空间纵深标记）→「按方向生成分镜」/「跳过方向直接分镜」双路径
+- REAL 实测：B·空间纵深方向（#f97316 橙）→ 9 镜分镜携带 direction → v2 成片橙色主色生效（抽帧 orange-ish px=18）、方向名烙进场景卡品牌行
+
+### 交付二 · 指着改编辑器（学 huashu-motion studio，Web 版）
+- 渲染留存场景分段：public/assets/video-segs/{runId}/s{i}.mp4（v3 起生效；旧版本诚实报错「请先整体重新渲染一次」）
+- reviseSceneVideo：LLM 修订被指分镜（sceneReviseMessages，严格只动该镜）→ 只重做该场景（TTS+段，motion/art 双线）→ 与留存分段 concat → video-{runId}-v{N}.mp4 新版本
+- 版本树：meta.version（v1 起）+ revisions[]（sceneId/feedback/reason/at 跨版本继承）+ durations[]（场景边界，UI 定位用）；Asset 链即版本链
+- video-panel：时间轴点击定位分镜 / 分镜卡「指着改这镜」/ 播放头按钮三入口 → 意见浮层（≤300 字）→ 版本 chips（v1 整片/v2+ ✎指着改）切换 + 改动历史列表
+- REAL 实测：v2（48.3s，8 镜 durations 留痕）→ 指着改分镜 #3「字幕太长改短、口播更口语更狠」→ v3（48.2s）：仅 durations[2] 6.0→5.9s 其余 7 镜分毫不动；字幕「知情同意成形式」→「知情同意成摆设」；revision 留痕「缩短字幕并使口播更口语化、更具批判性」
+- 全量回归再证：v4 版本号递增 + revisions 链 + 路径 -v 版本化
+
+### 交付三 · BGM 本地合成（作曲配乐务实版，huashu-motion OM.sound 思路）
+- BGM_RECIPES 三预设（aevalsrc 正弦合成 + tremolo/aecho/afade 链）：uplift 大三和弦垫 4Hz 律动 / tech 低频脉冲 / calm 纯五度长音——零曲库依赖无版权问题
+- mixBgm：amix normalize=0（ffmpeg 7.1.5 实测支持）口播为主 BGM 垫底（0.18-0.24）；静音降级片 BGM 音量×2.4 提为主角；失败诚实回退无配乐留痕
+- 渲染参数 bgm 四选（默认 none）；meta.bgm/bgmNote 留痕；UI 渲染控制加 BGM 下拉
+- REAL 实测：v2 uplift 混音 volumedetect mean -23.1dB / max -2.9dB（真实出声）；回归 calm 混音 bgmNote 留痕
+
+### 交付四 · 文风学习（学 wewrite exemplar 范文库）
+- radar-learn.ts 新增 exemplarMessages/parseExemplar/exemplarPrompt：范文 → 6 维指纹（结构骨架/句式节奏/词汇偏好/修辞密度/语气人称/收尾习惯）；安全条款内置（allowed_uses 仅 style+structure，观点/句子/比喻/个人经历禁止复用——对齐 wewrite 语义）
+- 存储：SettingKV style:exemplars（settings.ts exemplars 块 + AgentRun.exemplarId 字段 db push）；API /api/style-exemplars GET/POST/DELETE（边界：空名 400 / <200 字 400 / 删除不存在 404；Asset 留痕 role=style-exemplar）
+- run-manager：exemplarId → 指纹 → draftMessages 注入 exemplarPrompt；studio-panel 文风校准下拉 + 「学习新文风」内联表单（粘贴范文 → 提炼）+ 档案删除
+- REAL 实测：346 字「毒舌快评风」范文 → 指纹准确捕捉（设问开头/「但是/明明/非要」转折强调词/第二人称/反问收尾）→ 带校准流水线 REAL 出稿 1273 字符（问号 6 处、短段落密集渗透；无范文句子复用）
+
+### 交付五 · dsh 插件壳（学 dsh-agnes-multimodal cordis 协议）
+- download/dsh-plugin-radar/（+tgz）：package.json（dsh.bundle.patch + dsh.client.inject 声明）/ cordis.patch.yml（loader entry）/ lib/index.js（ctx.tools.register 双工具：radar_article 六步出稿 + radar_video 三方向→分镜→成片；waitForRun 轮询；富产物不回传模型的纯文本约定）/ lib/client.js（RadarRunCard 进度卡 + RadarVideoCard 播放器）/ README（安装/RADAR_BASE 配置/API 契约表）
+- plugins-panel 加「dsh 插件形态」卡：双工具说明 + 安装命令 + 零密钥架构说明 + 诚实边界
+- REAL 冒烟（mock cordis ctx + 真实平台）：apply() 双工具注册 ✓ → API 契约端到端（POST /api/runs 出稿 1442 字符 REAL → storyboard 8 镜 → render-video 受理）全通
+
+### 质量基线与修复
+- 沙箱根因实锤两则（此前「静默退出」之谜破案）：① next-server anon-rss 2.3GB 触发 OOM kill（dmesg 留证）→ NODE_OPTIONS max-old-space-size=1536；② 跨 Bash 调用的后台进程被清理 → scripts/with-server.sh 封装（启动+测试+清理同调用存活），全套验证脚本改走此模式
+- 浏览器自动化三坑修复：Radix TabsTrigger 不渲染 data-value（改 [role=tab]）；element.click() 在 hydration 完成前不触发 React 合成事件（初始等 15s + Playwright 真实点击 find role click）；agent-browser eval 返回带 JSON 引号（比较前 tr -d '"'）
+- 375px 溢出修复（存量漏网，v4 只查了主 Tab）：plugins-panel「grid lg:grid-cols-2 缺 base grid-cols-1」（第 11 处隐式轨道撑宽）+ 长英文 token（toolRegistry.register()/JSON-RPC/dsh 命令行）break-words/break-all + textarea max-w-full；修后插件中心/社区技能双内层 Tab 均 375
+
+验证（全部通过，scripts/verify-p6-*.sh|py 可复跑）：
+- API 全量 36 项断言全绿（verify-p6-full.sh）：基础面 9 端点 + settings exemplars + exemplars CRUD 边界（400/404 诚实）+ 三方向（kind 齐全/恰好一个 depth/palette hex 合法）+ 带方向分镜携带 direction + render-video(bgm) meta 六项留痕 + revise-scene 边界 + 指着改 REAL v4 版本递增 + revisions 链
+- 文风学习全链路（verify-p6-exemplar.py）：指纹提炼质量高 → 范文库 → 带校准流水线 REAL → 渗透粗验证
+- dsh 插件冒烟（verify-p6-plugin.sh）：工具注册 + API 契约端到端
+- 浏览器（agent-browser）：创作台文风校准（VLM 复核：下拉+档案+学习按钮齐全）、三方向三卡（VLM 复核：色带/徽章/logline/双按钮）、成片卡（播放器+版本 chips v1-v4+指着改浮层+改动历史）、dsh 插件卡（双工具+安装命令）、375px 全 Tab scrollWidth=375、errors 零
+- ESLint src/ 零错误零警告；tsc --noEmit 零错误
+- 截图 9 张：download/assets/p6-{studio-exemplar,studio-learn-form,video-panel,directions,storyboard-direction,video-final,revise-modal,eco-dsh-plugin,mobile-375}.png
+
+已知边界（诚实记录）：
+- dsh 插件为骨架完整 v0.1.0：沙箱无 dsh 宿主未做宿主内联调（README 已注明；cordis API 细节如有差异按 agnes 插件同模式微调）
+- 指着改仅支持本地双风格线（motion/art）；Agnes 通道修订场景将走 motion 兜底语义未暴露 UI 入口（通道为 agnes 时建议整片重渲）
+- 作曲配乐为三预设合成垫（方案中「ABC 记谱完整作曲」仍列远期，工作量大收益边际）
+- art 艺术动画 36 风格全量维持首批 8 语法×8 色板（方案 9.3 明示不现实）
+- 指着改分段物料自 v3 渲染起留存；此前的旧成片需整体重渲一次才可指着改（UI 诚实提示）

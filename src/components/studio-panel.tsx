@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useToast } from "@/hooks/use-toast"
 import { RunDetail } from "./run-detail"
-import { PenLine, Play, Loader2, RefreshCw, Lightbulb, FileText, CheckCircle2, XCircle } from "lucide-react"
+import { PenLine, Play, Loader2, RefreshCw, Lightbulb, FileText, CheckCircle2, XCircle, BookOpen, Sparkles, Trash2 } from "lucide-react"
 
 interface RunItem {
   id: string
@@ -25,6 +25,7 @@ interface RunItem {
 interface PersonaInfo { id: string; label: string; desc: string }
 interface ThemeInfo { id: string; label: string; category: string; description: string }
 interface IdeaItem { id: string; title: string; angle: string; status: string }
+interface ExemplarItem { id: string; name: string; source: string; createdAt: string; words: number; fingerprint: { structure: string; rhythm: string; lexicon: string; rhetoric: string; voice: string; endings: string } }
 
 /** seed：情报中心「去创作」送来的选题（自动填入并聚焦） */
 export function StudioPanel({ seed }: { seed?: { title: string; angle: string } | null }) {
@@ -37,6 +38,13 @@ export function StudioPanel({ seed }: { seed?: { title: string; angle: string } 
   const [ideaAngle, setIdeaAngle] = useState("")
   const [persona, setPersona] = useState("cold-analyst")
   const [theme, setTheme] = useState("professional-clean")
+  // 文风校准（学 wewrite exemplar）
+  const [exemplars, setExemplars] = useState<ExemplarItem[]>([])
+  const [exemplarId, setExemplarId] = useState("")
+  const [showLearn, setShowLearn] = useState(false)
+  const [exName, setExName] = useState("")
+  const [exContent, setExContent] = useState("")
+  const [learning, setLearning] = useState(false)
   const [starting, setStarting] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
@@ -49,14 +57,16 @@ export function StudioPanel({ seed }: { seed?: { title: string; angle: string } 
   }, [seed])
 
   const refresh = useCallback(async () => {
-    const [r, i] = await Promise.all([
+    const [r, i, e] = await Promise.all([
       fetch("/api/runs").then((x) => x.json()),
       fetch("/api/ideas").then((x) => x.json()),
+      fetch("/api/style-exemplars").then((x) => x.json()),
     ])
     setRuns(r.runs ?? [])
     setPersonas(r.personas ?? [])
     setThemes(r.themes ?? [])
     setIdeas(i.ideas ?? [])
+    setExemplars(e.exemplars ?? [])
   }, [])
 
   useEffect(() => {
@@ -79,7 +89,7 @@ export function StudioPanel({ seed }: { seed?: { title: string; angle: string } 
       const res = await fetch("/api/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ideaTitle, ideaAngle, persona, theme }),
+        body: JSON.stringify({ ideaTitle, ideaAngle, persona, theme, exemplarId }),
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error)
@@ -90,6 +100,43 @@ export function StudioPanel({ seed }: { seed?: { title: string; angle: string } 
       toast({ title: "启动失败", description: (e as Error).message, variant: "destructive" })
     } finally {
       setStarting(false)
+    }
+  }
+
+  // 学习新文风：粘贴范文 → LLM 提炼指纹入库（学 wewrite exemplar）
+  const learnExemplar = async () => {
+    setLearning(true)
+    try {
+      const res = await fetch("/api/style-exemplars", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: exName, content: exContent }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      await refresh()
+      setExemplarId(json.exemplar.id)
+      setShowLearn(false)
+      setExName("")
+      setExContent("")
+      toast({ title: "文风档案已入库", description: json.message })
+    } catch (e) {
+      toast({ title: "文风学习失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setLearning(false)
+    }
+  }
+
+  const deleteExemplar = async (id: string) => {
+    try {
+      const res = await fetch(`/api/style-exemplars?id=${id}`, { method: "DELETE" })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      if (exemplarId === id) setExemplarId("")
+      await refresh()
+      toast({ title: "已删除", description: json.message })
+    } catch (e) {
+      toast({ title: "删除失败", description: (e as Error).message, variant: "destructive" })
     }
   }
 
@@ -129,6 +176,44 @@ export function StudioPanel({ seed }: { seed?: { title: string; angle: string } 
             </Button>
           </div>
           <Textarea placeholder="切入角度（可选，引导任务书生成）" value={ideaAngle} onChange={(e) => setIdeaAngle(e.target.value)} rows={2} />
+          {/* 文风校准（学 wewrite exemplar：粘贴范文提炼指纹 → 初稿仅结构节奏校准） */}
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2 flex-wrap">
+              <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-[11px] text-muted-foreground">文风校准：</span>
+              <select value={exemplarId} onChange={(e) => setExemplarId(e.target.value)} className="h-7 text-[11px] border rounded-md bg-background px-2 max-w-[180px]" aria-label="文风校准档案">
+                <option value="">不校准（默认）</option>
+                {exemplars.map((x) => (
+                  <option key={x.id} value={x.id}>{x.name}（{x.words} 字）</option>
+                ))}
+              </select>
+              <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" onClick={() => setShowLearn(!showLearn)}>
+                <Sparkles className="h-3 w-3 mr-0.5" />学习新文风
+              </Button>
+              {exemplarId && exemplars.find((x) => x.id === exemplarId) && (
+                <Button size="sm" variant="ghost" className="h-6 text-[10px] px-1.5 text-muted-foreground" onClick={() => deleteExemplar(exemplarId)}>
+                  <Trash2 className="h-3 w-3" />删除该档案
+                </Button>
+              )}
+              {exemplarId && <span className="text-[10px] text-amber-600">仅校准结构与节奏（安全条款内置）</span>}
+            </div>
+            {showLearn && (
+              <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/40 dark:bg-amber-950/20 p-2.5 space-y-2">
+                <div className="flex items-center gap-2">
+                  <Input placeholder="档案名，如：某专栏作者风" value={exName} onChange={(e) => setExName(e.target.value)} className="h-7 text-xs max-w-[220px]" />
+                  <span className="text-[10px] text-muted-foreground">{exContent.length} 字（200~20000）</span>
+                  <Button size="sm" className="h-7 text-[11px] bg-amber-500 hover:bg-amber-600 text-white ml-auto" onClick={learnExemplar} disabled={learning || !exName.trim() || exContent.trim().length < 200}>
+                    {learning ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Sparkles className="h-3 w-3 mr-1" />}
+                    提炼文风指纹
+                  </Button>
+                </div>
+                <Textarea placeholder="粘贴 200 字以上的范文（结构/节奏/用词最具代表性的部分）。指纹只描述风格特征，不会复用观点与句子" value={exContent} onChange={(e) => setExContent(e.target.value)} rows={4} />
+                {exemplars.length > 0 && (
+                  <p className="text-[10px] text-muted-foreground">已有 {exemplars.length} 个档案：{exemplars.map((x) => x.name).join(" · ")}</p>
+                )}
+              </div>
+            )}
+          </div>
           {ideas.filter((i) => i.status === "new").length > 0 && (
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-[10px] text-muted-foreground flex items-center gap-0.5"><Lightbulb className="h-3 w-3" />选题池：</span>

@@ -18,7 +18,7 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as { ideaTitle?: string; ideaAngle?: string; persona?: string; theme?: string }
+    const body = (await req.json()) as { ideaTitle?: string; ideaAngle?: string; persona?: string; theme?: string; exemplarId?: string }
     const ideaTitle = (body.ideaTitle ?? "").trim()
     if (!ideaTitle) return NextResponse.json({ error: "ideaTitle 不能为空" }, { status: 400 })
     const id = await createArticleRun({
@@ -26,6 +26,7 @@ export async function POST(req: Request) {
       ideaAngle: body.ideaAngle,
       persona: body.persona,
       theme: resolveThemeId(body.theme ?? ""),
+      exemplarId: (body.exemplarId ?? "").trim(),
     })
     executeArticleRunInBackground(id)
     return NextResponse.json({ id })

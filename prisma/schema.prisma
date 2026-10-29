@@ -61,6 +61,7 @@ model AgentRun {
   ideaAngle   String   @default("") // 切入角度
   persona     String   @default("") // 写作人格
   theme       String   @default("radar") // 排版主题
+  exemplarId  String   @default("") // 文风校准档案（style-exemplars 条目 id；空=不校准）
   input       String   @default("") // 用户输入 / 选题
   status      String   @default("queued") // queued | running | blocked | done | error
   mode        String   @default("DEMO") // REAL | DEMO

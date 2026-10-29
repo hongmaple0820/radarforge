@@ -1,0 +1,13 @@
+# dsh-plugin-radar bundle patch — one loader entry mounting the plugin package.
+#
+# 形态学自 dsh-agnes-multimodal（MIT）：单个 loader entry 同时挂载
+# radar_article / radar_video 两个模型工具与配套的会话内进度卡片 UI。
+#
+# 浏览器半由 dsh-client-modules 通过 package.json 的 dsh.client 声明 +
+# exports["./client"] 自动编入，无需在此声明。
+#
+# Manual mount: add the same row to the profile's cordis.patch.yml, or install
+# the package with `dsh plugin --profile <name> add dsh-plugin-radar`.
+- insert:
+    - id: radar-plugin
+      name: 'dsh-plugin-radar'

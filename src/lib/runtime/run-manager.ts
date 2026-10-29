@@ -8,6 +8,7 @@ import { db } from "@/lib/db"
 import { chatRetry, searchWithFallback } from "@/lib/gateway"
 import { generateCoverImage } from "@/lib/gateway/providers/zai-image"
 import { getSettings, styleProfilePrompt } from "@/lib/settings"
+import { exemplarPrompt, type StyleExemplar } from "./skills/radar-learn"
 import { extractJson, clampNum } from "./json"
 import { renderWechatHtml, resolveThemeId, type RenderClaim } from "./render"
 import { briefMessages, draftMessages, getPersona, type Brief, type BriefClaim } from "./skills/radar-write"
@@ -40,6 +41,7 @@ export interface CreateArticleRunArgs {
   ideaAngle?: string
   persona?: string
   theme?: string
+  exemplarId?: string // 文风校准档案（style-exemplars；空=不校准）
 }
 
 export async function createArticleRun(args: CreateArticleRunArgs): Promise<string> {
@@ -50,6 +52,7 @@ export async function createArticleRun(args: CreateArticleRunArgs): Promise<stri
       ideaAngle: (args.ideaAngle ?? "").slice(0, 500),
       persona: args.persona ?? "cold-analyst",
       theme: args.theme ?? "radar",
+      exemplarId: (args.exemplarId ?? "").slice(0, 60),
       input: args.ideaTitle,
       status: "queued",
       steps: JSON.stringify(initialSteps()),
@@ -73,6 +76,22 @@ async function executeArticleRun(runId: string): Promise<void> {
   const artifacts: Record<string, unknown> = {}
   const settings = await getSettings()
   const stylePrompt = styleProfilePrompt(settings.style)
+  // 文风校准档案（学 wewrite exemplar：仅结构节奏，安全条款在注入块内）
+  const exItem = run.exemplarId ? (settings.exemplars.items.find((x) => x.id === run.exemplarId) ?? null) : null
+  const exPrompt = exItem
+    ? exemplarPrompt({
+        id: exItem.id, name: exItem.name, source: exItem.source,
+        createdAt: exItem.createdAt, words: exItem.words,
+        fingerprint: {
+          structure: exItem.fingerprint.structure ?? "",
+          rhythm: exItem.fingerprint.rhythm ?? "",
+          lexicon: exItem.fingerprint.lexicon ?? "",
+          rhetoric: exItem.fingerprint.rhetoric ?? "",
+          voice: exItem.fingerprint.voice ?? "",
+          endings: exItem.fingerprint.endings ?? "",
+        },
+      })
+    : ""
 
   await db.agentRun.update({ where: { id: runId }, data: { status: "running", steps: JSON.stringify(steps) } })
 
@@ -213,6 +232,7 @@ async function executeArticleRun(runId: string): Promise<void> {
           ideaTitle: run.ideaTitle,
           ideaAngle: run.ideaAngle,
           stylePrompt,
+          exemplarPrompt: exPrompt,
         }),
         { temperature: 0.75 },
       )

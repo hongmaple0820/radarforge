@@ -1,13 +1,17 @@
 "use client"
 
 // ============================================================
-// video-panel —— 视频线工作台（独立生产线，学 dsh 可视化面板）
-// 选稿 → 分镜（卡片流可视化）→ 通道选择（motion 商业片 / art 艺术
-// 动画 / Agnes AI 模型）→ TTS 音色 + 画幅 → 渲染进度 → 成片播放/下载
-// 底部时间线条（学 dsh timeline：分镜时长等比渲染 + 播放头位置）
+// video-panel —— 视频线工作台 v2（Phase 6 四件套）
+// ① 导演三方向提案（学 huashu-motion director §4：A·Fit /
+//    B·Amplify / C·Unexpected，palette 色带预览，选定注入分镜）
+// ② 指着改编辑器（学 huashu-motion studio：时间轴点击 / 分镜卡
+//    「改这镜」→ 意见浮层 → 单场景局部重渲染 → 版本树）
+// ③ BGM 本地合成（三预设开关，作曲配乐务实版）
+// ④ 三通道渲染（motion 商业片 / art 艺术动画 / Agnes AI 模型）
+// 选稿 → 三方向 → 分镜 → 通道+音色+画幅+BGM → 渲染进度 → 成片播放/下载
 // ============================================================
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { motion } from "framer-motion"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -15,14 +19,17 @@ import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useToast } from "@/hooks/use-toast"
 import { TTS_VOICES } from "@/lib/runtime/skills/radar-rewrite"
-import { Clapperboard, Loader2, Video, Download, RefreshCw, FileText, Play, Mic, Film, Palette, Sparkles, Wand2 } from "lucide-react"
+import { Clapperboard, Loader2, Video, Download, RefreshCw, FileText, Play, Mic, Film, Palette, Sparkles, Wand2, Compass, MessageSquare, Music4, History, Star } from "lucide-react"
 
 interface RunItem { id: string; ideaTitle: string; status: string; mode: string; createdAt: string; _count?: { articles: number } }
 interface StoryboardScene { id: number; seconds: number; visual: string; narration: string; subtitle: string; broll: string }
-interface StoryboardData { title: string; hook: string; totalSeconds: number; scenes: StoryboardScene[]; bgm: string; caption: string }
+interface DirectionBrief { key: string; kind: string; name: string; language: string; accent: string; base: string; feel: string }
+interface StoryboardData { title: string; hook: string; totalSeconds: number; scenes: StoryboardScene[]; bgm: string; caption: string; direction?: DirectionBrief }
+interface DirectionCard { key: string; kind: "fit" | "amplify" | "unexpected"; name: string; language: string; logline: string; why: string; feel: string; palette: { accent: string; base: string; note: string }; depth: boolean; recommended: boolean }
+interface SceneRevision { sceneId: number; feedback: string; reason: string; at: string }
 
 interface VideoMeta {
-  stage: "queued" | "tts" | "spec" | "frames" | "submit" | "poll" | "download" | "encode" | "concat" | "done" | "error"
+  stage: "queued" | "tts" | "spec" | "frames" | "submit" | "poll" | "download" | "encode" | "concat" | "revise" | "done" | "error"
   percent: number
   sceneDone: number
   sceneTotal: number
@@ -39,19 +46,37 @@ interface VideoMeta {
   sizeBytes?: number
   error?: string
   storyboard?: StoryboardData
+  version?: number
+  durations?: number[]
+  revisions?: SceneRevision[]
+  bgm?: "none" | "uplift" | "tech" | "calm"
+  bgmNote?: string
 }
 
 const STAGE_LABELS: Record<string, string> = {
   queued: "排队中", tts: "TTS 口播合成", spec: "分镜转动画 spec（LLM）",
   frames: "逐帧渲染", submit: "提交 AI 模型", poll: "AI 生成中", download: "下载成片",
-  encode: "分段编码", concat: "合成 MP4", done: "完成", error: "失败",
+  encode: "分段编码", concat: "合成 MP4", revise: "剪辑师修订分镜（LLM）", done: "完成", error: "失败",
 }
+
+const KIND_META: Record<string, { label: string; tone: string }> = {
+  fit: { label: "A · Fit 贴合", tone: "bg-sky-500" },
+  amplify: { label: "B · Amplify 放大", tone: "bg-rose-500" },
+  unexpected: { label: "C · Unexpected 意外", tone: "bg-violet-500" },
+}
+
+const BGM_OPTIONS: { id: string; label: string }[] = [
+  { id: "none", label: "无配乐" },
+  { id: "uplift", label: "明快琶音" },
+  { id: "tech", label: "科技脉冲" },
+  { id: "calm", label: "沉静长音" },
+]
 
 type VideoStyle = "motion" | "art"
 type VideoChannel = "local" | "agnes" | "auto"
 
 const STYLE_META: Record<VideoStyle, { label: string; desc: string; icon: typeof Film }> = {
-  motion: { label: "商业片 · motion", desc: "品牌化场景卡 + 数据排版 + TTS 口播（本地确定性渲染，秒级出片）", icon: Film },
+  motion: { label: "商业片 · motion", desc: "品牌化场景卡 + 方向调色板 + TTS 口播（本地确定性渲染，秒级出片）", icon: Film },
   art: { label: "艺术动画 · art", desc: "huashu-art-motion 引擎：8 语法 × 8 色板 Canvas 逐帧（Playwright + ffmpeg）", icon: Palette },
 }
 
@@ -66,8 +91,17 @@ export function VideoPanel() {
   const [channel, setChannel] = useState<VideoChannel>("local")
   const [voice, setVoice] = useState("xiaochen")
   const [aspect, setAspect] = useState<"9:16" | "16:9">("9:16")
-  // 视频产物
+  const [bgm, setBgm] = useState("none")
+  // 三方向提案
+  const [directions, setDirections] = useState<DirectionCard[] | null>(null)
+  const [selDir, setSelDir] = useState<DirectionCard | null>(null)
+  // 视频产物（版本树）
   const [videoAssets, setVideoAssets] = useState<{ id: string; path: string; provider: string; meta: string; createdAt: string }[]>([])
+  const [activeIdx, setActiveIdx] = useState(-1)
+  // 指着改
+  const [reviseSceneId, setReviseSceneId] = useState<number | null>(null)
+  const [feedback, setFeedback] = useState("")
+  const videoRef = useRef<HTMLVideoElement>(null)
   // 设置（agnes 可用性 + 默认通道）
   const [agnesReady, setAgnesReady] = useState(false)
   const [settingsChannel, setSettingsChannel] = useState<VideoChannel>("local")
@@ -91,7 +125,7 @@ export function VideoPanel() {
     return () => clearTimeout(t)
   }, [refresh])
 
-  // 选中 run → 拉详情（storyboard / 视频产物）
+  // 选中 run → 拉详情（storyboard / 视频产物版本树）
   const loadRun = useCallback(async (id: string) => {
     if (!id) return
     const json = await fetch(`/api/runs/${id}`).then((x) => x.json())
@@ -99,6 +133,7 @@ export function VideoPanel() {
     if (!run) return
     const videos = run.assets.filter((a) => a.role === "video-final")
     setVideoAssets(videos)
+    setActiveIdx(videos.length - 1)
     // 已有分镜（从最近视频 meta 里恢复）
     const withSb = [...videos].reverse().find((v) => {
       try {
@@ -122,20 +157,56 @@ export function VideoPanel() {
     if (runId) void loadRun(runId)
   }, [runId, loadRun])
 
-  // 渲染进行中 → 轮询
-  const latestVideo = videoAssets[videoAssets.length - 1]
-  let latestMeta: VideoMeta | null = null
+  // 渲染/修订进行中 → 轮询
+  const activeVideo = activeIdx >= 0 ? videoAssets[activeIdx] : videoAssets[videoAssets.length - 1]
+  let activeMeta: VideoMeta | null = null
   try {
-    latestMeta = latestVideo ? (JSON.parse(latestVideo.meta) as VideoMeta) : null
+    activeMeta = activeVideo ? (JSON.parse(activeVideo.meta) as VideoMeta) : null
   } catch {
-    latestMeta = null
+    activeMeta = null
   }
-  const rendering = latestMeta ? ["queued", "tts", "spec", "frames", "submit", "poll", "download", "encode", "concat"].includes(latestMeta.stage) : false
+  const rendering = activeMeta ? ["queued", "tts", "spec", "frames", "submit", "poll", "download", "encode", "concat", "revise"].includes(activeMeta.stage) : false
   useEffect(() => {
     if (!rendering || !runId) return
     const t = setInterval(() => void loadRun(runId), 2000)
     return () => clearInterval(t)
   }, [rendering, runId, loadRun])
+
+  // 版本列表（供 chips 切换）
+  const versions = videoAssets.map((v, i) => {
+    let m: VideoMeta | null = null
+    try {
+      m = JSON.parse(v.meta) as VideoMeta
+    } catch {
+      /* ignore */
+    }
+    return { idx: i, id: v.id, version: m?.version ?? i + 1, meta: m }
+  })
+
+  // ---------- 导演三方向 ----------
+  const doDirections = async () => {
+    if (!runId) return
+    setBusy("directions")
+    setDirections(null)
+    setSelDir(null)
+    try {
+      const res = await fetch(`/api/runs/${runId}/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "storyboard-directions", platform: "douyin" }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      setDirections(json.directions)
+      const rec = (json.directions as DirectionCard[]).find((d) => d.recommended)
+      setSelDir(rec ?? json.directions[0] ?? null)
+      toast({ title: "导演三方向已提案", description: "选一个方向，分镜将贯彻它的语言与节奏" })
+    } catch (e) {
+      toast({ title: "三方向提案失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
 
   const doStoryboard = async () => {
     if (!runId) return
@@ -144,12 +215,15 @@ export function VideoPanel() {
       const res = await fetch(`/api/runs/${runId}/actions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "storyboard", platform: "douyin" }),
+        body: JSON.stringify({
+          action: "storyboard", platform: "douyin",
+          ...(selDir ? { direction: { key: selDir.key, kind: selDir.kind, name: selDir.name, language: selDir.language, accent: selDir.palette.accent, base: selDir.palette.base, feel: selDir.feel } } : {}),
+        }),
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error)
       setStoryboard(json.storyboard)
-      toast({ title: "视频分镜已生成", description: `${json.storyboard.scenes.length} 个分镜 · ${json.storyboard.totalSeconds}s` })
+      toast({ title: "视频分镜已生成", description: `${json.storyboard.scenes.length} 个分镜 · ${json.storyboard.totalSeconds}s${selDir ? ` · 方向「${selDir.name}」` : ""}` })
     } catch (e) {
       toast({ title: "分镜生成失败", description: (e as Error).message, variant: "destructive" })
     } finally {
@@ -167,7 +241,7 @@ export function VideoPanel() {
       const res = await fetch(`/api/runs/${runId}/actions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "render-video", storyboard, voice, aspect, style, channel }),
+        body: JSON.stringify({ action: "render-video", storyboard, voice, aspect, style, channel, bgm }),
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error)
@@ -183,34 +257,90 @@ export function VideoPanel() {
   const copyStoryboard = async () => {
     if (!storyboard) return
     const lines = storyboard.scenes.map((s) => `【分镜 ${s.id} · ${s.seconds}s】\n字幕：${s.subtitle}\n口播：${s.narration}\n画面：${s.visual}\n素材：${s.broll}`)
-    await navigator.clipboard.writeText([`《${storyboard.title}》总时长 ${storyboard.totalSeconds}s`, `钩子：${storyboard.hook}`, "", ...lines, "", `BGM：${storyboard.bgm}`, `发布文案：${storyboard.caption}`].join("\n"))
+    await navigator.clipboard.writeText([`《${storyboard.title}》总时长 ${storyboard.totalSeconds}s`, `钩子：${storyboard.hook}`, ...(storyboard.direction ? [`方向：${storyboard.direction.key} · ${storyboard.direction.name}`] : []), "", ...lines, "", `BGM：${storyboard.bgm}`, `发布文案：${storyboard.caption}`].join("\n"))
     toast({ title: "分镜脚本已复制" })
   }
 
+  // ---------- 指着改 ----------
+  /** 按播放秒数定位分镜（durations 为当前版本实际分段时长） */
+  const locateSceneByTime = (t: number) => {
+    if (!activeMeta?.storyboard) return
+    const durs = activeMeta.durations ?? activeMeta.storyboard.scenes.map((s) => s.seconds)
+    let acc = 0
+    for (let i = 0; i < durs.length; i++) {
+      acc += durs[i]
+      if (t < acc) {
+        setReviseSceneId(activeMeta.storyboard.scenes[i].id)
+        setFeedback("")
+        return
+      }
+    }
+    setReviseSceneId(activeMeta.storyboard.scenes[durs.length - 1]?.id ?? null)
+    setFeedback("")
+  }
+
+  const onTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!activeMeta?.storyboard) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const pct = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
+    locateSceneByTime(pct * (activeMeta.seconds ?? activeMeta.storyboard.totalSeconds))
+  }
+
+  const doRevise = async () => {
+    if (!runId || !storyboard || reviseSceneId == null || !feedback.trim()) return
+    setBusy("revise")
+    try {
+      const res = await fetch(`/api/runs/${runId}/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "revise-scene", sceneId: reviseSceneId, feedback: feedback.trim(), storyboard,
+          voice, aspect, style, bgm,
+          ...(activeVideo ? { baseAssetId: activeVideo.id } : {}),
+        }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      toast({ title: "指着改已受理", description: json.message })
+      setReviseSceneId(null)
+      setFeedback("")
+      await loadRun(runId)
+    } catch (e) {
+      toast({ title: "指着改提交失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const selectedRun = runs.find((r) => r.id === runId)
-  // 时间线（学 dsh timeline：分镜等比分段 + 渲染进度位置）
+  const reviseScene = storyboard?.scenes.find((s) => s.id === reviseSceneId) ?? null
+  // 时间线（分镜等比分段 + 渲染进度头）
   const timelineTotal = storyboard?.totalSeconds ?? 0
-  const playheadPct = latestMeta && rendering && storyboard ? Math.min(100, (latestMeta.sceneDone / Math.max(1, latestMeta.sceneTotal)) * 100) : 0
+  const playheadPct = activeMeta && rendering && storyboard ? Math.min(100, (activeMeta.sceneDone / Math.max(1, activeMeta.sceneTotal)) * 100) : 0
 
   return (
     <div className="space-y-4">
-      {/* 源稿选择 + 分镜 */}
+      {/* 源稿选择 + 导演三方向 */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base"><Clapperboard className="h-4 w-4 text-rose-500" />视频线 · 工作台</CardTitle>
-          <p className="text-[11px] text-muted-foreground">图文成稿 → 分镜脚本 → 三通道成片（本地双风格 / Agnes AI 模型）→ TTS 口播 → MP4 下载</p>
+          <p className="text-[11px] text-muted-foreground">图文成稿 → 导演三方向 → 分镜 → 三通道成片 + BGM → 指着改出 v2/v3</p>
         </CardHeader>
         <CardContent className="space-y-2.5">
-          <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto] gap-2">
+          <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto_auto] gap-2">
             <select value={runId ?? ""} onChange={(e) => setRunId(e.target.value)} className="h-9 rounded-md border bg-background px-2 text-xs" aria-label="选择源稿">
               {runs.length === 0 && <option value="">暂有可用的成稿 Run（先去图文线出稿）</option>}
               {runs.map((r) => (
                 <option key={r.id} value={r.id}>{r.ideaTitle.slice(0, 40)}{r._count?.articles ? `（${r._count.articles} 稿）` : ""}</option>
               ))}
             </select>
+            <Button variant="outline" onClick={doDirections} disabled={!runId || busy === "directions"}>
+              {busy === "directions" ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Compass className="h-4 w-4 mr-1" />}
+              导演三方向
+            </Button>
             <Button variant="outline" onClick={doStoryboard} disabled={!runId || busy === "storyboard"}>
               {busy === "storyboard" ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Sparkles className="h-4 w-4 mr-1" />}
-              {storyboard ? "重新生成分镜" : "生成分镜"}
+              {storyboard ? "重新生成分镜" : "直接生成分镜"}
             </Button>
             {storyboard && (
               <Button variant="ghost" size="sm" onClick={copyStoryboard}><FileText className="h-3.5 w-3.5 mr-1" />复制脚本</Button>
@@ -224,15 +354,76 @@ export function VideoPanel() {
         </CardContent>
       </Card>
 
-      {/* 分镜可视化卡片流（学 dsh 画布的分镜节点形态） */}
+      {/* 导演三方向卡（学 huashu-motion：A·Fit / B·Amplify / C·Unexpected，差异在语言与材质） */}
+      {directions && directions.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm flex items-center justify-between">
+              <span className="flex items-center gap-1.5"><Compass className="h-3.5 w-3.5 text-rose-500" />导演三方向 · 选一个再分镜</span>
+              <Badge variant="outline" className="text-[9px]">差异在语言与材质，不只是配色</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              {directions.map((d) => {
+                const active = selDir?.key === d.key
+                const km = KIND_META[d.kind] ?? KIND_META.fit
+                return (
+                  <button
+                    key={d.key}
+                    onClick={() => setSelDir(d)}
+                    className={`text-left rounded-lg border p-3 space-y-2 transition-colors ${active ? "border-rose-400 bg-rose-50/50 dark:bg-rose-950/20" : "hover:border-rose-200"}`}
+                  >
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <Badge className={`${km.tone} text-[9px] px-1.5 text-white`}>{km.label}</Badge>
+                      <span className="text-xs font-bold">{d.name}</span>
+                      {d.recommended && <Badge variant="outline" className="text-[8px] gap-0.5"><Star className="h-2.5 w-2.5 fill-amber-400 text-amber-400" />导演推荐</Badge>}
+                      {d.depth && <Badge variant="outline" className="text-[8px]">空间纵深</Badge>}
+                    </div>
+                    {/* palette 色带 */}
+                    <div className="flex h-5 rounded-md overflow-hidden border">
+                      <div className="flex-[2]" style={{ background: d.palette.base }} title={`base ${d.palette.base}`} />
+                      <div className="flex-[3]" style={{ background: d.palette.accent }} title={`accent ${d.palette.accent}`} />
+                      <div className="flex-[5] bg-muted" />
+                    </div>
+                    <p className="text-[10px] text-muted-foreground leading-snug">{d.palette.note}</p>
+                    <p className="text-[11px] leading-snug">{d.logline}</p>
+                    <div className="space-y-0.5 text-[10px] text-muted-foreground leading-snug">
+                      <p><span className="text-foreground/70 font-medium">语言：</span>{d.language}</p>
+                      <p><span className="text-foreground/70 font-medium">节奏：</span>{d.feel}</p>
+                      <p><span className="text-foreground/70 font-medium">为何适合：</span>{d.why}</p>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+            <div className="flex items-center gap-2 mt-2.5 flex-wrap">
+              <Button size="sm" className="h-7 text-[11px] bg-rose-500 hover:bg-rose-600 text-white" onClick={doStoryboard} disabled={busy === "storyboard"}>
+                {busy === "storyboard" ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Sparkles className="h-3 w-3 mr-1" />}
+                按方向「{selDir?.name ?? "—"}」生成分镜
+              </Button>
+              <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={() => { setSelDir(null); void doStoryboard() }} disabled={busy === "storyboard"}>
+                跳过方向直接分镜
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* 分镜可视化卡片流（每卡可「指着改」） */}
       {storyboard && (
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm flex items-center justify-between">
               <span className="flex items-center gap-1.5"><Film className="h-3.5 w-3.5 text-rose-500" />分镜 · 《{storyboard.title}》</span>
               <span className="flex items-center gap-2">
+                {storyboard.direction && (
+                  <Badge variant="outline" className="text-[9px] gap-1">
+                    <span className="inline-block h-2 w-2 rounded-full" style={{ background: storyboard.direction.accent }} />
+                    方向 {storyboard.direction.key} · {storyboard.direction.name}
+                  </Badge>
+                )}
                 <Badge variant="outline" className="text-[9px]">{storyboard.totalSeconds}s · {storyboard.scenes.length} 分镜</Badge>
-                <Badge variant="outline" className="text-[9px]">钩子：{storyboard.hook.slice(0, 16)}</Badge>
               </span>
             </CardTitle>
           </CardHeader>
@@ -248,30 +439,13 @@ export function VideoPanel() {
                     </div>
                     <p className="text-[11px] leading-snug line-clamp-2"><span className="text-muted-foreground">口播：</span>{s.narration}</p>
                     {s.visual && <p className="text-[10px] text-muted-foreground leading-snug line-clamp-1">画面：{s.visual}</p>}
+                    <Button size="sm" variant="ghost" className="h-5 px-1.5 text-[9px] text-rose-600 hover:text-rose-700" onClick={() => { setReviseSceneId(s.id); setFeedback("") }}>
+                      <MessageSquare className="h-2.5 w-2.5 mr-0.5" />指着改这镜
+                    </Button>
                   </motion.div>
                 ))}
               </div>
             </ScrollArea>
-            {/* 时间线条（分镜时长等比 + 渲染进度头） */}
-            <div className="mt-3">
-              <div className="flex h-6 rounded-md overflow-hidden border">
-                {storyboard.scenes.map((s, i) => (
-                  <div
-                    key={s.id}
-                    title={`分镜 ${s.id} · ${s.seconds}s`}
-                    className="flex items-center justify-center text-[9px] text-white/90 border-r border-white/20 last:border-r-0"
-                    style={{ width: `${(s.seconds / Math.max(1, timelineTotal)) * 100}%`, background: `hsl(${348 - i * 6} 70% ${38 + i * 3}%)` }}
-                  >
-                    {s.seconds}s
-                  </div>
-                ))}
-              </div>
-              {rendering && (
-                <div className="mt-1 h-1 bg-muted rounded-full overflow-hidden">
-                  <div className="h-full bg-rose-500 transition-all duration-500" style={{ width: `${playheadPct}%` }} />
-                </div>
-              )}
-            </div>
           </CardContent>
         </Card>
       )}
@@ -280,7 +454,7 @@ export function VideoPanel() {
       {storyboard && (
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm flex items-center gap-1.5"><Wand2 className="h-3.5 w-3.5 text-rose-500" />渲染通道</CardTitle>
+            <CardTitle className="text-sm flex items-center gap-1.5"><Wand2 className="h-3.5 w-3.5 text-rose-500" />渲染通道 · 音色 · 画幅 · BGM</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             {/* 本地双风格 */}
@@ -320,7 +494,7 @@ export function VideoPanel() {
               <p className="text-[10px] text-muted-foreground leading-snug">agnes-video-2.5-flash（720P · 4-12s）；每账号 1 任务/分钟，失败自动本地兜底{settingsChannel === "auto" ? "；设置中心默认 auto" : ""}</p>
             </button>
 
-            {/* 音色 + 画幅 + 渲染按钮 */}
+            {/* 音色 + 画幅 + BGM + 渲染按钮 */}
             <div className="flex items-center gap-2 flex-wrap pt-1">
               <Mic className="h-3.5 w-3.5 text-muted-foreground" />
               <select value={voice} onChange={(e) => setVoice(e.target.value)} className="h-7 text-[11px] border rounded-md bg-background px-2 max-w-[150px]" aria-label="口播音色">
@@ -335,6 +509,14 @@ export function VideoPanel() {
                   </button>
                 ))}
               </div>
+              <div className="flex items-center gap-1">
+                <Music4 className="h-3.5 w-3.5 text-muted-foreground" />
+                <select value={bgm} onChange={(e) => setBgm(e.target.value)} className="h-7 text-[11px] border rounded-md bg-background px-2" aria-label="BGM 配乐">
+                  {BGM_OPTIONS.map((b) => (
+                    <option key={b.id} value={b.id}>{b.label}</option>
+                  ))}
+                </select>
+              </div>
               <Button size="sm" className="h-7 text-[11px] bg-rose-500 hover:bg-rose-600 text-white ml-auto" onClick={doRender} disabled={busy === "render" || rendering}>
                 {busy === "render" || rendering ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Play className="h-3 w-3 mr-1" />}
                 {channel === "agnes" ? "AI 通道渲染 MP4" : style === "art" ? "艺术动画渲染 MP4" : "商业片渲染 MP4"}
@@ -344,58 +526,148 @@ export function VideoPanel() {
         </Card>
       )}
 
-      {/* 成片卡 */}
-      {latestVideo && latestMeta && (
+      {/* 成片卡（版本树 + 指着改） */}
+      {activeVideo && activeMeta && (
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm flex items-center justify-between">
-              <span className="flex items-center gap-1.5"><Video className="h-3.5 w-3.5 text-rose-500" />视频成片</span>
-              {latestMeta.stage === "done" && (
+              <span className="flex items-center gap-1.5"><Video className="h-3.5 w-3.5 text-rose-500" />视频成片{activeMeta.version ? ` · v${activeMeta.version}` : ""}</span>
+              {activeMeta.stage === "done" && (
                 <Badge variant="outline" className="text-[9px]">
-                  {latestMeta.seconds}s · {latestMeta.width}×{latestMeta.height} · {latestMeta.sizeBytes ? `${(latestMeta.sizeBytes / 1024 / 1024).toFixed(1)}MB` : ""}
+                  {activeMeta.seconds}s · {activeMeta.width}×{activeMeta.height} · {activeMeta.sizeBytes ? `${(activeMeta.sizeBytes / 1024 / 1024).toFixed(1)}MB` : ""}
                 </Badge>
               )}
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-0 space-y-2">
+            {/* 版本树 chips */}
+            {versions.length > 1 && (
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <History className="h-3 w-3 text-muted-foreground" />
+                {versions.map((v) => {
+                  const isRev = v.meta?.revisions && v.meta.revisions.length > 0
+                  return (
+                    <button
+                      key={v.id}
+                      onClick={() => setActiveIdx(v.idx)}
+                      className={`text-[10px] border rounded-full px-2 py-0.5 transition-colors ${v.idx === activeIdx ? "border-rose-400 bg-rose-50 dark:bg-rose-950/30 text-rose-600 font-semibold" : "hover:border-rose-300 text-muted-foreground"}`}
+                      title={isRev ? `v${v.version}：指着改（${v.meta?.revisions?.at(-1)?.reason ?? ""}）` : `v${v.version}：整片渲染`}
+                    >
+                      v{v.version}{isRev ? " ✎" : ""}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
             {rendering && (
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-[10px]">
-                  <span className="flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin text-rose-500" />{STAGE_LABELS[latestMeta.stage] ?? latestMeta.stage}（{latestMeta.sceneDone}/{latestMeta.sceneTotal} 分镜）</span>
-                  <span className="font-semibold">{latestMeta.percent}%</span>
+                  <span className="flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin text-rose-500" />{STAGE_LABELS[activeMeta.stage] ?? activeMeta.stage}（{activeMeta.sceneDone}/{activeMeta.sceneTotal} 分镜）</span>
+                  <span className="font-semibold">{activeMeta.percent}%</span>
                 </div>
                 <div className="h-2 bg-muted rounded-full overflow-hidden">
-                  <div className="h-full bg-rose-500 rounded-full transition-all duration-500" style={{ width: `${latestMeta.percent}%` }} />
+                  <div className="h-full bg-rose-500 rounded-full transition-all duration-500" style={{ width: `${activeMeta.percent}%` }} />
                 </div>
-                {latestMeta.aiNote && <p className="text-[10px] text-muted-foreground">{latestMeta.aiNote}</p>}
-                {latestMeta.ttsNote && <p className="text-[10px] text-muted-foreground">{latestMeta.ttsNote}</p>}
+                {activeMeta.aiNote && <p className="text-[10px] text-muted-foreground">{activeMeta.aiNote}</p>}
+                {activeMeta.bgmNote && <p className="text-[10px] text-muted-foreground">{activeMeta.bgmNote}</p>}
+                {activeMeta.ttsNote && <p className="text-[10px] text-muted-foreground">{activeMeta.ttsNote}</p>}
               </div>
             )}
-            {latestMeta.stage === "error" && (
+            {activeMeta.stage === "error" && (
               <div className="rounded-lg border border-red-200 bg-red-50/50 dark:bg-red-950/20 px-3 py-2">
-                <p className="text-[11px] text-red-600">渲染失败：{latestMeta.error}</p>
-                <Button size="sm" variant="outline" className="h-6 text-[10px] mt-1" onClick={doRender} disabled={busy === "render"}>重试渲染</Button>
+                <p className="text-[11px] text-red-600">渲染失败：{activeMeta.error}</p>
+                <Button size="sm" variant="outline" className="h-6 text-[10px] mt-1" onClick={doRender} disabled={busy === "render"}>重试整片渲染</Button>
               </div>
             )}
-            {latestMeta.stage === "done" && latestVideo.path && (
+            {activeMeta.stage === "done" && activeVideo.path && (
               <>
-                <video key={latestVideo.id} controls preload="metadata" src={latestVideo.path} className="w-full rounded-lg border bg-black max-h-[420px]" />
+                <video ref={videoRef} key={activeVideo.id} controls preload="metadata" src={activeVideo.path} className="w-full rounded-lg border bg-black max-h-[420px]" />
+                {/* 时间轴（学 dsh timeline：分镜等比分段；点击 → 定位分镜 → 指着改） */}
+                {activeMeta.storyboard && (
+                  <div>
+                    <div className="flex h-6 rounded-md overflow-hidden border cursor-pointer" onClick={onTimelineClick} title="点击时间轴定位分镜，指着改那一镜">
+                      {activeMeta.storyboard.scenes.map((s, i) => {
+                        const d = activeMeta.durations?.[i] ?? s.seconds
+                        const total = (activeMeta.durations ?? activeMeta.storyboard!.scenes.map((x) => x.seconds)).reduce((a, b) => a + b, 0) || 1
+                        return (
+                          <div
+                            key={s.id}
+                            className={`flex items-center justify-center text-[9px] text-white/90 border-r border-white/20 last:border-r-0 ${reviseSceneId === s.id ? "ring-2 ring-amber-400 ring-inset" : ""}`}
+                            style={{ width: `${(d / total) * 100}%`, background: `hsl(${348 - i * 6} 70% ${38 + i * 3}%)` }}
+                          >
+                            #{s.id}
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => { const t = videoRef.current?.currentTime ?? 0; locateSceneByTime(t) }}>
+                        <MessageSquare className="h-3 w-3 mr-1" />改播放头这一镜（{Math.floor(videoRef.current?.currentTime ?? 0)}s）
+                      </Button>
+                      <span className="text-[10px] text-muted-foreground">也可点时间轴 / 分镜卡「指着改这镜」</span>
+                    </div>
+                  </div>
+                )}
+                {/* 指着改浮层 */}
+                {reviseScene && (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50/60 dark:bg-amber-950/20 p-3 space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <MessageSquare className="h-3.5 w-3.5 text-amber-600" />
+                      <span className="text-xs font-bold">指着改 · 分镜 #{reviseScene.id}（{reviseScene.seconds}s）</span>
+                      <span className="text-[10px] text-muted-foreground truncate">「{reviseScene.subtitle}」{reviseScene.narration.slice(0, 24)}…</span>
+                      <Button size="sm" variant="ghost" className="h-5 px-1.5 text-[9px] ml-auto" onClick={() => setReviseSceneId(null)}>取消</Button>
+                    </div>
+                    <textarea
+                      value={feedback}
+                      onChange={(e) => setFeedback(e.target.value)}
+                      placeholder="对这一镜说意见，例如：字幕太长改短一点 / 口播换个说法更口语 / 这镜数据过时，换成……"
+                      rows={2}
+                      maxLength={300}
+                      className="w-full rounded-md border bg-background px-2 py-1.5 text-xs resize-none"
+                    />
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Button size="sm" className="h-7 text-[11px] bg-amber-500 hover:bg-amber-600 text-white" onClick={doRevise} disabled={busy === "revise" || rendering || !feedback.trim()}>
+                        {busy === "revise" ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Wand2 className="h-3 w-3 mr-1" />}
+                        只重做这一镜 → 出新版本
+                      </Button>
+                      <span className="text-[10px] text-muted-foreground">{feedback.length}/300 · 其余分镜原样保留，改动入版本树</span>
+                    </div>
+                  </div>
+                )}
+                {/* 版本改动记录 */}
+                {activeMeta.revisions && activeMeta.revisions.length > 0 && (
+                  <div className="rounded-lg border p-2.5 space-y-1.5">
+                    <p className="text-[10px] font-semibold flex items-center gap-1"><History className="h-3 w-3" />指着改历史（{activeMeta.revisions.length} 次）</p>
+                    <ScrollArea className="max-h-24 pr-1">
+                      <div className="space-y-1">
+                        {activeMeta.revisions.map((r, i) => (
+                          <p key={i} className="text-[10px] text-muted-foreground leading-snug">
+                            <span className="text-foreground/70">#{r.sceneId}</span> {r.feedback.slice(0, 50)} → <span className="text-amber-600">{r.reason}</span>
+                          </p>
+                        ))}
+                      </div>
+                    </ScrollArea>
+                  </div>
+                )}
                 <div className="flex items-center gap-2 flex-wrap">
-                  <Badge variant={latestMeta.audioMode === "tts" ? "default" : "secondary"} className={latestMeta.audioMode === "tts" ? "bg-emerald-600" : latestMeta.audioMode === "partial" ? "bg-amber-500" : ""}>
-                    {latestMeta.audioMode === "tts" ? `${TTS_VOICES.find((v) => v.id === latestMeta?.voice)?.label ?? latestMeta.voice} 口播` : latestMeta.audioMode === "partial" ? "部分口播" : "静音降级（字幕可读）"}
+                  <Badge variant={activeMeta.audioMode === "tts" ? "default" : "secondary"} className={activeMeta.audioMode === "tts" ? "bg-emerald-600" : activeMeta.audioMode === "partial" ? "bg-amber-500" : ""}>
+                    {activeMeta.audioMode === "tts" ? `${TTS_VOICES.find((v) => v.id === activeMeta?.voice)?.label ?? activeMeta.voice} 口播` : activeMeta.audioMode === "partial" ? "部分口播" : "静音降级（字幕可读）"}
                   </Badge>
                   <Badge variant="outline" className="text-[9px]">
-                    {latestMeta.channel === "agnes" ? "Agnes AI 模型" : latestMeta.style === "art" ? "艺术动画" : "商业片"} · {latestMeta.aspect}
+                    {activeMeta.channel === "agnes" ? "Agnes AI 模型" : activeMeta.style === "art" ? "艺术动画" : "商业片"} · {activeMeta.aspect}
                   </Badge>
-                  <Badge variant="outline" className="text-[9px]">{latestVideo.provider}</Badge>
-                  <a href={latestVideo.path} download className="text-[10px] text-amber-600 hover:underline flex items-center gap-0.5">
+                  {activeMeta.bgm && activeMeta.bgm !== "none" && (
+                    <Badge variant="outline" className="text-[9px] gap-0.5"><Music4 className="h-2.5 w-2.5" />{BGM_OPTIONS.find((b) => b.id === activeMeta.bgm)?.label ?? activeMeta.bgm}</Badge>
+                  )}
+                  <Badge variant="outline" className="text-[9px]">{activeVideo.provider}</Badge>
+                  <a href={activeVideo.path} download className="text-[10px] text-amber-600 hover:underline flex items-center gap-0.5">
                     <Download className="h-3 w-3" />下载 MP4
                   </a>
                   <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={doRender} disabled={busy === "render"}>
-                    <RefreshCw className="h-3 w-3 mr-1" />重新渲染
+                    <RefreshCw className="h-3 w-3 mr-1" />整体重新渲染
                   </Button>
                 </div>
-                {latestMeta.audioMode !== "tts" && latestMeta.ttsNote && <p className="text-[10px] text-muted-foreground">{latestMeta.ttsNote}</p>}
+                {activeMeta.audioMode !== "tts" && activeMeta.ttsNote && <p className="text-[10px] text-muted-foreground">{activeMeta.ttsNote}</p>}
               </>
             )}
           </CardContent>

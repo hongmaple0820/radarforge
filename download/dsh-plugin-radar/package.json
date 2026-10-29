@@ -1,0 +1,46 @@
+{
+  "name": "dsh-plugin-radar",
+  "version": "0.1.0",
+  "description": "AI 资讯雷达 · 对话式出稿插件：把「写一篇公众号文章」变成一句话的事。在 DeepSeek Harness 对话框里调 AI 资讯雷达平台的六步流水线（brief → claims 联网取证 → 初稿 → 五维审稿 → 封面 → 微信排版），回传成稿链接与全文；另含视频线（导演三方向 → 分镜 → 成片）。",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "ai-radar",
+    "wechat-article",
+    "content-pipeline",
+    "video"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer"
+      ],
+      "platform": "web",
+      "immediately": true
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "react": "^18.2.0"
+  }
+}

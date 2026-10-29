@@ -163,12 +163,12 @@ export function PluginsPanel() {
         </CardContent>
       </Card>
 
-      <div className="grid lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 min-w-0">
         {/* 工具注册表 */}
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-base"><Wrench className="h-4 w-4 text-amber-500" />工具注册表</CardTitle>
-            <p className="text-[11px] text-muted-foreground">Agent 可调用工具 · toolRegistry.register() 开放注册 · 未识别工具明确报错</p>
+            <p className="text-[11px] text-muted-foreground break-words">Agent 可调用工具 · toolRegistry.register() 开放注册 · 未识别工具明确报错</p>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="space-y-1">
@@ -193,7 +193,7 @@ export function PluginsPanel() {
             <div className="rounded-md border p-2 space-y-2">
               <div className="text-[10px] text-muted-foreground">调用参数（JSON）</div>
               <textarea
-                className="w-full h-28 text-[11px] font-mono rounded bg-muted/50 p-2 outline-none focus:ring-1 focus:ring-amber-400 resize-none"
+                className="w-full max-w-full h-28 text-[11px] font-mono rounded bg-muted/50 p-2 outline-none focus:ring-1 focus:ring-amber-400 resize-none break-all"
                 value={toolInput.json}
                 onChange={(e) => setToolInput({ ...toolInput, json: e.target.value })}
               />
@@ -214,7 +214,7 @@ export function PluginsPanel() {
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-base"><Cable className="h-4 w-4 text-amber-500" />MCP 客户端接入</CardTitle>
-            <p className="text-[11px] text-muted-foreground">JSON-RPC 2.0 · initialize → tools/list 握手 · 工具自动发现</p>
+            <p className="text-[11px] text-muted-foreground break-words">JSON-RPC 2.0 · initialize → tools/list 握手 · 工具自动发现</p>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex gap-2">
@@ -264,6 +264,43 @@ export function PluginsPanel() {
             <div className="text-[10px] text-muted-foreground rounded bg-muted/40 px-2 py-1.5 flex items-start gap-1.5">
               <RefreshCw className="h-3 w-3 mt-0.5 shrink-0" />
               <span>添加任意 MCP server（如 mcp.z.ai/mcp、本地工具服务等）即可将外部工具纳入同一注册表体系。stdio 传输需本地运行时。</span>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* dsh 插件形态（Phase 6：一套供应商配置，两种运行形态 —— Web 主 / dsh 辅） */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm flex items-center gap-1.5"><Puzzle className="h-3.5 w-3.5 text-violet-500" />dsh 插件形态 · 对话式出稿</CardTitle>
+            <p className="text-[11px] text-muted-foreground break-words">把平台能力装进 DeepSeek Harness 对话框：说「写一篇公众号文章」即跑六步流水线（学 dsh-agnes-multimodal 插件协议）</p>
+          </CardHeader>
+          <CardContent className="pt-0 space-y-2.5">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div className="rounded-lg border p-2.5 space-y-1.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <Badge className="bg-violet-500 text-[9px] px-1.5 text-white">模型工具</Badge>
+                  <span className="text-xs font-bold font-mono">radar_article</span>
+                </div>
+                <p className="text-[10px] text-muted-foreground leading-snug">一句话出公众号成稿：brief → claims 联网取证 → 人格初稿 → 五维审稿 → 封面 → 18 主题排版；返回 Markdown 全文 + 平台链接，可携带文风校准档案</p>
+              </div>
+              <div className="rounded-lg border p-2.5 space-y-1.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <Badge className="bg-violet-500 text-[9px] px-1.5 text-white">模型工具</Badge>
+                  <span className="text-xs font-bold font-mono">radar_video</span>
+                </div>
+                <p className="text-[10px] text-muted-foreground leading-snug">成稿 → 导演三方向 → 分镜 → 本地 MP4 成片；MP4 在会话卡片播放/下载，不回传模型（纯文本约定）</p>
+              </div>
+            </div>
+            <div className="rounded-lg bg-muted/40 border px-2.5 py-2 space-y-1.5">
+              <p className="text-[10px] font-semibold">安装（宿主装有 dsh 时）：</p>
+              <code className="text-[10px] font-mono block bg-background border rounded px-2 py-1 break-all">dsh plugin --profile web add ./dsh-plugin-radar.tgz</code>
+              <p className="text-[10px] text-muted-foreground leading-snug">
+                插件包已产出：<span className="font-mono">download/dsh-plugin-radar/</span>（package.json + cordis.patch.yml + lib 双半 + README，形态学自 dsh-agnes-multimodal MIT）。
+                平台地址用宿主环境变量 <span className="font-mono">RADAR_BASE</span> 配置；供应商密钥全部留在本平台设置中心，插件侧零密钥。
+              </p>
+              <p className="text-[10px] text-muted-foreground leading-snug">
+                <span className="text-amber-600">已知边界（诚实）：</span>骨架代码完整且 API 契约已对平台端到端实测（工具注册 / 出稿 / 分镜 / 渲染全 200）；沙箱内无 dsh 宿主，宿主内联调待装有 dsh 的环境补做。
+              </p>
             </div>
           </CardContent>
         </Card>

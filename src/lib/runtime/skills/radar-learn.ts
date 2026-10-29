@@ -104,3 +104,86 @@ export function findSimilar(rule: string, existing: { id: string; rule: string }
   }
   return best ? { id: best.id, rule: best.rule } : null
 }
+
+// ============================================================
+// 文风学习（学 wewrite exemplar 范文库）：
+// 粘贴范文 → LLM 提炼「文风指纹」→ 范文库 → 初稿注入
+// 安全条款（allowed_uses）：仅结构与节奏校准，
+// 观点 / 句子 / 比喻 / 个人经历一律不得复用。
+// ============================================================
+
+export interface StyleExemplarFingerprint {
+  structure: string // 结构骨架（开头→推进→收尾的套路）
+  rhythm: string // 句式节奏（长短句比例、标点密度、断句习惯）
+  lexicon: string // 词汇偏好（高频连接词、口头禅、领域黑话）
+  rhetoric: string // 修辞密度（比喻/排比/设问的频率与用法）
+  voice: string // 语气与人称（对读者说话的方式）
+  endings: string // 收尾习惯（金句/呼吁/留白/循环）
+}
+
+export interface StyleExemplar {
+  id: string
+  name: string
+  source: string // 来源说明（URL 或「用户粘贴」）
+  createdAt: string
+  words: number
+  fingerprint: StyleExemplarFingerprint
+}
+
+export function exemplarMessages(name: string, content: string): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: [
+        "你是一名文风分析师（学 wewrite 的 exemplar 范文库）。用户给出一篇范文，请提炼它的「文风指纹」，供之后的初稿做结构与节奏校准。",
+        "铁律：",
+        "- 只描述风格特征，不复述、不引用范文中的任何具体观点、句子、比喻或个人经历",
+        "- 每个维度 1~2 句具体可执行的描述（「怎么做」而不是「很好」）",
+        "- 客观克制：这是给另一个写作者的校准说明，不是文学评论",
+        "严格输出 JSON（不要 markdown 代码块）：",
+        `{`,
+        `  "structure": "结构骨架：开头怎么起（1句）→ 主体怎么推进（小节切分方式）→ 收尾怎么落",`,
+        `  "rhythm": "句式节奏：长短句比例、断句与标点习惯、段落密度",`,
+        `  "lexicon": "词汇偏好：高频连接词、口头禅、语气词、领域用词倾向",`,
+        `  "rhetoric": "修辞密度：比喻/排比/设问/对比的出现频率与典型用法",`,
+        `  "voice": "语气与人称：第几人称、对读者的称呼与说话距离、情绪浓度",`,
+        `  "endings": "收尾习惯：金句收束/行动呼吁/留白/回扣开头的哪种",`,
+        `}`,
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: `档案名：${name}\n\n范文（节选）：\n${content.slice(0, 6000)}`,
+    },
+  ]
+}
+
+export function parseExemplar(raw: unknown): StyleExemplarFingerprint | null {
+  if (!raw || typeof raw !== "object") return null
+  const o = raw as Record<string, unknown>
+  const fp: StyleExemplarFingerprint = {
+    structure: String(o.structure ?? "").slice(0, 200),
+    rhythm: String(o.rhythm ?? "").slice(0, 200),
+    lexicon: String(o.lexicon ?? "").slice(0, 200),
+    rhetoric: String(o.rhetoric ?? "").slice(0, 200),
+    voice: String(o.voice ?? "").slice(0, 200),
+    endings: String(o.endings ?? "").slice(0, 200),
+  }
+  const filled = Object.values(fp).filter((v) => v.length > 10).length
+  return filled >= 3 ? fp : null
+}
+
+/** 初稿注入块（安全条款：仅校准结构与节奏） */
+export function exemplarPrompt(ex: StyleExemplar): string {
+  const f = ex.fingerprint
+  return [
+    `【文风校准 ·「${ex.name}」（仅结构与节奏，安全条款见末行）】`,
+    `- 结构骨架：${f.structure}`,
+    `- 句式节奏：${f.rhythm}`,
+    `- 词汇偏好：${f.lexicon}`,
+    `- 修辞密度：${f.rhetoric}`,
+    `- 语气人称：${f.voice}`,
+    `- 收尾习惯：${f.endings}`,
+    "安全条款：以上仅用于校准结构与节奏。范文中的观点、数据、句子、比喻、个人经历一律禁止复用；与铁律冲突时以铁律为准。",
+  ].join("\n")
+}

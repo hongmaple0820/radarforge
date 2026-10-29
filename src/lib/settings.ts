@@ -5,6 +5,7 @@
 // ============================================================
 
 import { db } from "@/lib/db"
+import type { StyleExemplarFingerprint } from "@/lib/runtime/skills/radar-learn"
 
 export interface LlmSettings {
   mode: "builtin" | "custom" | "agnes" | "pi-ai" // builtin = zai-llm（SDK 免密钥）/ agnes = 免费多账号池 / pi-ai = 统一多供应商引擎
@@ -65,6 +66,10 @@ export interface VideoSettings {
   secondsPerScene: number
 }
 
+export interface StyleExemplarSettings {
+  items: { id: string; name: string; source: string; createdAt: string; words: number; fingerprint: StyleExemplarFingerprint }[]
+}
+
 export interface AppSettings {
   llm: LlmSettings
   search: SearchSettings
@@ -72,6 +77,7 @@ export interface AppSettings {
   agnes: AgnesSettings
   video: VideoSettings
   style: StyleProfile
+  exemplars: StyleExemplarSettings
 }
 
 const DEFAULTS: AppSettings = {
@@ -90,6 +96,7 @@ const DEFAULTS: AppSettings = {
   },
   video: { channel: "local", secondsPerScene: 8 },
   style: { positioning: "", audience: "", domains: "", tone: "", taboos: "" },
+  exemplars: { items: [] },
 }
 
 const KEYS: Record<keyof AppSettings, string> = {
@@ -99,6 +106,7 @@ const KEYS: Record<keyof AppSettings, string> = {
   agnes: "provider:agnes",
   video: "video:channel",
   style: "style:profile",
+  exemplars: "style:exemplars",
 }
 
 let cache: AppSettings | null = null
@@ -114,6 +122,7 @@ export async function getSettings(force = false): Promise<AppSettings> {
     agnes: { ...DEFAULTS.agnes, accounts: [] },
     video: { ...DEFAULTS.video },
     style: { ...DEFAULTS.style },
+    exemplars: { items: [] },
   }
   try {
     const rows = await db.settingKV.findMany()
@@ -209,6 +218,7 @@ export function redactSettings(s: AppSettings): AppSettings & { _meta: Record<st
     },
     video: { ...s.video },
     style: { ...s.style },
+    exemplars: { items: s.exemplars.items.slice(0, 20) },
     _meta: {
       llm: { hasKey: Boolean(s.llm.apiKey), envFallback: false },
       search: { hasKey: Boolean(s.search.apiKey || process.env.WSA_API_KEY), envFallback: !s.search.apiKey && Boolean(process.env.WSA_API_KEY) },
