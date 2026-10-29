@@ -58,18 +58,33 @@ async function generateViaCustom(prompt: string, runId: string, baseUrl: string,
 async function generateViaSdk(prompt: string, runId: string): Promise<GeneratedImage> {
   const { default: ZAI } = await import("z-ai-web-dev-sdk")
   const zai = await ZAI.create()
-  const res = await zai.images.generations.create({
-    prompt: prompt.slice(0, 500),
-    size: "1344x768",
-  })
-  const b64 = res?.data?.[0]?.base64
-  if (!b64) throw new Error("生图返回空数据")
-  await mkdir(ASSET_DIR, { recursive: true })
-  const fileName = `cover-${runId}.png`
-  const absPath = path.join(ASSET_DIR, fileName)
-  const buf = Buffer.from(b64, "base64")
-  await writeFile(absPath, buf)
-  return { ok: true, filePath: `/assets/${fileName}`, absPath, sizeBytes: buf.length }
+  // 沙箱出口 WAF 偶发拦截生图端点（405 HTML）——间隔重试 2 次提高穿透率
+  const MAX_RETRY = 2
+  for (let attempt = 0; attempt <= MAX_RETRY; attempt++) {
+    try {
+      const res = await zai.images.generations.create({
+        prompt: prompt.slice(0, 500),
+        size: "1344x768",
+      })
+      const b64 = res?.data?.[0]?.base64
+      if (!b64) throw new Error("生图返回空数据")
+      await mkdir(ASSET_DIR, { recursive: true })
+      const fileName = `cover-${runId}.png`
+      const absPath = path.join(ASSET_DIR, fileName)
+      const buf = Buffer.from(b64, "base64")
+      await writeFile(absPath, buf)
+      return { ok: true, filePath: `/assets/${fileName}`, absPath, sizeBytes: buf.length }
+    } catch (e) {
+      const msg = (e as Error).message || ""
+      const waf = msg.includes("405") || msg.includes("空数据")
+      if (waf && attempt < MAX_RETRY) {
+        await new Promise((r) => setTimeout(r, 2500))
+        continue
+      }
+      throw e
+    }
+  }
+  throw new Error("生图重试后仍失败")
 }
 
 export async function generateCoverImage(prompt: string, runId: string): Promise<GeneratedImage> {

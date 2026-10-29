@@ -68,23 +68,36 @@ export const yuanbaoSearch: SearchProvider = {
     if (req.industry && req.industry !== "none") body.Industry = req.industry
     if (req.freshness && req.freshness !== "none") body.Freshness = req.freshness
     if (req.mode) body.Mode = req.mode
-    const res = await fetch(ENDPOINT, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(15000),
-    })
-    if (!res.ok) throw new Error(`SearchPro HTTP ${res.status}`)
-    const json = (await res.json()) as {
-      Response?: { Error?: { Code: string; Message: string }; Pages?: unknown[] }
+    // 瞬时容错：密钥新建后腾讯云后台分片传播需数分钟、且偶发限速误报
+    // UnauthorizedOperation——同一查询间隔 1.2s 重试两次，避免流水线轻易降级 DEMO
+    const MAX_RETRY = 2
+    for (let attempt = 0; attempt <= MAX_RETRY; attempt++) {
+      const res = await fetch(ENDPOINT, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(15000),
+      })
+      if (!res.ok) throw new Error(`SearchPro HTTP ${res.status}`)
+      const json = (await res.json()) as {
+        Response?: { Error?: { Code: string; Message: string }; Pages?: unknown[] }
+      }
+      const resp = json.Response ?? {}
+      if (resp.Error) {
+        const transient = resp.Error.Code === "UnauthorizedOperation" || resp.Error.Code === "RequestLimitExceeded"
+        if (transient && attempt < MAX_RETRY) {
+          await new Promise((r) => setTimeout(r, 1200))
+          continue
+        }
+        throw new Error(`SearchPro ${resp.Error.Code}: ${resp.Error.Message}`)
+      }
+      const pages = (resp.Pages ?? []).map(toPage)
+      return pages.map(normalize)
     }
-    const resp = json.Response ?? {}
-    if (resp.Error) throw new Error(`SearchPro ${resp.Error.Code}: ${resp.Error.Message}`)
-    const pages = (resp.Pages ?? []).map(toPage)
-    return pages.map(normalize)
+    throw new Error("SearchPro 重试后仍失败")
   },
   async health(): Promise<HealthReport> {
     const t0 = Date.now()

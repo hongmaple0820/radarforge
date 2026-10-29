@@ -296,3 +296,26 @@ wewrite 集成（MIT，纯增量吸收）：
 **防御性修复**（settings.ts）：新增 seedEnvKeysToDb()——env 密钥首次读取时沉淀入 SettingKV 并打 env:seeded 标记，DB 优先、用户清空不被覆盖；假密钥注入→重启→验证入库→清理→复验全过；tsc/ESLint 双零，首页+API 全 200
 
 **待用户操作**：设置中心 → 模型服务 → AI 搜索，重新填入元宝 SearchPro API KEY（此次将落库，重启不再丢失）
+
+## 2026-10-29 · API KEY 配置与全链路 REAL 复验
+
+**用户提供**：元宝搜索 API KEY（KeyName: maple）→ PUT /api/settings 落库（provider:search，容器重启不丢）
+
+**排障过程**：
+- 首调报「SearchPro UnauthorizedOperation 未授权」→ 系统性对照测试定位：同一密钥「AI」成功、「具身智能 融资」失败 → 疑似查询内容触发；10 分钟后全部查询（含原失败词）稳定成功，Version=standard
+- 结论：密钥刚创建时腾讯云后台分片传播未完成 + 偶发限速误报为「未授权」，非密钥或代码问题
+
+**代码加固（双 Provider 重试容错）**：
+- yuanbao-search.ts：UnauthorizedOperation/RequestLimitExceeded 间隔 1.2s 重试 ×2，避免流水线轻易降级 DEMO
+- zai-image.ts：沙箱出口 WAF 偶发 405 拦截（阿里云 WAF HTML 报错页），间隔 2.5s 重试 ×2——重试后封面真实出图 101KB JPEG
+- tsc/ESLint 双零
+
+**端到端 REAL 复验（run cmvtd4gp8000ok8h12innv3ww）**：
+- 检索：REAL，10 条真实信源（央广网/新华网/经济日报）
+- 取证：4 条主张，2 条事实类带真实 URL 引证（CSDN 实测文）
+- 成稿：1376 字 markdown + 6860 字符微信排版 HTML
+- 封面：101KB JPEG（1344×768）真实落盘
+- 早报：REAL（国产大模型崛起，8 条引用）
+- UI 徽章全部由「演示」转「真实」；截图 download/real-mode-home.png
+
+**Provider 终态**：yuanbao-search healthy(50 calls) / zai-llm healthy(100 calls) / zai-image healthy；Agnes 三通道待用户配置账号池
