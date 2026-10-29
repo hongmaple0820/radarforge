@@ -1,99 +1,92 @@
-/**
- * radar-review —— 五维审稿 skill（wewrite 审稿机制的自研版）
- *
- * 五个维度：准确（事实与引用）/ 观点（判断质量）/ 有用（行动价值）/
- * 合声（人格一致性）/ 好读（节奏与可读性）。任一维度 < 6 分则 verdict=revise。
- */
+// ============================================================
+// radar-review —— 五维审稿 skill（学 wewrite 编辑飞轮）
+// 准确 / 观点 / 有用 / 合声 / 好读，JSON 评分
+// 不过关 → revise 修订一轮
+// ============================================================
 
-import type { ChatMessage } from '@/lib/gateway/types'
+import type { ChatMessage } from "@/lib/gateway/types"
 
 export interface ReviewScores {
-  accuracy: number
-  viewpoint: number
-  usefulness: number
-  voice: number
-  readability: number
+  accuracy: number // 准确：事实与来源
+  viewpoint: number // 观点：判断力与锋利度
+  usefulness: number // 有用：可操作性
+  voice: number // 合声：与人格一致
+  readability: number // 好读：行文节奏
 }
 
-export interface ReviewResult {
+export interface Review {
   scores: ReviewScores
-  summary: string
-  suggestions: string[]
-  verdict: 'pass' | 'revise'
+  comments: { dim: string; comment: string }[]
+  average: number
 }
 
-export const REVIEW_DIMENSIONS: Array<{ key: keyof ReviewScores; name: string; desc: string }> = [
-  { key: 'accuracy', name: '准确', desc: '事实主张是否有来源支撑、编号引用是否真实对应' },
-  { key: 'viewpoint', name: '观点', desc: '核心判断是否清晰可辩、是否诚实处理了反方' },
-  { key: 'usefulness', name: '有用', desc: '读者读完能否带走可执行的东西' },
-  { key: 'voice', name: '合声', desc: '是否与既定写作人格的声线一致' },
-  { key: 'readability', name: '好读', desc: '节奏、段落长度、开头是否抓人' },
+const DIMS: { key: keyof ReviewScores; label: string; ask: string }[] = [
+  { key: "accuracy", label: "准确", ask: "事实是否有来源支撑、有无编造或过度推断" },
+  { key: "viewpoint", label: "观点", ask: "是否有清晰敢表态的判断，还是和稀泥" },
+  { key: "usefulness", label: "有用", ask: "读者读完能带走什么" },
+  { key: "voice", label: "合声", ask: "文风与人格设定是否一致" },
+  { key: "readability", label: "好读", ask: "节奏、句长、小节切分是否舒适" },
 ]
 
-export function buildReviewMessages(args: {
-  title: string
-  personaName: string
-  personaRules: string[]
-  markdown: string
-  claimsDigest: string
-}): ChatMessage[] {
+export function reviewMessages(markdown: string, personaLabel: string): ChatMessage[] {
   return [
     {
-      role: 'system',
-      content:
-        '你是挑剔但公允的内容编辑。对文章做五维审稿，输出严格 JSON（不要解释文字）。评分 0~10，半分允许（如 7.5）。任何维度低于 6.0 则 verdict 为 revise。',
+      role: "system",
+      content: [
+        "你是一名严格的技术编辑，按五个维度给文章打分（0-10，允许小数）。评分要有区分度，不要全给 7。",
+        "严格输出 JSON（不要 markdown 代码块）：",
+        `{`,
+        `  "scores": { "accuracy": 0, "viewpoint": 0, "usefulness": 0, "voice": 0, "readability": 0 },`,
+        `  "comments": [`,
+        ...DIMS.map((d) => `    { "dim": "${d.label}", "comment": "一句话意见，指出最具体的问题" },`),
+        `  ]`,
+        `}`,
+        `维度定义：`,
+        ...DIMS.map((d) => `- ${d.label}：${d.ask}`),
+        `人格设定：${personaLabel}（voice 维度对照此标准）`,
+      ].join("\n"),
     },
-    {
-      role: 'user',
-      content: `审稿对象
-- 标题：${args.title}
-- 既定人格：${args.personaName}（${args.personaRules.join('；')}）
-
-主张账本摘要（核对 [n] 引用是否对应、事实是否有支撑）：
-${args.claimsDigest || '（无外部事实主张）'}
-
-正文 Markdown：
-${args.markdown}
-
-输出 JSON：
-{
-  "scores": { "accuracy": 0, "viewpoint": 0, "usefulness": 0, "voice": 0, "readability": 0 },
-  "summary": "总评（80 字内，像真人编辑的口吻）",
-  "suggestions": ["具体、可执行的修改意见（每条 40 字内）"],
-  "verdict": "pass 或 revise"
-}
-suggestions 给 2~5 条；verdict=pass 时也要给建议（锦上添花型）。`,
-    },
+    { role: "user", content: markdown.slice(0, 9000) },
   ]
 }
 
-export function normalizeReview(raw: {
-  scores?: Record<string, unknown>
-  summary?: unknown
-  suggestions?: unknown
-  verdict?: unknown
-}): ReviewResult {
-  const num = (v: unknown): number => {
-    const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''))
-    if (!Number.isFinite(n)) return 0
-    return Math.max(0, Math.min(10, Math.round(n * 10) / 10))
-  }
-  const scores: ReviewScores = {
-    accuracy: num(raw.scores?.accuracy),
-    viewpoint: num(raw.scores?.viewpoint),
-    usefulness: num(raw.scores?.usefulness),
-    voice: num(raw.scores?.voice),
-    readability: num(raw.scores?.readability),
-  }
-  const suggestions = Array.isArray(raw.suggestions)
-    ? raw.suggestions.filter((s) => typeof s === 'string' && s.trim()).slice(0, 6)
-    : []
-  const verdict: 'pass' | 'revise' =
-    raw.verdict === 'pass' && Object.values(scores).every((s) => s >= 6) ? 'pass' : 'revise'
-  return {
-    scores,
-    summary: typeof raw.summary === 'string' && raw.summary.trim() ? raw.summary.trim() : '（审稿总评缺失）',
-    suggestions,
-    verdict,
-  }
+export function reviseMessages(markdown: string, review: Review): ChatMessage[] {
+  const problems = review.comments
+    .filter((c) => review.scores[c.dim as keyof ReviewScores] !== undefined && review.scores[c.dim as keyof ReviewScores] < 8)
+    .map((c) => `${c.dim}（${review.scores[c.dim as keyof ReviewScores]}/10）：${c.comment}`)
+    .join("\n")
+  return [
+    {
+      role: "system",
+      content:
+        "你是原文作者本人。按审稿意见修订文章：只改有问题的地方，保持整体结构与文风稳定，保留所有 [n] 引用。输出修订后的完整 Markdown（不要解释、不要 diff）。",
+    },
+    { role: "user", content: `【审稿意见】\n${problems || "整体偏弱，全面强化一次"}\n\n【原文】\n${markdown}` },
+  ]
 }
+
+export function parseReview(raw: unknown): Review | null {
+  if (!raw || typeof raw !== "object") return null
+  const obj = raw as Record<string, unknown>
+  const scoresRaw = (obj.scores ?? {}) as Record<string, unknown>
+  const scores = {} as ReviewScores
+  let valid = true
+  for (const d of DIMS) {
+    const v = Number(scoresRaw[d.key])
+    if (!Number.isFinite(v)) {
+      valid = false
+      break
+    }
+    scores[d.key] = Math.min(10, Math.max(0, v))
+  }
+  if (!valid) return null
+  const comments = Array.isArray(obj.comments)
+    ? (obj.comments as { dim?: string; comment?: string }[])
+        .filter((c) => c && c.dim && c.comment)
+        .map((c) => ({ dim: String(c.dim), comment: String(c.comment) }))
+    : []
+  const average = DIMS.reduce((s, d) => s + scores[d.key], 0) / DIMS.length
+  return { scores, comments, average: Math.round(average * 10) / 10 }
+}
+
+export { DIMS }

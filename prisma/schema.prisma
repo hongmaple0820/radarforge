@@ -7,129 +7,202 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// 资讯追踪话题
+// ============ 雷达层（1.0 核心） ============
+
 model Topic {
-  id        String   @id @default(cuid())
-  name      String   @unique
-  createdAt DateTime @default(now())
+  id          String   @id @default(cuid())
+  name        String
+  keywords    String   @default("")
+  description String   @default("")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  reports     Report[]
+  ideas       Idea[]
 }
 
-// 选题池候选（2.0 工作流起点：雷达选题 → 入池 → 写作 → 发布）
-model IdeaCandidate {
+model Report {
   id        String   @id @default(cuid())
+  topicId   String?
+  topic     Topic?   @relation(fields: [topicId], references: [id])
   title     String
-  // 切入角度 / 为什么值得写
-  angle     String?
-  // 来源: radar 雷达卡片一键入池 / manual 手动录入 / agent Agent 推荐
-  source    String   @default("manual")
-  // 溯源链接（radar 来源时的资讯 URL）
-  sourceRef String?
-  // 潜力分 0-100（后续由 Agent 结合热度/相关度评估）
-  score     Int?
-  // 流转状态: new 新入池 / shortlist 入选 / writing 撰写中 / published 已发布 / dropped 已放弃
-  status    String   @default("new")
+  content   String   @default("") // markdown 早报正文
+  mode      String   @default("DEMO") // REAL | DEMO
+  provider  String   @default("") // 实际使用的 provider 名
+  claims    Claim[]
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 }
 
-// 创作运行（一次「选题 → 成稿」的完整流水线，wewrite runs 概念的 DB 形态）
-model Run {
-  id        String   @id @default(cuid())
-  ideaId    String?
-  title     String
-  // 运行类型: article 图文（video 属 Phase 3）
-  kind      String   @default("article")
-  // 写作人格（wewrite 风格层）与排版主题
-  persona   String   @default("midnight-friend")
-  theme     String   @default("classic")
-  // 是否生成封面（生图渠道）
-  withCover Boolean  @default(false)
-  // 状态机: pending → running → done / failed（blocked 预留给人工确认环节）
-  status    String   @default("pending")
-  // 步骤流水账: [{key,label,status,detail,latencyMs}]
-  steps     Json?
-  error     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-// 主张账本（claims 来源留痕）：每条关键主张经元宝搜索核对后落库
 model Claim {
+  id          String   @id @default(cuid())
+  reportId    String?
+  report      Report? @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  runId       String?
+  run         AgentRun? @relation("RunClaims", fields: [runId], references: [id], onDelete: Cascade)
+  idx         Int // [n] 上标序号
+  claimType   String   @default("fact") // fact | inference | opinion | experience
+  text        String   @default("") // 主张文本（图文线）
+  quote       String   @default("") // 引用的原文片段
+  sourceTitle String   @default("")
+  sourceUrl   String   @default("")
+  sourceSite  String   @default("")
+  sourceDate  String   @default("")
+  kind        String   @default("FACT") // FACT | DATA | QUOTE | REF（早报线沿用）
+  verified    Boolean?
+}
+
+// ============ Agent 运行时层（2.0 Phase 2） ============
+
+model AgentRun {
+  id          String   @id @default(cuid())
+  kind        String   @default("skill") // skill（社区技能） | article（图文流水线）
+  skillId     String   @default("") // skill 目录名（kind=skill）
+  skillName   String   @default("")
+  ideaTitle   String   @default("") // 选题标题（kind=article）
+  ideaAngle   String   @default("") // 切入角度
+  persona     String   @default("") // 写作人格
+  theme       String   @default("radar") // 排版主题
+  input       String   @default("") // 用户输入 / 选题
+  status      String   @default("queued") // queued | running | blocked | done | error
+  mode        String   @default("DEMO") // REAL | DEMO
+  steps       String   @default("[]") // JSON: [{name, status, detail, latencyMs}]
+  artifacts   String   @default("{}") // JSON: {brief, review, publish…产物索引}
+  output      String   @default("") // 产出 markdown
+  error       String   @default("")
+  ideas       Idea[]
+  inboxItems  InboxItem[]
+  claims      Claim[]  @relation("RunClaims")
+  articles   Article[]
+  reviews    ReviewRecord[]
+  assets     Asset[]
+  publishes  PublishRecord[]
+  createdAt   DateTime @default(now())
+  finishedAt  DateTime?
+}
+
+model InboxItem {
   id         String   @id @default(cuid())
-  runId      String
-  // 四分类: fact 事实 | inference 推断 | opinion 观点 | experience 经验
-  claimType  String
-  text       String
-  // 取证检索词
-  query      String?
-  // 元宝搜索返回的来源原样留痕: [{title,url,site,date,score}]
-  sourceJson Json?
-  verified   Boolean?
+  targetType String   @default("run") // run | report
+  targetId   String
+  run        AgentRun? @relation(fields: [runId], references: [id], onDelete: Cascade)
+  runId      String?
+  comment    String
   createdAt  DateTime @default(now())
 }
 
-// 文章版本（初稿 / 审稿修订 / 多平台改写，一稿多发的载体）
+model Idea {
+  id         String   @id @default(cuid())
+  title      String
+  angle      String   @default("")
+  score      Float    @default(0)
+  status     String   @default("new") // new | picked | done
+  topicId    String?
+  topic      Topic?   @relation(fields: [topicId], references: [id])
+  runId      String?
+  run        AgentRun? @relation(fields: [runId], references: [id])
+  createdAt  DateTime @default(now())
+}
+
+// ============ 图文流水线（Phase 2 核心产物） ============
+
 model Article {
   id        String   @id @default(cuid())
   runId     String
-  version   Int      @default(1)
-  // 目标平台: wechat | csdn | xiaohongshu
-  target    String   @default("wechat")
-  format    String   @default("markdown")
-  // Markdown 源文（改写类目标也为 Markdown，便于二次编辑）
-  content   String
-  // wechat 目标时的微信兼容加固 HTML
-  html      String?
-  note      String?
+  run       AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  version   Int      @default(0) // 0=初稿 1=审稿修订 …
+  title     String   @default("")
+  markdown  String   @default("") // 正文 markdown（含 [n]）
+  formatted String   @default("") // 微信兼容 HTML（排版引擎输出）
+  wordCount Int      @default(0)
   createdAt DateTime @default(now())
 }
 
-// 审稿记录（五维判断：准确/观点/有用/合声/好读）
 model ReviewRecord {
-  id          String   @id @default(cuid())
-  runId       String
-  articleId   String
-  scores      Json
-  summary     String
-  suggestions Json?
-  // pass 通过 | revise 需改稿
-  verdict     String
-  createdAt   DateTime @default(now())
+  id         String   @id @default(cuid())
+  runId      String
+  run        AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  round      Int      @default(1) // 第几轮审稿
+  scoresJson String   @default("{}") // {accuracy, viewpoint, usefulness, voice, readability}
+  commentsJson String @default("[]") // 每维一句意见
+  average    Float    @default(0)
+  revised    Boolean  @default(false) // 是否触发修订
+  createdAt  DateTime @default(now())
 }
 
-// 生成资产（封面图等，Provider 记账）
 model Asset {
-  id        String   @id @default(cuid())
-  runId     String?
-  kind      String
-  provider  String?
-  path      String
-  prompt    String?
-  costCents Int      @default(0)
-  meta      Json?
-  createdAt DateTime @default(now())
+  id         String   @id @default(cuid())
+  runId      String?
+  run        AgentRun? @relation(fields: [runId], references: [id], onDelete: Cascade)
+  kind       String   @default("image") // image | video | html
+  role       String   @default("cover") // cover | inline
+  provider   String   @default("")
+  path       String   @default("") // /assets/… 静态可访问路径
+  costCents  Int      @default(0)
+  meta       String   @default("{}") // 尺寸/模型等
+  error      String   @default("") // 生成失败留痕（降级不阻断）
+  createdAt  DateTime @default(now())
 }
 
-// 编辑飞轮规则（「学习我的修改」沉淀，谨慎升级：proposed → active）
 model LearningRule {
   id        String   @id @default(cuid())
   runId     String?
-  ruleText  String
-  examples  Json?
-  // proposed 待确认 | active 生效（注入后续写作）| dismissed 已忽略
-  status    String   @default("proposed")
-  hits      Int      @default(0)
+  rule      String // 规则文本
+  rationale String   @default("") // 从哪次修改提炼
+  status    String   @default("proposed") // proposed | active | rejected
+  hits      Int      @default(0) // 注入初稿次数
   createdAt DateTime @default(now())
 }
 
-// 发布记录（三级降级链留痕：draft-api → local-paste → download）
 model PublishRecord {
   id          String   @id @default(cuid())
   runId       String
-  articleId   String?
-  platform    String
-  mode        String
-  externalUrl String?
-  note        String?
+  run         AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  platform    String   @default("wechat") // wechat | csdn
+  level       Int      @default(2) // 1=草稿箱 API 2=粘贴加固 3=长图
+  levelName   String   @default("") // 降级路径名
+  reason      String   @default("") // 降级原因（诚实留痕）
+  externalUrl String   @default("")
+  htmlLength  Int      @default(0)
   createdAt   DateTime @default(now())
+}
+
+// ============ 模型网关层（插件注册表 + 健康记录） ============
+
+model ProviderRecord {
+  id           String   @id @default(cuid())
+  kind         String // LLM | SEARCH | IMAGE | VIDEO
+  name         String   @unique
+  builtin      Boolean  @default(true) // 代码注册 or 插件注册
+  configured   Boolean  @default(false) // 密钥是否就绪
+  status       String   @default("unknown") // healthy | degraded | down | unknown
+  lastLatency  Int      @default(0)
+  lastError    String   @default("")
+  calls        Int      @default(0)
+  fails        Int      @default(0)
+  lastChecked  DateTime?
+  notes        String   @default("")
+}
+
+// ============ MCP 客户端层 ============
+
+model McpServer {
+  id              String   @id @default(cuid())
+  name            String
+  transport       String   @default("http") // http | sse | stdio
+  url             String   @default("") // http/sse 用
+  command         String   @default("") // stdio 用
+  enabled         Boolean  @default(true)
+  status          String   @default("unknown") // connected | error | unknown
+  discoveredTools String   @default("[]") // JSON: [{name, description}]
+  lastError       String   @default("")
+  createdAt       DateTime @default(now())
+  lastCheckedAt   DateTime?
+}
+
+// ============ 用户配置层（设置中心：模型密钥 / 创作风格定位） ============
+
+model SettingKV {
+  id        String   @id @default(cuid())
+  key       String   @unique // provider:llm | provider:search | provider:image | style:profile
+  value     String   @default("{}") // JSON
+  updatedAt DateTime @updatedAt
 }

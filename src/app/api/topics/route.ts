@@ -1,67 +1,29 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
+import { NextResponse } from "next/server"
+import { db } from "@/lib/db"
 
-/** 默认话题: 首次访问自动播种，开箱即用 */
-const DEFAULT_TOPICS = ['人工智能 大模型', 'AI Agent 智能体', 'AI芯片 算力', '自动驾驶 智驾', '具身智能 机器人', 'AI搜索 元宝搜索']
-
-async function ensureSeeded() {
-  const count = await db.topic.count()
-  if (count === 0) {
-    // SQLite createMany 不支持 skipDuplicates；仅在空表时播种，天然无冲突
-    await db.topic.createMany({
-      data: DEFAULT_TOPICS.map((name) => ({ name })),
-    })
-  }
-}
-
-/** GET /api/topics — 话题列表（按创建时间正序） */
 export async function GET() {
+  const topics = await db.topic.findMany({ orderBy: { createdAt: "desc" }, include: { _count: { select: { reports: true, ideas: true } } } })
+  return NextResponse.json({ topics })
+}
+
+export async function POST(req: Request) {
   try {
-    await ensureSeeded()
-    const topics = await db.topic.findMany({ orderBy: { createdAt: 'asc' } })
-    return NextResponse.json({ ok: true, topics })
+    const body = (await req.json()) as { name?: string; keywords?: string; description?: string }
+    const name = (body.name ?? "").trim()
+    if (!name) return NextResponse.json({ error: "name 不能为空" }, { status: 400 })
+    const topic = await db.topic.create({
+      data: { name: name.slice(0, 80), keywords: (body.keywords ?? "").slice(0, 300), description: (body.description ?? "").slice(0, 500) },
+    })
+    return NextResponse.json({ topic })
   } catch (e) {
-    return NextResponse.json({ ok: false, message: (e as Error)?.message || '读取话题失败' }, { status: 500 })
+    return NextResponse.json({ error: (e as Error).message }, { status: 500 })
   }
 }
 
-/** POST /api/topics — 新增话题 body: { name } */
-export async function POST(req: NextRequest) {
-  try {
-    const { name } = await req.json()
-    const trimmed = typeof name === 'string' ? name.trim() : ''
-    if (!trimmed) {
-      return NextResponse.json({ ok: false, message: '话题名称不能为空' }, { status: 400 })
-    }
-    if (trimmed.length > 60) {
-      return NextResponse.json({ ok: false, message: '话题名称过长（上限 60 字）' }, { status: 400 })
-    }
-    const exists = await db.topic.findFirst({ where: { name: trimmed } })
-    if (exists) {
-      return NextResponse.json({ ok: false, message: '该话题已存在' }, { status: 409 })
-    }
-    const topic = await db.topic.create({ data: { name: trimmed } })
-    return NextResponse.json({ ok: true, topic })
-  } catch (e) {
-    return NextResponse.json({ ok: false, message: (e as Error)?.message || '创建话题失败' }, { status: 500 })
-  }
-}
-
-/** DELETE /api/topics?id=xxx — 删除话题 */
-export async function DELETE(req: NextRequest) {
-  try {
-    const id = req.nextUrl.searchParams.get('id')
-    if (!id) {
-      return NextResponse.json({ ok: false, message: '缺少话题 id' }, { status: 400 })
-    }
-    // 兜底: 至少保留一个话题
-    const count = await db.topic.count()
-    if (count <= 1) {
-      return NextResponse.json({ ok: false, message: '至少保留一个追踪话题' }, { status: 400 })
-    }
-    await db.topic.delete({ where: { id } })
-    return NextResponse.json({ ok: true })
-  } catch (e) {
-    return NextResponse.json({ ok: false, message: (e as Error)?.message || '删除话题失败' }, { status: 500 })
-  }
+export async function DELETE(req: Request) {
+  const { searchParams } = new URL(req.url)
+  const id = searchParams.get("id")
+  if (!id) return NextResponse.json({ error: "id 不能为空" }, { status: 400 })
+  await db.topic.delete({ where: { id } })
+  return NextResponse.json({ ok: true })
 }

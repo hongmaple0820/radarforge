@@ -1,52 +1,41 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
+import { NextResponse } from "next/server"
+import { db } from "@/lib/db"
+import { findSimilar } from "@/lib/runtime/skills/radar-learn"
 
-/**
- * 编辑飞轮规则 API
- * GET    /api/learn                     → 规则列表（按状态）
- * POST   /api/learn  { id, status }     → 规则状态流转（proposed → active / dismissed）
- */
-
-export const runtime = 'nodejs'
-export const dynamic = 'force-dynamic'
-
-const STATUSES = ['proposed', 'active', 'dismissed']
-
-export async function GET(req: NextRequest) {
-  try {
-    const status = req.nextUrl.searchParams.get('status')
-    const where = status && STATUSES.includes(status) ? { status } : {}
-    const rules = await db.learningRule.findMany({ where, orderBy: { createdAt: 'desc' }, take: 200 })
-    const counts = {
-      proposed: await db.learningRule.count({ where: { status: 'proposed' } }),
-      active: await db.learningRule.count({ where: { status: 'active' } }),
-      dismissed: await db.learningRule.count({ where: { status: 'dismissed' } }),
-    }
-    return NextResponse.json({ ok: true, rules, counts })
-  } catch (e) {
-    return NextResponse.json({ ok: false, message: (e as Error)?.message || '规则读取失败' }, { status: 500 })
-  }
+export async function GET() {
+  const rules = await db.learningRule.findMany({ orderBy: [{ status: "desc" }, { createdAt: "desc" }], take: 50 })
+  return NextResponse.json({ rules })
 }
 
-export async function POST(req: NextRequest) {
+export async function POST(req: Request) {
   try {
-    const body = await req.json()
-    const id = typeof body.id === 'string' ? body.id : ''
-    const status = typeof body.status === 'string' && STATUSES.includes(body.status) ? body.status : null
-    if (!id || !status) {
-      return NextResponse.json({ ok: false, message: '需要 { id, status: proposed|active|dismissed }' }, { status: 400 })
+    const body = (await req.json()) as { action?: "confirm" | "reject"; id?: string }
+    if (!body.id) return NextResponse.json({ error: "id 不能为空" }, { status: 400 })
+    if (body.action === "confirm") {
+      const rule = await db.learningRule.findUnique({ where: { id: body.id } })
+      if (!rule) return NextResponse.json({ error: "规则不存在" }, { status: 404 })
+      // 防重复激活：与既有 active 规则高相似（bigram Jaccard ≥ 0.55）→ 拒绝并指认既有规则
+      const actives = await db.learningRule.findMany({ where: { status: "active", id: { not: rule.id } } })
+      const dup = findSimilar(rule.rule, actives)
+      if (dup) {
+        return NextResponse.json(
+          {
+            error: `与已激活规则高度重复，未重复激活（宁缺毋滥）`,
+            duplicateOf: dup,
+            hint: "同一倾向保留一条即可，重复注入只会稀释指令权重",
+          },
+          { status: 409 },
+        )
+      }
+      const confirmed = await db.learningRule.update({ where: { id: body.id }, data: { status: "active" } })
+      return NextResponse.json({ rule: confirmed })
     }
-    const rule = await db.learningRule.findUnique({ where: { id } })
-    if (!rule) {
-      return NextResponse.json({ ok: false, message: '规则不存在' }, { status: 404 })
+    if (body.action === "reject") {
+      const rule = await db.learningRule.update({ where: { id: body.id }, data: { status: "rejected" } })
+      return NextResponse.json({ rule })
     }
-    // 谨慎升级：确认生效时计一次命中
-    const updated = await db.learningRule.update({
-      where: { id },
-      data: { status, ...(status === 'active' ? { hits: rule.hits + 1 } : {}) },
-    })
-    return NextResponse.json({ ok: true, rule: updated })
+    return NextResponse.json({ error: `未知 action: ${body.action}` }, { status: 400 })
   } catch (e) {
-    return NextResponse.json({ ok: false, message: (e as Error)?.message || '规则更新失败' }, { status: 500 })
+    return NextResponse.json({ error: (e as Error).message }, { status: 500 })
   }
 }

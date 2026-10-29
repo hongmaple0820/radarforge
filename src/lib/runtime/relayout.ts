@@ -1,44 +1,52 @@
-/**
- * 重排版工具：对已有 Run 的最新 wechat 文章重新渲染微信兼容 HTML
- * （人工编辑保存 / 主题切换后复用，与流水线 Step 6 同一渲染逻辑）
- */
+// ============================================================
+// relayout.ts —— 改稿后自动重排版
+// 用户保存改稿 → 按 run 主题 + claims 账本重渲染微信 HTML
+// 与流水线第 6 步共用同一渲染引擎，保证预览/发布一致
+// ============================================================
 
-import { db } from '@/lib/db'
-import { renderWechatArticle, type RenderSource } from './render'
+import { db } from "@/lib/db"
+import { renderWechatHtml, resolveThemeId, type RenderClaim, type ThemeId } from "./render"
 
-export async function relayoutRun(runId: string): Promise<{ articleId: string; html: string; title: string } | null> {
-  const run = await db.run.findUnique({ where: { id: runId } })
-  if (!run) return null
+export interface RelayoutResult {
+  title: string
+  wordCount: number
+  formatted: string
+  theme: ThemeId
+  refs: number
+}
 
-  const latest = await db.article.findFirst({
-    where: { runId, target: 'wechat' },
-    orderBy: { createdAt: 'desc' },
+/** 校验主题 id（防脏数据；18 主题注册表 + 旧三主题兼容映射） */
+function normalizeTheme(theme: string): ThemeId {
+  return resolveThemeId(theme)
+}
+
+/** 从 markdown 提取标题（首个 H1），缺省回退 */
+function extractTitle(markdown: string, fallback: string): string {
+  return (markdown.match(/^#\s+(.+)$/m)?.[1] ?? fallback).slice(0, 120)
+}
+
+/** 取某 run 已核实的 claims，映射为渲染脚注 */
+async function loadRenderClaims(runId: string): Promise<RenderClaim[]> {
+  const claims = await db.claim.findMany({
+    where: { runId, idx: { gt: 0 }, verified: true },
+    orderBy: { idx: "asc" },
   })
-  if (!latest) return null
+  return claims.map((c) => ({
+    idx: c.idx,
+    sourceSite: c.sourceSite,
+    sourceTitle: c.sourceTitle,
+    sourceDate: c.sourceDate,
+    sourceUrl: c.sourceUrl,
+  }))
+}
 
-  // 文章大标题：取 brief 步骤产物里记录的标题（fallback 用 Run 标题）
-  const steps = (run.steps as Array<{ key: string; detail?: string }>) ?? []
-  const briefDetail = steps.find((s) => s.key === 'brief')?.detail ?? ''
-  const m = /《(.+?)》/.exec(briefDetail)
-  const title = m?.[1] ?? run.title
-
-  const claims = await db.claim.findMany({ where: { runId }, orderBy: { createdAt: 'asc' } })
-  const sources: RenderSource[] = claims.map((c) => {
-    const s = ((c.sourceJson as Array<{ title?: string; url?: string; site?: string; date?: string }>) ?? [])[0]
-    return s?.url
-      ? { title: c.text.slice(0, 50), url: s.url, site: s.site ?? '', date: s.date }
-      : { title: `${c.text.slice(0, 50)}（未检索到直接来源）`, url: '', site: '—' }
-  })
-
-  const coverAsset = await db.asset.findFirst({ where: { runId, kind: 'image' }, orderBy: { createdAt: 'desc' } })
-
-  const html = renderWechatArticle({
-    title,
-    markdown: latest.content,
-    themeId: run.theme,
-    sources,
-    ...(coverAsset ? { coverUrl: coverAsset.path } : {}),
-  })
-  await db.article.update({ where: { id: latest.id }, data: { html } })
-  return { articleId: latest.id, html, title }
+/** 流水线第 6 步 / 改稿重排版的统一入口 */
+export async function relayoutForRun(runId: string, markdown: string, titleFallback: string): Promise<RelayoutResult> {
+  const run = await db.agentRun.findUnique({ where: { id: runId } })
+  const theme = normalizeTheme(run?.theme ?? "radar")
+  const claims = await loadRenderClaims(runId)
+  const title = extractTitle(markdown, titleFallback)
+  const wordCount = markdown.replace(/\s/g, "").length
+  const formatted = renderWechatHtml(markdown, claims, { theme, title, wordCount })
+  return { title, wordCount, formatted, theme, refs: claims.length }
 }

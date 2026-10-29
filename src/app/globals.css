@@ -120,3 +120,20 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ============================================================
+ * Radix ScrollArea 内部内容容器钳宽修复（通用）
+ * Radix Viewport 内部 div 为 display:table + min-width:100%
+ * 且无 max-width —— 当内容含 nowrap/truncate 长文本时，表格
+ * 按内容首选宽度撑开（可超视口），引发移动端横向溢出。
+ * 钳制 max-width:100% 后表格回到视口宽，truncate 正常截断。
+ * （本项目所有 ScrollArea 均为纵向滚动，不影响使用。）
+ * ============================================================ */
+[data-slot="scroll-area-viewport"] > div {
+  /* Radix 内联 display:table（水平滚动支撑）；CSS2.1 中 max-width 对 table
+     行为未定义（Chrome 忽略），故直接覆写为 block：纵向滚动不受影响，
+     truncate 长文本回到视口宽内正常截断。 */
+  display: block !important;
+  min-width: 100%;
+  max-width: 100%;
+}

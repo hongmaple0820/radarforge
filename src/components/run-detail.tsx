@@ -1,0 +1,876 @@
+"use client"
+
+import { useCallback, useEffect, useRef, useState } from "react"
+import { motion } from "framer-motion"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Textarea } from "@/components/ui/textarea"
+import { useToast } from "@/hooks/use-toast"
+import { MdView } from "./md-view"
+import { TTS_VOICES } from "@/lib/runtime/skills/radar-rewrite"
+import { CheckCircle2, XCircle, Loader2, Circle, Clock, Edit3, Send, Copy, FileText, ImageIcon, Sparkles, ThumbsUp, ThumbsDown, ExternalLink, Clapperboard, Palette, Video, Download, RefreshCw, Mic } from "lucide-react"
+
+export interface StoryboardScene { id: number; seconds: number; visual: string; narration: string; subtitle: string; broll: string }
+export interface StoryboardData { title: string; hook: string; totalSeconds: number; scenes: StoryboardScene[]; bgm: string; caption: string }
+
+export interface RunDetailData {
+  id: string
+  ideaTitle: string
+  ideaAngle: string
+  persona: string
+  theme: string
+  status: string
+  mode: string
+  steps: string
+  artifacts: string
+  error: string
+  createdAt: string
+  claims: { id: string; idx: number; claimType: string; text: string; verified: boolean | null; sourceTitle: string; sourceUrl: string; sourceSite: string; sourceDate: string }[]
+  articles: { id: string; version: number; title: string; markdown: string; formatted: string; wordCount: number }[]
+  reviews: { id: string; round: number; scoresJson: string; commentsJson: string; average: number; revised: boolean }[]
+  assets: { id: string; kind: string; role: string; path: string; error: string; provider: string; meta: string; createdAt: string }[]
+  publishes: { id: string; platform: string; level: number; levelName: string; reason: string; htmlLength: number; createdAt: string }[]
+}
+
+interface RunStep { name: string; status: "pending" | "running" | "done" | "error" | "skipped"; detail: string; latencyMs: number }
+
+interface VideoMeta {
+  stage: "queued" | "tts" | "spec" | "frames" | "submit" | "poll" | "download" | "encode" | "concat" | "done" | "error"
+  percent: number
+  sceneDone: number
+  sceneTotal: number
+  audioMode: "pending" | "tts" | "partial" | "muted"
+  ttsNote?: string
+  aiNote?: string
+  style?: "motion" | "art"
+  channel?: "local" | "agnes"
+  voice: string
+  aspect: string
+  seconds?: number
+  width?: number
+  height?: number
+  sizeBytes?: number
+  error?: string
+  storyboard?: StoryboardData
+}
+
+const VIDEO_STAGE_LABELS: Record<string, string> = { queued: "排队中", tts: "TTS 口播合成", spec: "分镜转动画 spec（LLM）", frames: "逐帧渲染", submit: "提交 AI 模型", poll: "AI 生成中", download: "下载成片", encode: "分段编码", concat: "合成 MP4", done: "完成", error: "失败" }
+
+const STEP_LABELS: Record<string, string> = { brief: "任务书", claims: "主张取证", draft: "初稿", review: "五维审稿", cover: "封面", layout: "微信排版" }
+const DIM_LABELS: Record<string, string> = { accuracy: "准确", viewpoint: "观点", usefulness: "有用", voice: "合声", readability: "好读" }
+
+export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () => void }) {
+  const { toast } = useToast()
+  const [run, setRun] = useState<RunDetailData | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [editText, setEditText] = useState("")
+  const [busy, setBusy] = useState<string | null>(null)
+  const [rewriteOut, setRewriteOut] = useState<{ target: string; content: string } | null>(null)
+  const [publishOut, setPublishOut] = useState<{ level: number; levelName: string; reason: string; instruction: string; html: string } | null>(null)
+  const [rules, setRules] = useState<{ id: string; rule: string; rationale: string; status: string; hits: number }[]>([])
+  const [storyboard, setStoryboard] = useState<StoryboardData | null>(null)
+  const [themeChoice, setThemeChoice] = useState("")
+  const [showThemes, setShowThemes] = useState(false)
+  const [themes, setThemes] = useState<{ id: string; label: string; category: string; description: string }[]>([])
+  const [voiceChoice, setVoiceChoice] = useState("xiaochen")
+  const [aspectChoice, setAspectChoice] = useState<"9:16" | "16:9">("9:16")
+  const [videoStyle, setVideoStyle] = useState<"motion" | "art">("motion")
+  const [videoChannel, setVideoChannel] = useState<"local" | "agnes" | "auto">("local")
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const refresh = useCallback(async () => {
+    if (!runId) return
+    const json = await fetch(`/api/runs/${runId}`).then((x) => x.json())
+    if (json.run) setRun(json.run)
+    const lr = await fetch("/api/learn").then((x) => x.json())
+    setRules(lr.rules ?? [])
+  }, [runId])
+
+  useEffect(() => {
+    setRewriteOut(null)
+    setPublishOut(null)
+    setStoryboard(null)
+    setEditing(false)
+    setShowThemes(false)
+    void refresh()
+    // 主题画廊数据（18 主题注册表，/api/runs 顺带返回）
+    void fetch("/api/runs")
+      .then((x) => x.json())
+      .then((j) => setThemes(j.themes ?? []))
+      .catch(() => {})
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
+  }, [refresh])
+
+  useEffect(() => {
+    if (!run || (run.status !== "running" && run.status !== "queued")) return
+    pollRef.current = setInterval(() => void refresh(), 2500)
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
+  }, [run?.status])
+
+  // 视频渲染进行中 → 独立轮询（done 的 run 也有后台任务在跑；early-return 前求值避免 TDZ）
+  const activeVideoStage = (() => {
+    if (!run) return ""
+    const va = [...run.assets].reverse().find((a) => a.role === "video-final")
+    if (!va) return ""
+    try {
+      const m = JSON.parse(va.meta) as VideoMeta
+      return ["queued", "tts", "spec", "frames", "submit", "poll", "download", "encode", "concat"].includes(m.stage) ? m.stage : ""
+    } catch {
+      return ""
+    }
+  })()
+  useEffect(() => {
+    if (!activeVideoStage) return
+    const t = setInterval(() => void refresh(), 2000)
+    return () => clearInterval(t)
+  }, [activeVideoStage, refresh])
+
+  if (!runId || !run) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
+        <FileText className="h-10 w-10 mb-3 opacity-30" />
+        <p className="text-sm">选择左侧一个 Run 查看详情</p>
+      </div>
+    )
+  }
+
+  let steps: RunStep[] = []
+  try {
+    steps = JSON.parse(run.steps) as RunStep[]
+  } catch { /* ignore */ }
+
+  const latest = run.articles[run.articles.length - 1]
+  const review = run.reviews[0]
+  const covers = run.assets.filter((a) => a.role === "cover")
+  const cover = [...covers].reverse().find((c) => c.path) ?? covers[covers.length - 1]
+  const videoAssets = run.assets.filter((a) => a.role === "video-final")
+  const videoAsset = videoAssets[videoAssets.length - 1]
+  let videoMeta: VideoMeta | null = null
+  try {
+    videoMeta = videoAsset ? (JSON.parse(videoAsset.meta) as VideoMeta) : null
+  } catch {
+    videoMeta = null
+  }
+  const sbShow = storyboard ?? videoMeta?.storyboard ?? null
+
+  const saveEdit = async () => {
+    if (!latest || !editText.trim()) return
+    setBusy("edit")
+    try {
+      const res = await fetch(`/api/runs/${run.id}/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "edit", markdown: editText }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      toast({ title: "改稿已保存", description: json.message })
+      setEditing(false)
+      await refresh()
+    } catch (e) {
+      toast({ title: "保存失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const doRewrite = async (target: string) => {
+    setBusy(`rewrite-${target}`)
+    try {
+      const res = await fetch(`/api/runs/${run.id}/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "rewrite", target }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      setRewriteOut({ target: json.target, content: json.rewrite })
+      toast({ title: `已改写：${json.target}`, description: `${json.wordCount} 字` })
+    } catch (e) {
+      toast({ title: "改写失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const doPublish = async () => {
+    setBusy("publish")
+    try {
+      const res = await fetch(`/api/runs/${run.id}/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "publish" }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      setPublishOut(json.outcome)
+      toast({ title: `发布走通：${json.outcome.levelName}`, description: json.outcome.instruction.slice(0, 60) })
+      await refresh()
+    } catch (e) {
+      toast({ title: "发布失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const ruleAction = async (id: string, action: "confirm" | "reject") => {
+    const res = await fetch("/api/learn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, action }),
+    })
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      toast({ title: "未激活", description: json.error ?? "操作失败", variant: "destructive" })
+    } else {
+      toast({ title: action === "confirm" ? "规则已激活（注入后续初稿）" : "规则已拒绝" })
+    }
+    const lr = await fetch("/api/learn").then((x) => x.json())
+    setRules(lr.rules ?? [])
+  }
+
+  const copyHtml = async () => {
+    if (!latest?.formatted) return
+    // 复制渲染后的富文本（粘贴进公众号编辑器）
+    const tmp = document.createElement("div")
+    tmp.innerHTML = latest.formatted
+    tmp.style.position = "fixed"
+    tmp.style.left = "-9999px"
+    document.body.appendChild(tmp)
+    const range = document.createRange()
+    range.selectNodeContents(tmp)
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+    document.execCommand("copy")
+    document.body.removeChild(tmp)
+    toast({ title: "公众号格式已复制", description: "直接粘贴进公众号编辑器，样式保留" })
+  }
+
+  const copyMd = async () => {
+    if (!latest?.markdown) return
+    await navigator.clipboard.writeText(latest.markdown)
+    toast({ title: "Markdown 已复制", description: "粘贴到 CSDN / Notion / Obsidian 等编辑器" })
+  }
+
+  const copyHtmlSource = async () => {
+    if (!latest?.formatted) return
+    await navigator.clipboard.writeText(latest.formatted)
+    toast({ title: "HTML 源码已复制", description: "可直接嵌入网页或发给开发同学" })
+  }
+
+  const copyStoryboard = async () => {
+    if (!sbShow) return
+    const lines = sbShow.scenes.map(
+      (s) => `【分镜 ${s.id} · ${s.seconds}s】\n字幕：${s.subtitle}\n口播：${s.narration}\n画面：${s.visual}\n素材：${s.broll}`,
+    )
+    await navigator.clipboard.writeText([`《${sbShow.title}》总时长 ${sbShow.totalSeconds}s`, `钩子：${sbShow.hook}`, "", ...lines, "", `BGM：${sbShow.bgm}`, `发布文案：${sbShow.caption}`].join("\n"))
+    toast({ title: "分镜脚本已复制", description: "可直接交给拍摄/剪辑同学" })
+  }
+
+  const doStoryboard = async (platform: string) => {
+    setBusy(`storyboard-${platform}`)
+    try {
+      const res = await fetch(`/api/runs/${run.id}/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "storyboard", platform }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      setStoryboard(json.storyboard)
+      toast({ title: "视频分镜已生成", description: `${json.storyboard.scenes.length} 个分镜 · ${json.storyboard.totalSeconds}s，可直接「渲染成片 MP4」` })
+      await refresh()
+    } catch (e) {
+      toast({ title: "分镜生成失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const doRetheme = async () => {
+    if (!themeChoice || themeChoice === run.theme) return
+    setBusy("retheme")
+    try {
+      const res = await fetch(`/api/runs/${run.id}/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "retheme", theme: themeChoice }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      toast({ title: "主题已切换", description: json.message })
+      await refresh()
+    } catch (e) {
+      toast({ title: "切换失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const doCover = async () => {
+    setBusy("cover")
+    try {
+      const res = await fetch(`/api/runs/${run.id}/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "cover" }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      if (!json.ok) {
+        toast({ title: "生图降级（不阻断）", description: `${json.error} —— 可在设置中心配置自定义生图端点后点「重新生成」`, variant: "destructive" })
+      } else {
+        toast({ title: "封面已生成", description: `${json.path}（${Math.round(json.sizeBytes / 1024)}KB）` })
+      }
+      await refresh()
+    } catch (e) {
+      toast({ title: "封面生成失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const doRenderVideo = async (sb?: StoryboardData) => {
+    const target = sb ?? sbShow
+    if (!target) {
+      toast({ title: "请先生成视频分镜", variant: "destructive" })
+      return
+    }
+    setBusy("render-video")
+    try {
+      const res = await fetch(`/api/runs/${run.id}/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "render-video", storyboard: target, voice: voiceChoice, aspect: aspectChoice, style: videoStyle, channel: videoChannel }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      toast({ title: "成片渲染已开始", description: json.message })
+      await refresh()
+    } catch (e) {
+      toast({ title: "渲染启动失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const proposedRules = rules.filter((r) => r.status === "proposed")
+  const activeRules = rules.filter((r) => r.status === "active")
+
+  return (
+    <div className="space-y-4">
+      {/* 头部 */}
+      <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <Button variant="ghost" size="sm" onClick={onBack} className="mb-1 h-7 text-xs">← 返回看板</Button>
+          <h2 className="text-lg font-bold truncate">{run.ideaTitle}</h2>
+          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+            <Badge variant={run.status === "done" ? "default" : run.status === "error" ? "destructive" : "secondary"} className={run.status === "done" ? "bg-emerald-600" : ""}>
+              {run.status === "running" && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}{run.status}
+            </Badge>
+            <Badge variant={run.mode === "REAL" ? "default" : "secondary"} className={run.mode === "REAL" ? "bg-emerald-600" : ""}>{run.mode === "REAL" ? "真实检索" : "演示"}</Badge>
+            <Badge variant="outline" className="text-[10px]">{run.persona}</Badge>
+            <Badge variant="outline" className="text-[10px]">主题 {run.theme}</Badge>
+            {latest && <span className="text-[11px] text-muted-foreground">{latest.wordCount} 字 · v{latest.version}</span>}
+          </div>
+        </div>
+      </motion.div>
+
+      {/* 六步进度 */}
+      <Card>
+        <CardContent className="pt-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2">
+            {steps.map((s, i) => (
+              <div key={i} className={`rounded-lg border px-3 py-2 space-y-1 ${s.status === "done" ? "border-emerald-200 bg-emerald-50/50 dark:bg-emerald-950/20" : s.status === "running" ? "border-amber-300 bg-amber-50/50 dark:bg-amber-950/20" : s.status === "error" ? "border-red-200 bg-red-50/50 dark:bg-red-950/20" : s.status === "skipped" ? "border-muted bg-muted/30" : ""}`}>
+                <div className="flex items-center gap-1.5">
+                  {s.status === "done" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> : s.status === "running" ? <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500" /> : s.status === "error" ? <XCircle className="h-3.5 w-3.5 text-red-500" /> : <Circle className="h-3.5 w-3.5 text-muted-foreground/40" />}
+                  <span className="text-xs font-semibold">{STEP_LABELS[s.name] ?? s.name}</span>
+                  {s.latencyMs > 0 && <span className="text-[9px] text-muted-foreground ml-auto flex items-center"><Clock className="h-2 w-2 mr-0.5" />{(s.latencyMs / 1000).toFixed(1)}s</span>}
+                </div>
+                <p className="text-[10px] text-muted-foreground line-clamp-2 leading-snug">{s.detail}</p>
+              </div>
+            ))}
+          </div>
+          {run.error && <div className="mt-2 text-xs text-red-500 rounded bg-red-50 dark:bg-red-950/30 px-2 py-1.5">{run.error}</div>}
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[300px_1fr] gap-4">
+        {/* 左列：brief + claims + 审稿 + 封面 + 飞轮 */}
+        <div className="space-y-4">
+          {/* brief */}
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">文章任务书（brief）</CardTitle></CardHeader>
+            <CardContent className="pt-0">
+              {(() => {
+                let brief: Record<string, string> = {}
+                try { brief = JSON.parse(run.artifacts).brief ?? {} } catch { /* ignore */ }
+                if (!brief.coreJudgment) return <p className="text-xs text-muted-foreground">未生成</p>
+                const rows: [string, string][] = [["读者", brief.targetReader], ["问题", brief.realProblem], ["判断", brief.coreJudgment], ["反方", brief.counterView], ["边界", brief.boundary]]
+                return (
+                  <div className="space-y-1.5">
+                    {rows.filter(([, v]) => v).map(([k, v]) => (
+                      <div key={k} className="text-[11px] leading-snug"><span className="text-muted-foreground font-medium">{k}：</span><span>{v}</span></div>
+                    ))}
+                  </div>
+                )
+              })()}
+            </CardContent>
+          </Card>
+
+          {/* claims 账本 */}
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">claims 来源账本（{run.claims.filter((c) => c.idx > 0).length}）</CardTitle></CardHeader>
+            <CardContent className="pt-0">
+              <ScrollArea className="max-h-64">
+                <div className="space-y-1.5 pr-2">
+                  {run.claims.filter((c) => c.idx > 0).map((c) => (
+                    <div key={c.id} className="rounded-md border px-2 py-1.5 space-y-1">
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant="outline" className="text-[9px] px-1 py-0 border-amber-400 text-amber-600 dark:text-amber-400">[{c.idx}]</Badge>
+                        <Badge variant="outline" className="text-[9px] px-1 py-0">{c.claimType}</Badge>
+                        {c.verified === true && <Badge className="bg-emerald-600 text-[9px] px-1 py-0">已核实</Badge>}
+                        {c.verified === false && <Badge variant="destructive" className="text-[9px] px-1 py-0">无来源</Badge>}
+                        {c.verified === null && <Badge variant="secondary" className="text-[9px] px-1 py-0">非事实</Badge>}
+                      </div>
+                      <p className="text-[10px] leading-snug line-clamp-2">{c.text}</p>
+                      {c.verified && c.sourceUrl && (
+                        <a href={c.sourceUrl} target="_blank" rel="noreferrer" className="text-[10px] text-muted-foreground hover:text-amber-600 flex items-center gap-0.5 truncate">
+                          <ExternalLink className="h-2.5 w-2.5 shrink-0" />{c.sourceSite} · {c.sourceDate.slice(0, 10)}
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                  {run.claims.filter((c) => c.idx > 0).length === 0 && <p className="text-xs text-muted-foreground py-3 text-center">无</p>}
+                </div>
+              </ScrollArea>
+            </CardContent>
+          </Card>
+
+          {/* 审稿 */}
+          {review && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center justify-between">
+                  <span>五维审稿</span>
+                  <span className={`text-sm font-bold ${review.average >= 7.5 ? "text-emerald-600" : "text-amber-600"}`}>{review.average}</span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0 space-y-2">
+                {(() => {
+                  let scores: Record<string, number> = {}
+                  let comments: { dim: string; comment: string }[] = []
+                  try { scores = JSON.parse(review.scoresJson); comments = JSON.parse(review.commentsJson) } catch { /* ignore */ }
+                  return (
+                    <>
+                      <div className="space-y-1">
+                        {Object.entries(scores).map(([k, v]) => (
+                          <div key={k} className="flex items-center gap-2">
+                            <span className="text-[10px] text-muted-foreground w-8 shrink-0">{DIM_LABELS[k] ?? k}</span>
+                            <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                              <div className={`h-full rounded-full ${v >= 8 ? "bg-emerald-500" : v >= 6 ? "bg-amber-400" : "bg-red-400"}`} style={{ width: `${v * 10}%` }} />
+                            </div>
+                            <span className="text-[10px] w-6 text-right shrink-0">{v}</span>
+                          </div>
+                        ))}
+                      </div>
+                      {review.revised && <Badge variant="secondary" className="text-[9px]">触发修订一轮</Badge>}
+                      {comments.slice(0, 3).map((c, i) => (
+                        <p key={i} className="text-[10px] text-muted-foreground leading-snug"><span className="font-medium">{c.dim}：</span>{c.comment}</p>
+                      ))}
+                    </>
+                  )
+                })()}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* 封面（手动可重试：生图降级后配好自定义端点再点「重新生成」） */}
+          {(run.status === "done" || covers.length > 0) && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5"><ImageIcon className="h-3.5 w-3.5" />封面</span>
+                  <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={doCover} disabled={busy === "cover"}>
+                    {busy === "cover" ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+                    {cover?.path ? "重新生成" : "生成封面"}
+                  </Button>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {cover?.path ? (
+                  <img src={cover.path} alt="封面" className="rounded-md w-full border" />
+                ) : (
+                  <p className="text-[10px] text-muted-foreground leading-snug">
+                    生图降级：{cover?.error?.slice(0, 80) || "未生成"}（不阻断出稿；可在设置中心配置自定义生图端点后点「重新生成」）
+                  </p>
+                )}
+                {covers.length > 1 && <p className="text-[9px] text-muted-foreground mt-1">共尝试 {covers.length} 次（Asset 留痕）</p>}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* 飞轮规则 */}
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5 text-amber-500" />编辑飞轮</CardTitle></CardHeader>
+            <CardContent className="pt-0 space-y-2">
+              {proposedRules.map((r) => (
+                <div key={r.id} className="rounded-md border border-amber-300 bg-amber-50/50 dark:bg-amber-950/20 px-2 py-1.5 space-y-1">
+                  <p className="text-[10px] leading-snug">{r.rule}</p>
+                  <div className="flex items-center gap-1">
+                    <Button size="sm" variant="outline" className="h-5 text-[9px] px-1.5" onClick={() => ruleAction(r.id, "confirm")}><ThumbsUp className="h-2.5 w-2.5 mr-0.5" />激活</Button>
+                    <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1.5" onClick={() => ruleAction(r.id, "reject")}><ThumbsDown className="h-2.5 w-2.5 mr-0.5" />拒绝</Button>
+                  </div>
+                </div>
+              ))}
+              {activeRules.length > 0 && (
+                <div className="space-y-1">
+                  {activeRules.slice(0, 4).map((r) => (
+                    <div key={r.id} className="text-[10px] rounded bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 px-2 py-1 leading-snug">
+                      <Badge className="bg-emerald-600 text-[8px] px-1 py-0 mr-1">active</Badge>{r.rule}（注入 {r.hits} 次）
+                    </div>
+                  ))}
+                </div>
+              )}
+              {rules.length === 0 && <p className="text-[10px] text-muted-foreground">改稿后自动提炼候选规则（proposed → 确认后 active 注入初稿）</p>}
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* 右列：成稿 + 预览 + 动作 */}
+        <div className="space-y-4">
+          {/* 动作栏 */}
+          {run.status === "done" && latest && (
+            <Card>
+              <CardContent className="pt-4 space-y-2.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Button size="sm" variant={editing ? "default" : "outline"} onClick={() => { setEditing(!editing); setEditText(latest.markdown) }}>
+                    <Edit3 className="h-3.5 w-3.5 mr-1" />{editing ? "取消改稿" : "改稿（喂飞轮）"}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => doRewrite("csdn")} disabled={busy === "rewrite-csdn"}>
+                    {busy === "rewrite-csdn" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <FileText className="h-3.5 w-3.5 mr-1" />}CSDN 版
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => doRewrite("xiaohongshu")} disabled={busy === "rewrite-xiaohongshu"}>
+                    {busy === "rewrite-xiaohongshu" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <FileText className="h-3.5 w-3.5 mr-1" />}小红书版
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => doRewrite("shortvideo")} disabled={busy === "rewrite-shortvideo"}>
+                    {busy === "rewrite-shortvideo" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <FileText className="h-3.5 w-3.5 mr-1" />}口播稿
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => doStoryboard("douyin")} disabled={busy === "storyboard-douyin"}>
+                    {busy === "storyboard-douyin" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Clapperboard className="h-3.5 w-3.5 mr-1" />}视频分镜
+                  </Button>
+                  <div className="flex-1" />
+                  <Button size="sm" variant="outline" onClick={copyMd} disabled={!latest.markdown}>
+                    <Copy className="h-3.5 w-3.5 mr-1" />复制 MD
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={copyHtml} disabled={!latest.formatted}>
+                    <Copy className="h-3.5 w-3.5 mr-1" />复制公众号格式
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={copyHtmlSource} disabled={!latest.formatted}>
+                    <Copy className="h-3.5 w-3.5 mr-1" />复制 HTML
+                  </Button>
+                  <Button size="sm" className="bg-amber-500 hover:bg-amber-600 text-white" onClick={doPublish} disabled={busy === "publish"}>
+                    {busy === "publish" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Send className="h-3.5 w-3.5 mr-1" />}发布（三级降级）
+                  </Button>
+                </div>
+                {/* 主题画廊（18 主题 wewrite 体系，不重跑流水线，秒级重排） */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <Palette className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span className="text-[10px] text-muted-foreground">排版主题：</span>
+                    <button
+                      onClick={() => setShowThemes(!showThemes)}
+                      className="text-[10px] border rounded-full px-2 py-0.5 hover:border-amber-400 hover:text-amber-600 transition-colors"
+                    >
+                      {themeChoice ? `${themeChoice}` : `${run.theme}（当前）`} ▾
+                    </button>
+                    {themeChoice && themeChoice !== run.theme && (
+                      <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={doRetheme} disabled={busy === "retheme"}>
+                        {busy === "retheme" ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}应用并重排
+                      </Button>
+                    )}
+                  </div>
+                  {showThemes && (
+                    <div className="rounded-lg border bg-muted/30 p-2 max-h-56 overflow-y-auto">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                        {Object.entries(
+                          themes.reduce<Record<string, { id: string; label: string; category: string; description: string }[]>>((acc, t) => {
+                            ;(acc[t.category] ??= []).push(t)
+                            return acc
+                          }, {}),
+                        ).map(([cat, list]) => (
+                          <div key={cat} className="contents">
+                            {list.map((t) => (
+                              <button
+                                key={t.id}
+                                title={t.description}
+                                onClick={() => {
+                                  setThemeChoice(t.id)
+                                  setShowThemes(false)
+                                }}
+                                className={`text-left text-[10px] border rounded-md px-2 py-1.5 transition-colors truncate ${themeChoice === t.id ? "border-amber-400 bg-amber-50 dark:bg-amber-950/30 text-amber-600 font-semibold" : run.theme === t.id && !themeChoice ? "border-emerald-300 text-emerald-600" : "hover:border-amber-300"}`}
+                              >
+                                <span className="text-muted-foreground">{cat} · </span>
+                                {t.id}
+                              </button>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-[9px] text-muted-foreground mt-1.5">18 主题移植自 wewrite（MIT）：6 大分类，全部内联样式 + 暗黑模式 + 粘贴加固</p>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* 改稿编辑器 */}
+          {editing && (
+            <Card>
+              <CardHeader className="pb-2"><CardTitle className="text-sm">改稿（diff 后自动提炼飞轮规则）</CardTitle></CardHeader>
+              <CardContent className="pt-0 space-y-2">
+                <Textarea value={editText} onChange={(e) => setEditText(e.target.value)} rows={14} className="font-mono text-xs" />
+                <Button size="sm" onClick={saveEdit} disabled={busy === "edit"} className="bg-amber-500 hover:bg-amber-600 text-white">
+                  {busy === "edit" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}保存并喂飞轮
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* 成稿 markdown */}
+          {latest && !editing && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm flex items-center justify-between">
+                  <span>成稿（v{latest.version} · {latest.title}）</span>
+                  <span className="text-[10px] font-normal text-muted-foreground">[n] = claims 账本编号</span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <ScrollArea className="h-[420px] rounded-md border bg-muted/30 p-3">
+                  <MdView content={latest.markdown} />
+                </ScrollArea>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* 改写结果 */}
+          {rewriteOut && (
+            <Card>
+              <CardHeader className="pb-3"><CardTitle className="text-sm">{rewriteOut.target}（一稿多发）</CardTitle></CardHeader>
+              <CardContent className="pt-0">
+                <ScrollArea className="h-72 rounded-md border bg-muted/30 p-3">
+                  <MdView content={rewriteOut.content} />
+                </ScrollArea>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* 视频分镜卡（含成片渲染入口：音色 + 画幅 + TTS，沙箱拦截自动静音降级） */}
+          {sbShow && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm flex items-center justify-between">
+                  <span className="flex items-center gap-1.5"><Clapperboard className="h-3.5 w-3.5 text-rose-500" />视频分镜 · 《{sbShow.title}》</span>
+                  <span className="flex items-center gap-2">
+                    <Badge variant="outline" className="text-[9px]">{sbShow.totalSeconds}s · {sbShow.scenes.length} 分镜</Badge>
+                    <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={copyStoryboard}><Copy className="h-3 w-3 mr-1" />复制脚本</Button>
+                  </span>
+                </CardTitle>
+                <p className="text-[11px] text-muted-foreground">钩子：{sbShow.hook}｜BGM：{sbShow.bgm}</p>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <ScrollArea className="max-h-80 pr-2">
+                  <div className="space-y-2">
+                    {sbShow.scenes.map((s) => (
+                      <div key={s.id} className="rounded-lg border px-3 py-2 space-y-1.5">
+                        <div className="flex items-center gap-2">
+                          <Badge className="bg-rose-500 text-[9px] px-1.5">#{s.id}</Badge>
+                          <Badge variant="outline" className="text-[9px]">{s.seconds}s</Badge>
+                          {s.subtitle && <span className="text-xs font-bold">「{s.subtitle}」</span>}
+                        </div>
+                        <p className="text-[11px] leading-snug"><span className="text-muted-foreground">口播：</span>{s.narration}</p>
+                        {s.visual && <p className="text-[10px] text-muted-foreground leading-snug"><span className="text-muted-foreground/70">画面：</span>{s.visual}</p>}
+                      </div>
+                    ))}
+                    {sbShow.caption && (
+                      <div className="rounded-lg border border-rose-200 bg-rose-50/50 dark:bg-rose-950/20 px-3 py-2">
+                        <p className="text-[10px] text-muted-foreground mb-0.5">发布文案</p>
+                        <p className="text-[11px] leading-snug">{sbShow.caption}</p>
+                      </div>
+                    )}
+                  </div>
+                </ScrollArea>
+                {/* 成片渲染控制条（三通道：motion / art / Agnes AI） */}
+                <div className="mt-3 pt-3 border-t space-y-2">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[10px] text-muted-foreground shrink-0">通道：</span>
+                    {([
+                      { id: "motion", label: "商业片", title: "品牌化场景卡，本地确定性渲染" },
+                      { id: "art", label: "艺术动画", title: "huashu-art-motion 引擎：8 语法 × 8 色板 Canvas 逐帧" },
+                      { id: "agnes", label: "AI 模型", title: "agnes-video（720P · 4-12s，需设置中心配置账号池）" },
+                    ] as const).map((c) => (
+                      <button
+                        key={c.id}
+                        title={c.title}
+                        onClick={() => {
+                          setVideoChannel(c.id === "agnes" ? "agnes" : "local")
+                          setVideoStyle(c.id === "art" ? "art" : "motion")
+                        }}
+                        className={`text-[10px] border rounded-full px-2 py-0.5 transition-colors ${
+                          videoChannel === "agnes" ? c.id === "agnes" : c.id !== "agnes" && videoStyle === c.id
+                            ? "border-rose-400 bg-rose-50 dark:bg-rose-950/30 text-rose-600 font-semibold"
+                            : "hover:border-rose-300 text-muted-foreground"
+                        }`}
+                      >
+                        {c.label}
+                      </button>
+                    ))}
+                    <Mic className="h-3.5 w-3.5 text-muted-foreground ml-1" />
+                    <select
+                      value={voiceChoice}
+                      onChange={(e) => setVoiceChoice(e.target.value)}
+                      className="h-7 text-[11px] border rounded-md bg-background px-2 max-w-[140px]"
+                      aria-label="口播音色"
+                    >
+                      {TTS_VOICES.map((v) => (
+                        <option key={v.id} value={v.id}>{v.label}</option>
+                      ))}
+                    </select>
+                    <div className="flex items-center gap-1">
+                      {(["9:16", "16:9"] as const).map((a) => (
+                        <button
+                          key={a}
+                          onClick={() => setAspectChoice(a)}
+                          className={`text-[10px] border rounded-full px-2 py-0.5 transition-colors ${aspectChoice === a ? "border-rose-400 bg-rose-50 dark:bg-rose-950/30 text-rose-600 font-semibold" : "hover:border-rose-300 text-muted-foreground"}`}
+                        >
+                          {a === "9:16" ? "竖屏 9:16" : "横屏 16:9"}
+                        </button>
+                      ))}
+                    </div>
+                    <Button size="sm" className="h-7 text-[11px] bg-rose-500 hover:bg-rose-600 text-white" onClick={() => doRenderVideo()} disabled={busy === "render-video"}>
+                      {busy === "render-video" ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Video className="h-3 w-3 mr-1" />}渲染成片 MP4
+                    </Button>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">
+                    {videoChannel === "agnes"
+                      ? "Agnes AI 视频模型：提交 → 轮询 → 下载 → 混音（每账号 1 任务/分钟；失败自动本地兜底）"
+                      : videoStyle === "art"
+                        ? "艺术动画：LLM 把分镜转 clip spec（8 语法×8 色板）→ Canvas 逐帧渲染（Playwright+ffmpeg，风格化强）"
+                        : "商业片：分镜 → 场景卡 + TTS 口播 → ffmpeg 合成 MP4（本地渲染；TTS 不可达自动静音降级，字幕已烧录）"}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* 视频成片卡：渲染进度 / 播放器 / 下载 / 音频模式留痕 */}
+          {videoAsset && videoMeta && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm flex items-center justify-between">
+                  <span className="flex items-center gap-1.5"><Video className="h-3.5 w-3.5 text-rose-500" />视频成片</span>
+                  {videoMeta.stage === "done" && (
+                    <Badge variant="outline" className="text-[9px]">
+                      {videoMeta.seconds}s · {videoMeta.width}×{videoMeta.height} · {videoMeta.sizeBytes ? `${(videoMeta.sizeBytes / 1024 / 1024).toFixed(1)}MB` : ""}
+                    </Badge>
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0 space-y-2">
+                {videoMeta.stage !== "done" && videoMeta.stage !== "error" && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-[10px]">
+                      <span className="flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin text-rose-500" />{VIDEO_STAGE_LABELS[videoMeta.stage] ?? videoMeta.stage}（{videoMeta.sceneDone}/{videoMeta.sceneTotal} 分镜）</span>
+                      <span className="font-semibold">{videoMeta.percent}%</span>
+                    </div>
+                    <div className="h-2 bg-muted rounded-full overflow-hidden">
+                      <div className="h-full bg-rose-500 rounded-full transition-all duration-500" style={{ width: `${videoMeta.percent}%` }} />
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">{videoMeta.aiNote ?? videoMeta.ttsNote ?? "正在渲染…"}</p>
+                  </div>
+                )}
+                {videoMeta.stage === "error" && (
+                  <div className="rounded-lg border border-red-200 bg-red-50/50 dark:bg-red-950/20 px-3 py-2">
+                    <p className="text-[11px] text-red-600">渲染失败：{videoMeta.error}</p>
+                    <Button size="sm" variant="outline" className="h-6 text-[10px] mt-1" onClick={() => doRenderVideo()} disabled={busy === "render-video"}>重试渲染</Button>
+                  </div>
+                )}
+                {videoMeta.stage === "done" && videoAsset.path && (
+                  <>
+                    <video key={videoAsset.id} controls preload="metadata" src={videoAsset.path} className="w-full rounded-lg border bg-black max-h-[480px]" />
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge variant={videoMeta.audioMode === "tts" ? "default" : "secondary"} className={videoMeta.audioMode === "tts" ? "bg-emerald-600" : videoMeta.audioMode === "partial" ? "bg-amber-500" : ""}>
+                        {videoMeta.audioMode === "tts"
+                          ? `${TTS_VOICES.find((v) => v.id === videoMeta.voice)?.label ?? videoMeta.voice} 口播`
+                          : videoMeta.audioMode === "partial"
+                            ? "部分口播（其余静音）"
+                            : "静音降级（字幕可读）"}
+                      </Badge>
+                      <Badge variant="outline" className="text-[9px]">{videoMeta.aspect} · {videoMeta.sceneTotal} 分镜</Badge>
+                      <Badge variant="outline" className="text-[9px]">{videoMeta.channel === "agnes" ? "Agnes AI 模型" : videoMeta.style === "art" ? "艺术动画" : "商业片"}</Badge>
+                      <a href={videoAsset.path} download className="text-[10px] text-amber-600 hover:underline flex items-center gap-0.5">
+                        <Download className="h-3 w-3" />下载 MP4
+                      </a>
+                      <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => doRenderVideo()} disabled={busy === "render-video"}>
+                        {busy === "render-video" ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <RefreshCw className="h-3 w-3 mr-1" />}重新渲染
+                      </Button>
+                    </div>
+                    {videoMeta.audioMode !== "tts" && videoMeta.ttsNote && (
+                      <p className="text-[10px] text-muted-foreground">{videoMeta.ttsNote}</p>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* 排版预览 iframe + 发布结果 */}
+          {latest?.formatted && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm flex items-center justify-between">
+                  <span>微信排版预览（{run.theme} 主题 · section 加固）</span>
+                  <Badge variant="outline" className="text-[9px]">{latest.formatted.length} 字符 HTML</Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0 space-y-2">
+                <div className="rounded-lg border bg-muted/40 overflow-hidden">
+                  <iframe title="wechat-preview" srcDoc={`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{margin:0;padding:8px;background:#e8e8e8;}</style></head><body>${latest.formatted}</body></html>`} className="w-full h-[420px] bg-transparent" />
+                </div>
+                {publishOut && (
+                  <div className={`rounded-lg border px-3 py-2 space-y-1 ${publishOut.level === 1 ? "border-emerald-300 bg-emerald-50/50 dark:bg-emerald-950/20" : "border-amber-300 bg-amber-50/50 dark:bg-amber-950/20"}`}>
+                    <div className="flex items-center gap-1.5">
+                      <Badge className={publishOut.level === 1 ? "bg-emerald-600" : "bg-amber-500"}>Level {publishOut.level}</Badge>
+                      <span className="text-xs font-semibold">{publishOut.levelName}</span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">{publishOut.reason}</p>
+                    <p className="text-[11px]">{publishOut.instruction}</p>
+                  </div>
+                )}
+                {run.publishes.length > 0 && (
+                  <div className="space-y-1">
+                    {run.publishes.map((p) => (
+                      <div key={p.id} className="text-[10px] text-muted-foreground flex items-center gap-1.5">
+                        <Badge variant="secondary" className="text-[8px] px-1 py-0">L{p.level}</Badge>
+                        {p.platform} · {p.levelName} · {p.htmlLength} 字符 · {new Date(p.createdAt).toLocaleString("zh-CN")}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}

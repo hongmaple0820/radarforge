@@ -14,12 +14,19 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AI 资讯雷达 · 基于腾讯元宝搜索的资讯追踪",
+  title: "AI 资讯雷达 · 自媒体工作流平台 2.0",
   description:
-    "AI 资讯雷达：基于腾讯云元宝搜索 SearchPro API 构建的资讯追踪与早报生成应用，支持话题追踪、时效过滤、权威信源与 AI 早报汇总。",
-  keywords: ["元宝搜索", "资讯追踪", "AI早报", "腾讯云", "SearchPro", "Next.js"],
+    "话题雷达 + AI 早报 + Agent 运行时（Skills 热加载 / 工具注册表 / MCP / 插件化模型网关）",
+  keywords: ["AI 资讯雷达", "Agent", "Skills", "MCP", "模型网关", "自媒体工作流"],
+  authors: [{ name: "Z.ai Team" }],
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+  },
+  openGraph: {
+    title: "AI 资讯雷达 · 工作流平台 2.0",
+    description: "Agent 运行时 + 插件化模型网关 + MCP",
+    siteName: "AI 资讯雷达",
+    type: "website",
   },
 };
 
@@ -29,7 +36,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="zh-CN" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >

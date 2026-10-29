@@ -1,89 +1,106 @@
-/**
- * radar-learn —— 编辑飞轮 skill（wewrite「学习我的修改」的自研版）
- *
- * 用户在预览中改稿保存时触发：把「改前 / 改后」交给 LLM 做差异归纳，
- * 提炼成可复用的写作规则，落 LearningRule 表（proposed 状态，用户确认后
- * 变 active，注入后续所有写作）。谨慎升级原则：规则必须来自「真实发生的
- * 修改」，不做过度概括。
- */
+// ============================================================
+// radar-learn —— 编辑飞轮 skill（学 wewrite 谨慎升级策略）
+// 用户改稿 → diff → LLM 提炼候选规则（proposed）
+// 重复出现或用户明确确认才升级 active（宁缺毋滥）
+// ============================================================
 
-import type { ChatMessage } from '@/lib/gateway/types'
-import { extractJson } from '../json'
+import type { ChatMessage } from "@/lib/gateway/types"
 
-export interface LearnResult {
-  rules: Array<{ ruleText: string; examples: Array<{ before: string; after: string }> }>
-  noPattern: boolean
+/** 行级 diff：找出被改的段落（轻量实现，够用） */
+export interface DiffChunk {
+  kind: "changed" | "removed" | "added"
+  before: string
+  after: string
 }
 
-export function buildLearnMessages(args: { before: string; after: string }): ChatMessage[] {
+export function diffMarkdown(before: string, after: string): DiffChunk[] {
+  const a = before.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
+  const b = after.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
+  const chunks: DiffChunk[] = []
+  const setB = new Set(b)
+  const setA = new Set(a)
+  // 变更：前后都存在相似段落
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    if (a[i] !== b[i] && !setB.has(a[i])) {
+      chunks.push({ kind: "changed", before: a[i], after: b[i] })
+    }
+  }
+  // 删除：旧段落完全消失
+  for (const p of a) {
+    if (!setB.has(p) && !chunks.some((c) => c.before === p)) {
+      chunks.push({ kind: "removed", before: p, after: "" })
+    }
+  }
+  // 新增：新段落凭空出现
+  for (const p of b) {
+    if (!setA.has(p) && !chunks.some((c) => c.after === p)) {
+      chunks.push({ kind: "added", before: "", after: p })
+    }
+  }
+  return chunks
+}
+
+export function learnMessages(diff: DiffChunk[]): ChatMessage[] {
+  const pairs = diff
+    .slice(0, 8)
+    .map((c, i) => `【修改 ${i + 1}·${c.kind}】\n原：${c.before.slice(0, 300) || "（无）"}\n改：${c.after.slice(0, 300) || "（删除）"}`)
+    .join("\n\n")
   return [
     {
-      role: 'system',
-      content:
-        '你是写作规则提炼器。对比「改前 / 改后」两版文本，归纳作者（人类编辑）的修改偏好。只输出 JSON，不要解释。',
+      role: "system",
+      content: [
+        "你是一名写作风格分析师。用户修改了自己的 AI 生成文章，请从修改 diff 中提炼「稳定写作规则」。",
+        "规则要求：",
+        "- 每条规则必须是可执行的具体写作指令（句式/结构/用词/排版层面），不是空泛口号",
+        "- 只提炼在修改中清晰可见的倾向，宁缺毋滥",
+        "- 最多 3 条",
+        "严格输出 JSON：",
+        `{ "rules": [ { "rule": "具体规则文本", "rationale": "从哪处修改看出来的一句话依据" } ] }`,
+      ].join("\n"),
     },
-    {
-      role: 'user',
-      content: `对比以下两版文本，回答：这位编辑的修改反映了哪些**可复用的写作规则**？
-
-改前：
-${args.before.slice(0, 6000)}
-
-改后：
-${args.after.slice(0, 6000)}
-
-输出 JSON：
-{
-  "rules": [
-    {
-      "ruleText": "一句话规则（40 字内，可执行，如「数字一律用阿拉伯数字而非汉字」「删除所有『值得注意的是』类填充句」）",
-      "examples": [{ "before": "改前片段（30 字内）", "after": "改后片段（30 字内）" }]
-    }
+    { role: "user", content: pairs },
   ]
 }
 
-要求：
-- 只提炼「重复出现或非常明确」的稳定偏好，宁缺毋滥
-- 一次性措辞润色、个别事实修正不算规则，不要硬凑
-- 如果修改只是无关紧要的微调，输出 {"rules": []}
-- 最多 3 条`,
-    },
-  ]
+export function parseRules(raw: unknown): { rule: string; rationale: string }[] {
+  if (!raw || typeof raw !== "object") return []
+  const arr = (raw as { rules?: unknown }).rules
+  if (!Array.isArray(arr)) return []
+  return arr
+    .map((r) => {
+      const o = r as { rule?: string; rationale?: string }
+      return { rule: String(o?.rule ?? "").trim(), rationale: String(o?.rationale ?? "").trim() }
+    })
+    .filter((r) => r.rule.length > 5 && r.rule.length < 300)
+    .slice(0, 3)
 }
 
-export function parseLearnResult(rawLlm: string): LearnResult {
-  const parsed = extractJson<{ rules?: unknown }>(rawLlm)
-  const rules = Array.isArray(parsed.rules)
-    ? parsed.rules
-        .map((r) => {
-          const obj = r as { ruleText?: unknown; examples?: unknown }
-          const ruleText = typeof obj.ruleText === 'string' ? obj.ruleText.trim() : ''
-          const examples = Array.isArray(obj.examples)
-            ? obj.examples
-                .map((e) => {
-                  const eo = e as { before?: unknown; after?: unknown }
-                  return {
-                    before: String(eo.before ?? '').slice(0, 60),
-                    after: String(eo.after ?? '').slice(0, 60),
-                  }
-                })
-                .filter((e) => e.before || e.after)
-                .slice(0, 3)
-            : []
-          return { ruleText, examples }
-        })
-        .filter((r) => r.ruleText.length >= 4 && r.ruleText.length <= 80)
-        .slice(0, 3)
-    : []
-  return { rules, noPattern: rules.length === 0 }
+// ---------- 相似度（防重复激活） ----------
+
+/** 字符 bigram 集合（轻量中文相似度，够用不引依赖） */
+function bigrams(s: string): Set<string> {
+  const t = s.replace(/[\s。，、；：？！「」（）,.:;!?""'（）]/g, "")
+  const out = new Set<string>()
+  for (let i = 0; i < t.length - 1; i++) out.add(t.slice(i, i + 2))
+  return out
 }
 
-/** 极简字符级差异摘要（供「改了什么」的人话描述，不进 LLM） */
-export function summarizeDiff(before: string, after: string): string {
-  const same = before === after
-  if (same) return '文本未变化'
-  const added = Math.max(0, after.length - before.length)
-  const removed = Math.max(0, before.length - after.length)
-  const pct = before.length === 0 ? 100 : Math.round((Math.abs(after.length - before.length) / before.length) * 100)
-  return `改前 ${before.length} 字 → 改后 ${after.length} 字（${added > 0 ? `+${added}` : ''}${added > 0 && removed > 0 ? ' / ' : ''}${removed > 0 ? `-${removed}` : ''}，幅度约 ${pct}%）`
+/** Jaccard 相似度（0~1） */
+export function similarity(a: string, b: string): number {
+  const A = bigrams(a)
+  const B = bigrams(b)
+  if (A.size === 0 || B.size === 0) return 0
+  let inter = 0
+  for (const g of A) if (B.has(g)) inter++
+  return inter / (A.size + B.size - inter)
+}
+
+/** 在既有规则中找高相似的（阈值 0.55），用于 proposed 确认时防重复激活 */
+export function findSimilar(rule: string, existing: { id: string; rule: string }[], threshold = 0.55): { id: string; rule: string } | null {
+  let best: { id: string; rule: string; score: number } | null = null
+  for (const e of existing) {
+    const score = similarity(rule, e.rule)
+    if (score >= threshold && (!best || score > best.score)) best = { ...e, score }
+  }
+  return best ? { id: best.id, rule: best.rule } : null
 }

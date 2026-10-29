@@ -1,83 +1,93 @@
-/**
- * LLM JSON 输出解析工具
- *
- * prompt 层要求模型输出 JSON，但真实返回常带 ```json 围栏或前后缀说明，
- * 这里用「首个平衡大括号块」策略稳健提取，失败时给出明确错误（不静默）。
- */
+// ============================================================
+// LLM JSON 稳健解析 —— 流水线各级 JSON 产物的统一入口
+// 处理：```json 代码块包裹 / 尾逗号 / 截断 / 前后缀噪声
+// 失败返回 null（调用方自行降级），绝不抛异常炸流水线
+// ============================================================
 
-export class LlmJsonError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'LlmJsonError'
+/** 从 LLM 输出中提取第一个合法 JSON 对象/数组 */
+export function extractJson<T = unknown>(raw: string): T | null {
+  if (!raw) return null
+  let s = raw.trim()
+
+  // 1) 剥 ```json ... ``` 代码块
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  if (fence) s = fence[1].trim()
+
+  // 2) 定位首个 { 或 [
+  const start = s.search(/[{[]/)
+  if (start === -1) return null
+  const open = s[start]
+  const close = open === "{" ? "}" : "]"
+  // 取到最后一个匹配的闭括号（容忍尾随文字）
+  const end = s.lastIndexOf(close)
+  if (end <= start) return null
+  let candidate = s.slice(start, end + 1)
+
+  const tryParse = (text: string): T | null => {
+    try {
+      return JSON.parse(text) as T
+    } catch {
+      return null
+    }
   }
+
+  // 3) 直接解析
+  let out = tryParse(candidate)
+  if (out !== null) return out
+
+  // 4) 修复常见毛病：尾逗号 / 智能引号 key / 单引号包裹值
+  const repaired = candidate
+    .replace(/,\s*([}\]])/g, "$1") // 尾逗号
+    .replace(/[""]([^""：]*?)[""](\s*:)/g, '"$1"$2') // 中文引号 key
+  out = tryParse(repaired)
+  if (out !== null) return out
+
+  // 5) 截断修复：逐字符扫描找最深合法前缀（闭合到顶层）
+  let depth = 0
+  let inStr = false
+  let esc = false
+  for (let i = 0; i < candidate.length; i++) {
+    const c = candidate[i]
+    if (esc) {
+      esc = false
+      continue
+    }
+    if (c === "\\") {
+      if (inStr) esc = true
+      continue
+    }
+    if (c === '"') {
+      inStr = !inStr
+      continue
+    }
+    if (inStr) continue
+    if (c === "{" || c === "[") depth++
+    else if (c === "}" || c === "]") {
+      depth--
+      if (depth === 0) {
+        const prefix = candidate.slice(0, i + 1)
+        const fixed = prefix.replace(/,\s*([}\]]?)$/g, "$1")
+        out = tryParse(fixed) ?? tryParse(prefix)
+        if (out !== null) return out
+      }
+    }
+  }
+  return null
 }
 
-/** 从 LLM 返回文本中提取第一个平衡的 JSON 对象并解析 */
-export function extractJson<T>(raw: string): T {
-  if (!raw || !raw.trim()) throw new LlmJsonError('LLM 返回为空')
-
-  // 优先：```json ... ``` 围栏
-  const fenced = /```(?:json)?\s*\n?([\s\S]*?)\n?```/.exec(raw)
-  const candidates: string[] = []
-  if (fenced?.[1]) candidates.push(fenced[1].trim())
-
-  // 兜底：首个平衡大括号块
-  const start = raw.indexOf('{')
-  if (start >= 0) {
-    let depth = 0
-    let inStr = false
-    let esc = false
-    for (let i = start; i < raw.length; i++) {
-      const ch = raw[i]
-      if (esc) {
-        esc = false
-        continue
-      }
-      if (ch === '\\') {
-        esc = true
-        continue
-      }
-      if (ch === '"') inStr = !inStr
-      if (inStr) continue
-      if (ch === '{') depth++
-      else if (ch === '}') {
-        depth--
-        if (depth === 0) {
-          candidates.push(raw.slice(start, i + 1))
-          break
-        }
-      }
-    }
+/** 安全读取嵌套字段 */
+export function pick(obj: unknown, path: string): unknown {
+  let cur: unknown = obj
+  for (const key of path.split(".")) {
+    if (cur == null || typeof cur !== "object") return undefined
+    cur = (cur as Record<string, unknown>)[key]
   }
-
-  // 最后尝试整体
-  candidates.push(raw.trim())
-
-  for (const c of candidates) {
-    try {
-      return JSON.parse(c) as T
-    } catch {
-      /* 尝试下一个候选 */
-    }
-  }
-  throw new LlmJsonError(`无法从 LLM 输出中解析 JSON（前 120 字符：${raw.slice(0, 120)}…）`)
+  return cur
 }
 
-/** 数组也支持（部分输出是 [...] 顶层形态） */
-export function extractJsonArray<T>(raw: string): T[] {
-  const arr = /```(?:json)?\s*\n?([\s\S]*?)\n?```/.exec(raw)?.[1]?.trim() ?? raw.trim()
-  const start = arr.indexOf('[')
-  const end = arr.lastIndexOf(']')
-  if (start >= 0 && end > start) {
-    try {
-      return JSON.parse(arr.slice(start, end + 1)) as T[]
-    } catch {
-      /* fallthrough */
-    }
-  }
-  try {
-    return JSON.parse(arr) as T[]
-  } catch {
-    throw new LlmJsonError(`无法解析 JSON 数组（前 120 字符：${raw.slice(0, 120)}…）`)
-  }
+/** 数字钳制 */
+export function clampNum(v: unknown, min: number, max: number, dflt: number): number {
+  const n = typeof v === "number" ? v : Number(v)
+  if (!Number.isFinite(n)) return dflt
+  return Math.min(max, Math.max(min, n))
 }

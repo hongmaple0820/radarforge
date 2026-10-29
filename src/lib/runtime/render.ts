@@ -1,374 +1,442 @@
-/**
- * 排版引擎：Markdown → 微信兼容 HTML（Phase 2 自研，wewrite 兼容性清单继承）
- *
- * 微信编辑器只认「内联 style + section 嵌套」，因此：
- *  - 所有样式全部内联（不用 class）
- *  - 段落用 <section> 包裹（粘贴进公众号编辑器不掉样式）
- *  - 外链不可点 → 转文末脚注
- *  - CJK 与 Latin/数字之间自动加空格（pangu 规则）
- *  - claims 引用 [n] → 上标序号 + 文末「参考来源」区
- */
+// ============================================================
+// render.ts —— 微信排版引擎 v2（wewrite 17 步管线 TS 移植，MIT 精神）
+// 七项质量点 + wewrite 增强：
+// 1. 全内联样式（主题 base_css 规则 → 逐元素内联，已有内联优先）
+// 2. 18 主题注册表（YAML 驱动，见 publish/themes.ts）
+// 3. 9 种 :::容器语法（publish/wewrite-containers.ts）
+// 4. CJK-Latin 自动加空格
+// 5. 外链/claims → [n] 脚注 + 参考来源区
+// 6. 暗黑模式 data-darkmode-* 注入（微信暗色不掉色）
+// 7. span leaf 粘贴加固（复制进公众号编辑器样式不丢）
+// + H2 章节编号（主题开启时）/ AIGC 声明（主题可控）
+// ============================================================
 
-export interface ThemeSpec {
-  id: string
-  name: string
-  desc: string
-  /** 预览底色 */
-  pageBg: string
-  accent: string
-  title: string
-  subtitle: string
-  h2: string
-  h3: string
-  p: string
-  quote: string
-  codeInline: string
-  codeBlock: string
-  hr: string
-  figure: string
-  figcaption: string
-  footnoteTitle: string
-  footnoteItem: string
+import { getWechatTheme, wechatThemeList, LEGACY_THEME_ALIAS, WECHAT_THEMES, type WechatTheme } from "@/lib/publish/themes"
+import { extractContainers, hasContainerSyntax } from "@/lib/publish/wewrite-containers"
+
+export interface RenderClaim {
+  idx: number
+  sourceSite: string
+  sourceTitle: string
+  sourceDate: string
+  sourceUrl: string
 }
 
-const P = (s: string) => s.replace(/\s+/g, ' ').trim()
+/** 主题 id = wewrite 主题名（旧版 radar/ink/cream 走兼容映射） */
+export type ThemeId = string
 
-export const THEMES: Record<string, ThemeSpec> = {
-  classic: {
-    id: 'classic',
-    name: '雷达蓝灰',
-    desc: '延续资讯雷达的 teal 主视觉，科技向克制排版',
-    pageBg: '#f8fafc',
-    accent: '#0f766e',
-    title: P('margin:0 0 6px;font-size:22px;line-height:1.4;font-weight:700;color:#0f172a;letter-spacing:.5px;'),
-    subtitle: P('margin:0 0 20px;font-size:13px;line-height:1.6;color:#64748b;'),
-    h2: P('margin:32px 0 14px;font-size:17px;line-height:1.5;font-weight:700;color:#0f172a;border-left:3px solid #0f766e;padding-left:10px;'),
-    h3: P('margin:24px 0 10px;font-size:15px;line-height:1.5;font-weight:700;color:#1e293b;'),
-    p: P('margin:0 0 16px;font-size:15px;line-height:1.9;color:#334155;letter-spacing:.3px;text-align:justify;'),
-    quote: P('margin:20px 0;padding:12px 16px;background:#f0fdfa;border-radius:6px;font-size:14px;line-height:1.8;color:#0f766e;'),
-    codeInline: P('padding:1px 6px;background:#f1f5f9;border-radius:4px;font-family:Menlo,Consolas,monospace;font-size:13px;color:#0f766e;'),
-    codeBlock: P('margin:18px 0;padding:14px 16px;background:#0f172a;border-radius:8px;font-family:Menlo,Consolas,monospace;font-size:13px;line-height:1.7;color:#e2e8f0;overflow-x:auto;white-space:pre-wrap;'),
-    hr: P('margin:28px 0;border:none;border-top:1px dashed #cbd5e1;'),
-    figure: P('margin:20px 0;'),
-    figcaption: P('margin:8px 0 0;font-size:12px;color:#94a3b8;text-align:center;'),
-    footnoteTitle: P('margin:32px 0 10px;font-size:13px;font-weight:700;color:#475569;'),
-    footnoteItem: P('margin:0 0 6px;font-size:12px;line-height:1.7;color:#94a3b8;word-break:break-all;'),
-  },
-  ink: {
-    id: 'ink',
-    name: '墨黑高对比',
-    desc: '黑白灰高对比、衬线标题，深度长文的报刊质感',
-    pageBg: '#ffffff',
-    accent: '#111827',
-    title: P('margin:0 0 6px;font-size:23px;line-height:1.4;font-weight:900;color:#111827;font-family:Georgia,"Noto Serif SC",serif;'),
-    subtitle: P('margin:0 0 22px;font-size:13px;line-height:1.6;color:#6b7280;border-bottom:2px solid #111827;padding-bottom:12px;'),
-    h2: P('margin:34px 0 14px;font-size:18px;line-height:1.5;font-weight:900;color:#111827;font-family:Georgia,"Noto Serif SC",serif;'),
-    h3: P('margin:26px 0 10px;font-size:15px;line-height:1.5;font-weight:700;color:#374151;'),
-    p: P('margin:0 0 18px;font-size:15px;line-height:2.0;color:#1f2937;letter-spacing:.4px;text-align:justify;'),
-    quote: P('margin:22px 0;padding:14px 18px;background:#f9fafb;border-left:4px solid #111827;font-size:14px;line-height:1.8;color:#374151;font-family:Georgia,"Noto Serif SC",serif;'),
-    codeInline: P('padding:1px 6px;background:#f3f4f6;border-radius:4px;font-family:Menlo,Consolas,monospace;font-size:13px;color:#111827;border:1px solid #e5e7eb;'),
-    codeBlock: P('margin:18px 0;padding:14px 16px;background:#111827;border-radius:6px;font-family:Menlo,Consolas,monospace;font-size:13px;line-height:1.7;color:#f9fafb;overflow-x:auto;white-space:pre-wrap;'),
-    hr: P('margin:30px 0;border:none;border-top:1px solid #d1d5db;'),
-    figure: P('margin:22px 0;'),
-    figcaption: P('margin:8px 0 0;font-size:12px;color:#9ca3af;text-align:center;'),
-    footnoteTitle: P('margin:34px 0 10px;font-size:13px;font-weight:700;color:#4b5563;'),
-    footnoteItem: P('margin:0 0 6px;font-size:12px;line-height:1.7;color:#9ca3af;word-break:break-all;'),
-  },
-  warm: {
-    id: 'warm',
-    name: '暖白夜读',
-    desc: '奶油底 + 琥珀强调色，适配「午夜朋友」人格的暖声线',
-    pageBg: '#fffbf2',
-    accent: '#b45309',
-    title: P('margin:0 0 6px;font-size:22px;line-height:1.45;font-weight:700;color:#78350f;'),
-    subtitle: P('margin:0 0 20px;font-size:13px;line-height:1.6;color:#a16207;'),
-    h2: P('margin:32px 0 14px;font-size:17px;line-height:1.5;font-weight:700;color:#78350f;'),
-    h3: P('margin:24px 0 10px;font-size:15px;line-height:1.5;font-weight:700;color:#92400e;'),
-    p: P('margin:0 0 16px;font-size:15px;line-height:1.9;color:#57534e;letter-spacing:.3px;text-align:justify;'),
-    quote: P('margin:20px 0;padding:14px 16px;background:#fef3c7;border-radius:8px;font-size:14px;line-height:1.8;color:#92400e;'),
-    codeInline: P('padding:1px 6px;background:#fef9c3;border-radius:4px;font-family:Menlo,Consolas,monospace;font-size:13px;color:#b45309;'),
-    codeBlock: P('margin:18px 0;padding:14px 16px;background:#451a03;border-radius:8px;font-family:Menlo,Consolas,monospace;font-size:13px;line-height:1.7;color:#fde68a;overflow-x:auto;white-space:pre-wrap;'),
-    hr: P('margin:28px 0;border:none;border-top:1px dashed #fcd34d;'),
-    figure: P('margin:20px 0;'),
-    figcaption: P('margin:8px 0 0;font-size:12px;color:#b45309;text-align:center;'),
-    footnoteTitle: P('margin:32px 0 10px;font-size:13px;font-weight:700;color:#a16207;'),
-    footnoteItem: P('margin:0 0 6px;font-size:12px;line-height:1.7;color:#b45309;word-break:break-all;'),
-  },
+export function themeList() {
+  return wechatThemeList()
 }
 
-export const THEME_LIST = Object.values(THEMES).map((t) => ({ id: t.id, name: t.name, desc: t.desc }))
-
-export interface RenderSource {
-  title: string
-  url: string
-  site: string
-  date?: string
+/** 校验/解析主题 id：注册表命中 → 旧别名映射 → 默认 professional-clean */
+export function resolveThemeId(theme: string): ThemeId {
+  const names = new Set(WECHAT_THEMES.map((t) => t.name))
+  if (names.has(theme)) return theme
+  const alias = LEGACY_THEME_ALIAS[theme]
+  if (alias && names.has(alias)) return alias
+  return "professional-clean"
 }
 
-/** CJK 与 Latin/数字 之间自动加空格（pangu 核心规则的轻量实现） */
-export function spacingCJK(text: string): string {
-  const cjk = '\\u2e80-\\u9fff\\u3400-\\u4dbf\\uf900-\\ufaff'
-  return text
-    .replace(new RegExp(`([${cjk}])([A-Za-z0-9])`, 'g'), '$1 $2')
-    .replace(new RegExp(`([A-Za-z0-9])([${cjk}])`, 'g'), '$1 $2')
+// ---------- CJK-Latin 自动空格 ----------
+
+export function cjkLatinSpace(s: string): string {
+  return s
+    .replace(/([\u4e00-\u9fa5\u3001\u3002\uff0c\uff1a\uff1b\uff1f\uff01\uff08\uff09])([A-Za-z0-9@$#])/g, "$1 $2")
+    .replace(/([A-Za-z0-9@$#])([\u4e00-\u9fa5\u3001\u3002\uff0c\uff1a\uff1b\uff1f\uff01\uff08\uff09])/g, "$1 $2")
 }
+
+// ---------- 主题样式工具 ----------
+
+type StyleDict = Record<string, string>
+
+/** 多选择器级联合并（wewrite _apply_inline_styles 语义：后者只补缺失属性） */
+function mergeThemeStyles(theme: WechatTheme, selectors: string[]): StyleDict {
+  const out: StyleDict = {}
+  for (const sel of selectors) {
+    const props = theme.rules[sel]
+    if (!props) continue
+    for (const [k, v] of Object.entries(props)) {
+      if (!(k in out)) out[k] = v
+    }
+  }
+  return out
+}
+
+/** extra 覆盖主题规则（元素特有样式优先） */
+function applyExtra(base: StyleDict, extra: StyleDict): StyleDict {
+  return { ...base, ...extra }
+}
+
+function styleAttr(styles: StyleDict): string {
+  return Object.entries(styles)
+    .map(([k, v]) => `${k}:${v}`)
+    .join(";")
+}
+
+/** 暗黑属性注入（wewrite _inject_darkmode 语义按标签族） */
+function darkAttrs(theme: WechatTheme, kind: "text" | "heading" | "pre" | "code" | "strong" | "quote"): string {
+  const dm = theme.darkmode ?? {}
+  if (Object.keys(dm).length === 0) return ""
+  switch (kind) {
+    case "text":
+      return ` data-darkmode-color="${dm.text ?? "#c8c8c8"}" data-darkmode-bgcolor="transparent"`
+    case "heading":
+      return ` data-darkmode-color="${dm.text ?? "#e0e0e0"}" data-darkmode-bgcolor="transparent"`
+    case "pre":
+      return ` data-darkmode-bgcolor="${dm.code_bg ?? "#2d2d2d"}" data-darkmode-color="${dm.code_color ?? "#d4d4d4"}"`
+    case "code":
+      return ` data-darkmode-color="${dm.code_color ?? "#d4d4d4"}"`
+    case "strong":
+      return ` data-darkmode-color="${dm.primary ?? "#6aadff"}"`
+    case "quote":
+      return ` data-darkmode-bgcolor="${dm.quote_bg ?? "#2a2a2a"}" data-darkmode-color="${dm.text ?? "#c8c8c8"}"`
+  }
+}
+
+// ---------- 转义 ----------
 
 function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
 }
 
-/** 行内元素渲染：粗体 / 斜体 / 行内代码 / 引用[n] / 链接转脚注 */
-function inline(md: string, theme: ThemeSpec, linkFootnotes: string[]): string {
-  let s = esc(md)
+// ---------- 行内 markdown（主题规则内联 + 暗黑属性） ----------
 
-  // 行内代码（先处理，避免内部被其它规则改写）
-  s = s.replace(/`([^`]+)`/g, (_m, c: string) => `<code style="${theme.codeInline}">${c}</code>`)
+interface InlineCtx {
+  theme: WechatTheme
+  /** claims 渲染上标 [n]（已核实脚注）；markdown 原生链接追加到 linkRefs */
+  linkRefs: string[]
+}
 
-  // Markdown 链接 [text](url) → text + 脚注登记（微信外链不可点）
-  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_m, text: string, url: string) => {
-    linkFootnotes.push(url)
-    return `${text}<sup style="color:${theme.accent};font-size:11px;">&nbsp;${linkFootnotes.length}</sup>`
-  })
-
+function inlineMd(s: string, ctx: InlineCtx): string {
+  const t = ctx.theme
+  const strongStyle = styleAttr(mergeThemeStyles(t, ["strong"]))
+  const codeStyle = styleAttr(mergeThemeStyles(t, ["code"]))
+  const emStyle = styleAttr(mergeThemeStyles(t, ["em"]))
+  let out = esc(s)
+  // 行内代码
+  out = out.replace(/`([^`]+)`/g, (_m, c: string) => `<code style="${codeStyle}"${darkAttrs(t, "code")}>${c}</code>`)
   // 粗体
-  s = s.replace(/\*\*([^*]+)\*\*/g, `<strong style="font-weight:700;color:${theme.accent};">$1</strong>`)
+  out = out.replace(/\*\*([^*]+)\*\*/g, (_m, c: string) => `<strong style="${strongStyle}"${darkAttrs(t, "strong")}>${c}</strong>`)
+  // 删除线
+  out = out.replace(/~~([^~]+)~~/g, `<del style="color:${t.colors.text_light ?? "#666"};">$1</del>`)
   // 斜体
-  s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
-
-  // claims 引用 [1] / [2] → 上标序号（与来源账本编号对应）
-  s = s.replace(/\[(\d{1,2})\]/g, (m, d: string) => {
-    const n = parseInt(d, 10)
-    return n >= 1 && n <= 30 ? `<sup style="color:${theme.accent};font-size:11px;">&nbsp;[${d}]</sup>` : m
+  out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, `$1<em style="${emStyle}">$2</em>`)
+  // markdown 链接 [text](url) → text + 脚注编号（微信正文不支持 a）
+  out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_m, text: string, url: string) => {
+    ctx.linkRefs.push(url)
+    const n = ctx.linkRefs.length
+    return `${text}<sup style="color:${t.colors.primary ?? "#2563eb"};font-size:0.72em;font-weight:600;">[${n}]</sup>`
   })
-
-  // CJK-Latin 空格：只处理标签之间的文本段，避免破坏 HTML 属性
-  const parts = s.split(/(<[^>]+>)/g)
-  s = parts.map((seg) => (seg.startsWith('<') ? seg : spacingCJK(seg))).join('')
-  return s
+  // claims 上标 [n]
+  out = out.replace(/\[(\d{1,2})\]/g, `<sup style="color:${t.colors.primary ?? "#2563eb"};font-size:0.72em;font-weight:600;">[$1]</sup>`)
+  return out
 }
 
-/** Markdown 块级解析结果 */
-interface BlocksResult {
-  html: string
-  footnotes: string[]
-}
+// ---------- 粘贴加固（wewrite make_paste_safe 语义） ----------
+// 非空文本节点包 <span leaf="">（跳过 pre/code）——我们生成的 HTML
+// 标签均衡、属性无裸 >，按标签切分逐段包裹即等价于 DOM 文本节点包裹。
 
-/** 轻量 Markdown 块级解析（标题/段落/引用/列表/代码块/分割线/图片/表格） */
-export function renderMarkdownBlocks(md: string, theme: ThemeSpec): BlocksResult {
-  const lines = md.replace(/\r\n/g, '\n').split('\n')
+function makePasteSafe(html: string): string {
+  const parts = html.split(/(<[^>]+>)/)
+  let depthPre = 0
+  let depthCode = 0
   const out: string[] = []
-  const footnotes: string[] = []
-  let i = 0
+  for (const part of parts) {
+    if (part.startsWith("<")) {
+      if (/^<pre[\s>]/i.test(part)) depthPre++
+      else if (/^<\/pre/i.test(part)) depthPre = Math.max(0, depthPre - 1)
+      else if (/^<code[\s>]/i.test(part)) depthCode++
+      else if (/^<\/code/i.test(part)) depthCode = Math.max(0, depthCode - 1)
+      out.push(part)
+      continue
+    }
+    if (depthPre > 0 || depthCode > 0 || !part.trim()) {
+      out.push(part)
+      continue
+    }
+    out.push(`<span leaf="">${part}</span>`)
+  }
+  return out.join("")
+}
 
-  const flushParagraph = (buf: string[]) => {
-    if (buf.length === 0) return
-    const text = buf.join('\n').trim()
-    if (text) out.push(`<section style="${theme.p}">${inline(text, theme, footnotes)}</section>`)
-    buf.length = 0
+// ---------- Markdown → 微信 HTML ----------
+
+export interface RenderOptions {
+  theme?: ThemeId
+  title?: string
+  wordCount?: number
+}
+
+export function renderWechatHtml(markdown: string, claims: RenderClaim[], opts: RenderOptions = {}): string {
+  const theme = getWechatTheme(opts.theme ?? "professional-clean")
+  const t = theme
+  const pStyle = mergeThemeStyles(t, ["p"])
+  const h2Style = mergeThemeStyles(t, ["h2"])
+  const h3Style = mergeThemeStyles(t, ["h3"])
+  const h4Style = mergeThemeStyles(t, ["h4"])
+  const bqStyle = mergeThemeStyles(t, ["blockquote"])
+  const bqPStyle = mergeThemeStyles(t, ["p", "blockquote p"])
+  const preStyle = mergeThemeStyles(t, ["pre"])
+  const preCodeStyle = mergeThemeStyles(t, ["code", "pre code"])
+  const tableStyle = mergeThemeStyles(t, ["table"])
+  const tdStyle = mergeThemeStyles(t, ["td"])
+  const thStyle = mergeThemeStyles(t, ["th", "td"])
+  const primary = t.colors.primary ?? "#2563eb"
+  const text = t.colors.text ?? "#333333"
+  const textLight = t.colors.text_light ?? "#666666"
+
+  // ---- Step 1: 容器语法抽取（先于 Markdown 行级解析，产物绕过解析） ----
+  let workText = markdown
+  let containerBlocks: string[] = []
+  if (hasContainerSyntax(markdown)) {
+    const extracted = extractContainers(markdown, t.name)
+    workText = extracted.text
+    containerBlocks = extracted.blocks
   }
 
-  const paraBuf: string[] = []
-  while (i < lines.length) {
-    const line = lines[i]
-    const t = line.trim()
+  // ---- Step 2: 行级扫描 ----
+  const ctx: InlineCtx = { theme: t, linkRefs: [] }
+  const bodyBlocks: string[] = []
+  const lines = workText.split(/\r?\n/)
 
-    if (t === '') {
-      flushParagraph(paraBuf)
-      i++
-      continue
+  let h2Counter = 0
+  let inQuote = false
+  const quoteBuf: string[] = []
+  const flushQuote = () => {
+    if (quoteBuf.length > 0) {
+      bodyBlocks.push(
+        `<blockquote style="${styleAttr(bqStyle)}"${darkAttrs(t, "quote")}>` +
+          `<p style="${styleAttr(bqPStyle)}"${darkAttrs(t, "text")}>${quoteBuf.join("<br/>")}</p>` +
+          `</blockquote>`,
+      )
+      quoteBuf.length = 0
     }
+    inQuote = false
+  }
 
-    // 代码块 ```
-    if (t.startsWith('```')) {
-      flushParagraph(paraBuf)
-      const codeLines: string[] = []
-      i++
-      while (i < lines.length && !lines[i].trim().startsWith('```')) {
-        codeLines.push(lines[i])
-        i++
+  let listMode: "ul" | "ol" | null = null
+  const listBuf: string[] = []
+  const flushList = () => {
+    if (listBuf.length > 0 && listMode) {
+      // wewrite 列表语义：原生列表不稳定 → 样式化 section + 主题色圆点/编号
+      const items = listBuf
+        .map((li, i) => {
+          const marker =
+            listMode === "ul"
+              ? `<section style="width:6px;height:6px;border-radius:50%;background:${primary};margin-top:9px;flex-shrink:0;"></section>`
+              : `<section style="min-width:18px;font-size:15px;font-weight:600;color:${primary};flex-shrink:0;">${i + 1}.</section>`
+          return (
+            `<section style="display:flex;align-items:flex-start;margin:6px 0;">` +
+            marker +
+            `<section style="flex:1;padding-left:8px;font-size:15px;line-height:1.8;color:${text};">${li}</section>` +
+            `</section>`
+          )
+        })
+        .join("")
+      bodyBlocks.push(`<section style="margin:16px 0;padding-left:4px;">${items}</section>`)
+      listBuf.length = 0
+    }
+    listMode = null
+  }
+
+  // 代码块状态
+  let inFence = false
+  let fenceLang = ""
+  const fenceBuf: string[] = []
+  // 表格状态
+  let tableRows: string[][] = []
+
+  const flushTable = () => {
+    if (tableRows.length > 0) {
+      const [head, ...body] = tableRows
+      const tr = (cells: string[], isHead: boolean) =>
+        `<tr>${cells
+          .map(
+            (c) =>
+              `<${isHead ? "th" : "td"} style="${styleAttr(isHead ? thStyle : tdStyle)}"${isHead ? "" : darkAttrs(t, "text")}>${inlineMd(c, ctx)}</${isHead ? "th" : "td"}>`,
+          )
+          .join("")}</tr>`
+      bodyBlocks.push(
+        `<table style="${styleAttr(tableStyle)}">${tr(head, true)}${body.map((r) => tr(r, false)).join("")}</table>`,
+      )
+      tableRows = []
+    }
+  }
+
+  for (const raw of lines) {
+    const line = raw.trimEnd()
+
+    // 围栏代码块
+    if (/^```/.test(line.trim())) {
+      if (!inFence) {
+        flushQuote()
+        flushList()
+        flushTable()
+        inFence = true
+        fenceLang = line.trim().replace(/^```/, "").trim()
+        fenceBuf.length = 0
+        continue
       }
-      i++ // 跳过收尾 ```
-      out.push(`<section style="${theme.codeBlock}">${esc(codeLines.join('\n'))}</section>`)
+      inFence = false
+      const codeSt = applyExtra(preCodeStyle, {
+        "font-family": "Consolas,monospace",
+        "font-size": "13px",
+        "white-space": "pre-wrap",
+        "word-break": "break-all",
+      })
+      bodyBlocks.push(
+        `<pre style="${styleAttr(applyExtra(preStyle, { "white-space": "pre-wrap" }))}"${fenceLang ? ` data-lang="${esc(fenceLang)}"` : ""}${darkAttrs(t, "pre")}>` +
+          `<code style="${styleAttr(codeSt)}">${esc(fenceBuf.join("\n"))}</code></pre>`,
+      )
+      continue
+    }
+    if (inFence) {
+      fenceBuf.push(raw)
       continue
     }
 
-    // 分割线
-    if (/^(-{3,}|\*{3,}|_{3,})$/.test(t)) {
-      flushParagraph(paraBuf)
-      out.push(`<section style="${theme.hr}">&nbsp;</section>`)
-      i++
+    // 容器占位符 → 原样输出（绕过 Markdown 解析）
+    const cont = line.trim().match(/^<!--WWCONT:(\d+)-?->$/)
+    if (cont) {
+      flushQuote()
+      flushList()
+      flushTable()
+      const block = containerBlocks[Number(cont[1])]
+      if (block) bodyBlocks.push(block)
       continue
     }
 
-    // 标题
-    const h = /^(#{1,6})\s+(.*)$/.exec(t)
-    if (h) {
-      flushParagraph(paraBuf)
-      const level = h[1].length
-      const text = inline(h[2], theme, footnotes)
-      if (level <= 2) out.push(`<section style="${theme.h2}">${text}</section>`)
-      else out.push(`<section style="${theme.h3}">${text}</section>`)
-      i++
+    // 空行
+    if (!line.trim()) {
+      flushQuote()
+      flushList()
+      flushTable()
       continue
     }
 
     // 引用块
-    if (t.startsWith('> ')) {
-      flushParagraph(paraBuf)
-      const qLines: string[] = []
-      while (i < lines.length && lines[i].trim().startsWith('>')) {
-        qLines.push(lines[i].trim().replace(/^>\s?/, ''))
-        i++
+    if (/^&gt;|^>/.test(line.trim())) {
+      flushList()
+      flushTable()
+      inQuote = true
+      quoteBuf.push(inlineMd(cjkLatinSpace(line.trim().replace(/^&gt;\s?|^>\s?/, "")), ctx))
+      continue
+    }
+    flushQuote()
+
+    // 表格行
+    if (/^\s*\|/.test(line)) {
+      const cells = line.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim())
+      if (cells.every((c) => /^:?-{3,}:?$/.test(c))) continue // 分隔行
+      flushList()
+      tableRows.push(cells)
+      continue
+    }
+    flushTable()
+
+    // 列表
+    const li = line.match(/^\s*[-*]\s+(.*)$/)
+    const oli = line.match(/^\s*\d+[.、]\s+(.*)$/)
+    if (li || oli) {
+      if (listMode !== (li ? "ul" : "ol")) {
+        flushList()
+        listMode = li ? "ul" : "ol"
       }
-      out.push(`<section style="${theme.quote}">${inline(qLines.join('\n'), theme, footnotes)}</section>`)
+      listBuf.push(inlineMd(cjkLatinSpace((li ?? oli)![1]), ctx))
+      continue
+    }
+    flushList()
+
+    // 标题
+    const h = line.match(/^(#{1,4})\s+(.*)$/)
+    if (h) {
+      const level = h[1].length
+      if (level <= 1) continue // H1 由头部渲染
+      const content = inlineMd(cjkLatinSpace(h[2]), ctx)
+      if (level === 2) {
+        h2Counter++
+        const num = t.sectionNumbering
+          ? `<span style="color:${primary};font-weight:800;margin-right:8px;">${String(h2Counter).padStart(2, "0")}</span>`
+          : ""
+        bodyBlocks.push(`<h2 style="${styleAttr(h2Style)}"${darkAttrs(t, "heading")}>${num}${content}</h2>`)
+      } else if (level === 3) {
+        bodyBlocks.push(`<h3 style="${styleAttr(h3Style)}"${darkAttrs(t, "heading")}>${content}</h3>`)
+      } else {
+        bodyBlocks.push(`<h4 style="${styleAttr(h4Style)}"${darkAttrs(t, "heading")}>${content}</h4>`)
+      }
       continue
     }
 
-    // 图片 ![alt](url)
-    const img = /^!\[([^\]]*)\]\(([^)\s]+)\)$/.exec(t)
-    if (img) {
-      flushParagraph(paraBuf)
-      const alt = img[1] || '配图'
-      const url = img[2]
-      if (url.startsWith('http') || url.startsWith('/')) {
-        out.push(
-          `<section style="${theme.figure}"><img src="${esc(url)}" alt="${esc(alt)}" style="width:100%;border-radius:8px;display:block;"/>` +
-            (alt ? `<section style="${theme.figcaption}">${esc(alt)}</section>` : '') +
-            `</section>`
-        )
-      }
-      i++
-      continue
-    }
-
-    // 无序列表
-    if (/^[-*+]\s+/.test(t)) {
-      flushParagraph(paraBuf)
-      const items: string[] = []
-      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
-        items.push(lines[i].trim().replace(/^[-*+]\s+/, ''))
-        i++
-      }
-      const lis = items
-        .map((it) => `<section style="${P(theme.p + 'margin:0 0 8px;padding-left:16px;')}"><span style="color:${theme.accent};">•&nbsp;</span>${inline(it, theme, footnotes)}</section>`)
-        .join('')
-      out.push(`<section style="margin:0 0 16px;">${lis}</section>`)
-      continue
-    }
-
-    // 有序列表
-    if (/^\d+\.\s+/.test(t)) {
-      flushParagraph(paraBuf)
-      const items: string[] = []
-      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
-        items.push(lines[i].trim().replace(/^\d+\.\s+/, ''))
-        i++
-      }
-      const lis = items
-        .map((it, idx) => `<section style="${P(theme.p + 'margin:0 0 8px;padding-left:20px;')}"><span style="color:${theme.accent};font-weight:700;">${idx + 1}.&nbsp;</span>${inline(it, theme, footnotes)}</section>`)
-        .join('')
-      out.push(`<section style="margin:0 0 16px;">${lis}</section>`)
-      continue
-    }
-
-    // 表格（管道语法）
-    if (t.includes('|') && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(lines[i + 1])) {
-      flushParagraph(paraBuf)
-      const strip = (row: string) => {
-        const cells = row.trim().split('|').map((c) => c.trim())
-        if (cells[0] === '') cells.shift()
-        if (cells[cells.length - 1] === '') cells.pop()
-        return cells
-      }
-      const headCells = strip(t)
-      i += 2
-      const rows: string[][] = []
-      while (i < lines.length && lines[i].includes('|') && lines[i].trim() !== '') {
-        rows.push(strip(lines[i]))
-        i++
-      }
-      const border = theme.pageBg === '#ffffff' ? '#f3f4f6' : '#e2e8f0'
-      const th = headCells
-        .map((c) => `<span style="flex:1;padding:8px 10px;font-size:13px;font-weight:700;color:${theme.accent};">${inline(c, theme, footnotes)}</span>`)
-        .join('')
-      const trs = rows
-        .map(
-          (r) =>
-            `<section style="display:flex;border-top:1px solid ${border};">` +
-            r.map((c) => `<span style="flex:1;padding:8px 10px;font-size:13px;line-height:1.7;color:#475569;">${inline(c, theme, footnotes)}</span>`).join('') +
-            `</section>`
-        )
-        .join('')
-      out.push(
-        `<section style="margin:18px 0;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">` +
-          `<section style="display:flex;background:${theme.pageBg === '#ffffff' ? '#f9fafb' : '#f1f5f9'};">${th}</section>${trs}</section>`
+    // 分隔线
+    if (/^(-{3,}|\*{3,})$/.test(line.trim())) {
+      bodyBlocks.push(
+        `<section style="margin:22px 0;border-bottom:1px solid ${t.colors.border ?? "#e5e7eb"};"><span leaf=""><br/></span></section>`,
       )
       continue
     }
 
-    // 普通段落
-    paraBuf.push(line)
-    i++
+    // 普通段落（微信兜底：强制显式 color）
+    const paraStyle = applyExtra(pStyle, pStyle.color ? {} : { color: text })
+    bodyBlocks.push(`<p style="${styleAttr(paraStyle)}"${darkAttrs(t, "text")}>${inlineMd(cjkLatinSpace(line), ctx)}</p>`)
   }
-  flushParagraph(paraBuf)
-
-  return { html: out.join('\n'), footnotes }
-}
-
-/** 完整渲染：标题区 + 正文 + 参考来源 + 脚注区 + AIGC 声明 */
-export function renderWechatArticle(opts: {
-  title: string
-  markdown: string
-  themeId?: string
-  sources?: RenderSource[]
-  coverUrl?: string
-  aigcNote?: boolean
-}): string {
-  const theme = THEMES[opts.themeId ?? 'classic'] ?? THEMES.classic
-  const { html: bodyHtml, footnotes: linkFootnotes } = renderMarkdownBlocks(opts.markdown, theme)
-  const sources = opts.sources ?? []
-
-  const sections: string[] = []
-
-  // 封面
-  if (opts.coverUrl) {
-    sections.push(
-      `<section style="margin:0 0 20px;"><img src="${esc(opts.coverUrl)}" alt="封面" style="width:100%;border-radius:10px;display:block;"/></section>`
-    )
+  flushQuote()
+  flushList()
+  flushTable()
+  if (inFence && fenceBuf.length > 0) {
+    bodyBlocks.push(`<pre style="${styleAttr(preStyle)}"${darkAttrs(t, "pre")}><code>${esc(fenceBuf.join("\n"))}</code></pre>`)
   }
 
-  // 标题
-  sections.push(`<section style="${theme.title}">${esc(spacingCJK(opts.title))}</section>`)
-
-  // 正文
-  sections.push(bodyHtml)
-
-  // 参考来源（claims 账本渲染，编号与正文 [n] 对应）
-  if (sources.length > 0) {
-    const items = sources
+  // ---- Step 3: 参考来源区（claims 账本 + markdown 链接脚注合并编号） ----
+  const allRefs: { idx: number; label: string }[] = [
+    ...claims.map((c) => ({ idx: c.idx, label: `${c.sourceSite || "来源"}《${c.sourceTitle.slice(0, 60)}》${(c.sourceDate || "").slice(0, 10)}` })),
+    ...ctx.linkRefs.map((url, i) => ({ idx: claims.length + i + 1, label: url.slice(0, 80) })),
+  ]
+  let refsSection = ""
+  if (allRefs.length > 0) {
+    const refItems = allRefs
       .map(
-        (s, idx) =>
-          `<section style="${theme.footnoteItem}">[${idx + 1}] ${esc(s.site)}${s.date ? `（${esc(s.date)}）` : ''}：${esc(s.title)}<br/><span style="color:${theme.accent};opacity:.7;">${esc(s.url)}</span></section>`
+        (r) =>
+          `<section style="margin:8px 0;font-size:12px;line-height:1.6;color:${textLight};">` +
+          `<span style="color:${primary};font-weight:600;">[${r.idx}]</span> ${esc(r.label)}</section>`,
       )
-      .join('\n')
-    sections.push(`<section style="${theme.footnoteTitle}">参考来源</section>\n${items}`)
+      .join("")
+    refsSection =
+      `<section style="margin:30px 0 12px;padding-top:16px;border-top:1px solid ${t.colors.border ?? "#e5e7eb"};"${darkAttrs(t, "text")}>` +
+      `<span style="font-size:13px;font-weight:700;color:${textLight};">参考来源</span>${refItems}</section>`
   }
 
-  // 外链脚注（微信外链不可点的兜底）
-  if (linkFootnotes.length > 0) {
-    const items = linkFootnotes
-      .map((u, idx) => `<section style="${theme.footnoteItem}">[链接${idx + 1}] ${esc(u)}</section>`)
-      .join('\n')
-    sections.push(`<section style="${theme.footnoteTitle}">文中链接</section>\n${items}`)
-  }
+  // ---- Step 4: AIGC 声明（主题可控，默认开） ----
+  const aigc = t.aigcFooter
+    ? `<section style="margin:20px 0 0;padding:10px 14px;background:${t.colors.quote_bg ?? "rgba(0,0,0,0.03)"};border-radius:${t.colors.border_radius ?? "8px"};"${darkAttrs(t, "text")}>` +
+      `<p style="margin:0;font-size:11px;line-height:1.6;color:${textLight};">本文由 AI 辅助生成，经人工审校；事实性内容均标注 [n] 来源，可通过参考来源核对。生成工具：AI 资讯雷达 · 工作流平台。</p></section>`
+    : ""
 
-  // AIGC 声明（合规脚注，wewrite 内置清单继承）
-  if (opts.aigcNote !== false) {
-    sections.push(
-      `<section style="${P(theme.footnoteItem + 'margin-top:24px;padding-top:10px;border-top:1px dashed #cbd5e1;')}">本文由 AI 辅助生成并经人工审校，事实主张均附可溯源参考来源。</section>`
-    )
-  }
+  // ---- Step 5: 头部（标题 + 字数徽章） ----
+  const h1Style = mergeThemeStyles(t, ["h1"])
+  const titleHtml = opts.title
+    ? `<h1 style="${styleAttr(h1Style)}"${darkAttrs(t, "heading")}>${esc(cjkLatinSpace(opts.title))}</h1>`
+    : ""
+  const wordBadge = opts.wordCount
+    ? `<section style="margin:6px 0 18px;"><section style="display:inline-block;padding:2px 10px;border-radius:999px;background:rgba(0,0,0,0.04);color:${primary};font-size:11px;"${darkAttrs(t, "text")}>全文约 ${opts.wordCount} 字 · ${t.name} 主题</section></section>`
+    : ""
 
-  // 外层加固 section（微信粘贴不掉样式的关键）
-  return `<section style="max-width:677px;margin:0 auto;padding:24px 20px;background:${theme.pageBg};font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;">\n${sections.join('\n')}\n</section>`
+  // ---- Step 6: 根容器 + 粘贴加固 ----
+  const rootStyle = applyExtra(mergeThemeStyles(t, ["body"]), {
+    "max-width": "100%",
+    margin: "0 auto",
+    padding: "18px 16px 24px",
+    background: t.colors.background ?? "#ffffff",
+    "box-sizing": "border-box",
+    "word-wrap": "break-word",
+  })
+  const raw =
+    `<section style="${styleAttr(rootStyle)}"${darkAttrs(t, "text")}>` +
+    titleHtml +
+    wordBadge +
+    bodyBlocks.join("") +
+    refsSection +
+    aigc +
+    `</section>`
+  return makePasteSafe(raw)
 }

@@ -1,109 +1,112 @@
-/**
- * 内建 ImageProvider：Z.ai 图像生成（z-ai-web-dev-sdk images.generations）
- *
- * Phase 2 的「生图渠道 Provider」落地点：封面 / 内文配图。
- * SDK 同步返回 base64，此处落盘到 public/runs/{runId}/ 并以 GenTaskInfo
- * （status=succeeded）形式返回——对网关而言等价于「提交 + 轮询一次完成」，
- * Phase 3 接入异步协议族（Agnes / Seedance）时接口零改动。
- */
+// ============================================================
+// zai-image —— 首个 ImageProvider（z-ai-web-dev-sdk 生图落盘）
+// 失败自动降级（Asset.error 留痕），绝不阻断流水线
+// ============================================================
 
-import { mkdir, writeFile } from 'node:fs/promises'
-import path from 'node:path'
-import ZAI from 'z-ai-web-dev-sdk'
-import type { GenTaskInfo, HealthReport, ImageProvider } from '../types'
+import { mkdir, writeFile } from "fs/promises"
+import path from "path"
+import { getSettings } from "@/lib/settings"
+import type { HealthReport, ImageProvider } from "../types"
 
-type ZaiClient = Awaited<ReturnType<typeof ZAI.create>>
-let cached: ZaiClient | null = null
+const ASSET_DIR = "/home/z/my-project/public/assets"
 
-async function getClient(): Promise<ZaiClient> {
-  if (!cached) cached = await ZAI.create()
-  return cached
+export interface GeneratedImage {
+  ok: boolean
+  filePath: string // /assets/xxx.png（静态可访问）
+  absPath: string
+  error?: string
+  sizeBytes: number
 }
 
-export interface ImageSaveOptions {
-  /** 落盘相对路径（相对 public/，如 runs/{runId}/cover.png） */
-  relPath: string
-  size?: '1024x1024' | '768x1344' | '864x1152' | '1344x768' | '1152x864' | '1440x720' | '720x1440'
-}
-
-export interface ImageGenResult extends GenTaskInfo {
-  /** 可直接用于 <img src> 的 URL（/runs/...） */
-  url?: string
-  /** 生图耗时 ms */
-  latencyMs: number
-}
-
-async function generateImage(
-  prompt: string,
-  opts?: ImageSaveOptions
-): Promise<ImageGenResult> {
-  const started = Date.now()
-  const zai = await getClient()
-  const res = await zai.images.generations.create({
-    prompt,
-    size: opts?.size ?? '1344x768',
+/** 自定义 OpenAI 兼容生图端点（设置中心配置后启用） */
+async function generateViaCustom(prompt: string, runId: string, baseUrl: string, apiKey: string, model: string): Promise<GeneratedImage> {
+  const url = `${baseUrl.replace(/\/+$/, "").replace(/\/images\/generations$/, "")}/images/generations`
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: model || "doubao-seedream-3-0-t2i-250415",
+      prompt: prompt.slice(0, 500),
+      size: "1344x768",
+      response_format: "b64_json",
+    }),
+    signal: AbortSignal.timeout(90000),
   })
-  const b64 = res.data?.[0]?.base64
-  if (!b64) throw new Error('图像生成返回为空（可能被内容安全策略拦截）')
-
-  if (!opts?.relPath) {
-    // 不落盘：直接返回 data URL
-    return {
-      taskId: `img-${Date.now()}`,
-      status: 'succeeded',
-      output: [`data:image/png;base64,${b64}`],
-      latencyMs: Date.now() - started,
-    }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    throw new Error(`自定义生图 HTTP ${res.status}${text ? `：${text.slice(0, 120)}` : ""}`)
   }
+  const json = (await res.json()) as { data?: { b64_json?: string; url?: string }[] }
+  const item = json.data?.[0]
+  let b64 = item?.b64_json
+  if (!b64 && item?.url) {
+    // 兼容返回 URL 的端点：下载后转 base64 落盘
+    const img = await fetch(item.url, { signal: AbortSignal.timeout(30000) })
+    if (!img.ok) throw new Error(`生图结果下载失败 HTTP ${img.status}`)
+    b64 = Buffer.from(await img.arrayBuffer()).toString("base64")
+  }
+  if (!b64) throw new Error("生图返回空数据")
+  await mkdir(ASSET_DIR, { recursive: true })
+  const fileName = `cover-${runId}.png`
+  const absPath = path.join(ASSET_DIR, fileName)
+  const buf = Buffer.from(b64, "base64")
+  await writeFile(absPath, buf)
+  return { ok: true, filePath: `/assets/${fileName}`, absPath, sizeBytes: buf.length }
+}
 
-  const abs = path.join(process.cwd(), 'public', opts.relPath)
-  await mkdir(path.dirname(abs), { recursive: true })
-  await writeFile(abs, Buffer.from(b64, 'base64'))
-  const url = `/${opts.relPath.replace(/\\/g, '/')}`
-  return {
-    taskId: `img-${Date.now()}`,
-    status: 'succeeded',
-    output: [url],
-    latencyMs: Date.now() - started,
+/** 内置 SDK 生图（沙箱网关可能 405 拦截 → 降级留痕不阻断） */
+async function generateViaSdk(prompt: string, runId: string): Promise<GeneratedImage> {
+  const { default: ZAI } = await import("z-ai-web-dev-sdk")
+  const zai = await ZAI.create()
+  const res = await zai.images.generations.create({
+    prompt: prompt.slice(0, 500),
+    size: "1344x768",
+  })
+  const b64 = res?.data?.[0]?.base64
+  if (!b64) throw new Error("生图返回空数据")
+  await mkdir(ASSET_DIR, { recursive: true })
+  const fileName = `cover-${runId}.png`
+  const absPath = path.join(ASSET_DIR, fileName)
+  const buf = Buffer.from(b64, "base64")
+  await writeFile(absPath, buf)
+  return { ok: true, filePath: `/assets/${fileName}`, absPath, sizeBytes: buf.length }
+}
+
+export async function generateCoverImage(prompt: string, runId: string): Promise<GeneratedImage> {
+  try {
+    const s = await getSettings()
+    if (s.image.mode === "custom" && s.image.baseUrl && s.image.apiKey) {
+      return await generateViaCustom(prompt, runId, s.image.baseUrl, s.image.apiKey, s.image.model)
+    }
+    return await generateViaSdk(prompt, runId)
+  } catch (e) {
+    // 沙箱网关可能拦截生图端点 —— 降级留痕，不阻断
+    return { ok: false, filePath: "", absPath: "", error: (e as Error).message, sizeBytes: 0 }
   }
 }
 
-export const zaiImageProvider: ImageProvider = {
-  info: {
-    id: 'zai-image',
-    kind: 'image',
-    name: 'Z.ai 图像生成（内建）',
-    description: '运行环境自带的图像生成能力，Phase 2 承担文章封面产出，同步返回 base64 后落盘',
-    origin: 'builtin',
-  },
+export const zaiImage: ImageProvider = {
+  kind: "IMAGE",
+  name: "zai-image",
+  label: "Z.ai 生图（SDK）",
+  notes: "封面/内文图生成；可在设置中心切换为自定义 OpenAI 兼容生图端点；内置端点失败自动降级为无封面并留痕",
   isConfigured: () => true,
-  async healthCheck(): Promise<HealthReport> {
-    const started = Date.now()
-    const checkedAt = new Date().toISOString()
-    // 零成本探活：只验证 SDK 可初始化（不真实生图，避免无谓消耗）
-    try {
-      await getClient()
+  async health(): Promise<HealthReport> {
+    const t0 = Date.now()
+    const s = await getSettings()
+    if (s.image.mode === "custom") {
       return {
-        ok: true,
-        latencyMs: Date.now() - started,
-        detail: 'SDK 初始化正常（生图按次计费，探活不实际生成；实际出图受运行环境网络策略影响，以真实调用为准）',
-        checkedAt,
+        status: s.image.baseUrl && s.image.apiKey ? "healthy" : "down",
+        latencyMs: Date.now() - t0,
+        detail: s.image.baseUrl && s.image.apiKey ? `自定义端点：${s.image.baseUrl.slice(0, 40)}（连通性以实际调用为准）` : "已选自定义但未填 baseUrl/apiKey",
       }
+    }
+    // 零成本探活：只验证 SDK 可加载，不发真实生图请求
+    try {
+      await import("z-ai-web-dev-sdk")
+      return { status: "healthy", latencyMs: Date.now() - t0, detail: "SDK 可加载（生图端点连通性以实际调用为准）" }
     } catch (e) {
-      return { ok: false, latencyMs: Date.now() - started, detail: (e as Error)?.message || 'SDK 初始化失败', checkedAt }
+      return { status: "down", latencyMs: Date.now() - t0, error: (e as Error).message }
     }
   },
-  async generate(prompt: string, opts?: Record<string, unknown>): Promise<GenTaskInfo> {
-    const o = opts as ImageSaveOptions | undefined
-    return generateImage(prompt, o)
-  },
-}
-
-/** 供 run-manager 直接调用的便捷封装（带落盘） */
-export async function generateAndSave(
-  prompt: string,
-  relPath: string,
-  size?: ImageSaveOptions['size']
-): Promise<ImageGenResult> {
-  return generateImage(prompt, { relPath, size })
 }

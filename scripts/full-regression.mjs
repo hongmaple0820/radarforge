@@ -1,0 +1,190 @@
+// ============================================================
+// full-regression.mjs —— v4.0 融合升级全量回归
+// 覆盖：基础 API 面 + 18 主题渲染 + Agnes 账号池语义 + 视频通道设置
+// + pi-ai 模式 + 六步流水线端到端（新渲染引擎）+ 视频双风格成片
+// ============================================================
+
+const BASE = "http://localhost:3000"
+const results = []
+
+async function call(name, method, path, body, timeoutMs = 300000) {
+  const t0 = Date.now()
+  try {
+    const res = await fetch(BASE + path, {
+      method,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    const json = await res.json().catch(() => ({}))
+    results.push({ name, method, path, status: res.status, ms: Date.now() - t0, ok: res.ok })
+    return { res, json }
+  } catch (e) {
+    results.push({ name, method, path, status: 0, ms: Date.now() - t0, ok: false, error: e.message })
+    return { res: { ok: false, status: 0 }, json: { error: e.message } }
+  }
+}
+
+function section(t) { console.log(`\n━━━ ${t} ━━━`) }
+function ok(name, cond, extra = "") {
+  console.log(`  ${cond ? "✅" : "❌"} ${name}${extra ? `  ${extra}` : ""}`)
+}
+
+// ---------- 1. 基础面 ----------
+section("基础 API 面")
+for (const p of ["/api/topics", "/api/inbox", "/api/ideas", "/api/runs", "/api/learn", "/api/settings", "/api/gateway/providers", "/api/agent/skills", "/api/agent/tools"]) {
+  await call(p.replace("/api/", ""), "GET", p)
+}
+
+// ---------- 2. 18 主题注册表 ----------
+section("wewrite 18 主题注册表")
+const runsList = await call("runs-themes", "GET", "/api/runs")
+const themes = runsList.json.themes ?? []
+const categories = new Set(themes.map((t) => t.category))
+ok("18 主题全量注册", themes.length === 18, `${themes.length} 主题 / ${categories.size} 分类`)
+ok("含 sspai/tech-modern/midnight", ["sspai", "tech-modern", "midnight"].every((id) => themes.some((t) => t.id === id)))
+
+// ---------- 3. Agnes 账号池语义 ----------
+section("Agnes 账号池（供应商化配置）")
+const agnesPut = await call("agnes-put", "PUT", "/api/settings", {
+  scope: "agnes",
+  value: {
+    enabled: false,
+    accounts: [
+      { id: "acc-test-1", label: "回归测试号", site: "cn", baseUrl: "", apiKey: "", enabled: true },
+      { id: "acc-test-2", label: "国际站测试号", site: "intl", baseUrl: "", apiKey: "test-key-1234567890", enabled: true },
+    ],
+    chatModel: "agnes-3.0-flash",
+    strategy: "round-robin",
+  },
+})
+ok("账号池保存（2 号）", agnesPut.res.ok, agnesPut.json.message ?? agnesPut.json.error ?? "")
+const agnesGet = await call("agnes-get", "GET", "/api/settings")
+const accs = agnesGet.json.settings?.agnes?.accounts ?? []
+ok("密钥脱敏回显", accs.length === 2 && String(accs[1]?.apiKey ?? "").includes("…"), `acc2.key=${accs[1]?.apiKey ?? ""} chatModel=${agnesGet.json.settings?.agnes?.chatModel}`)
+
+const agnesTest = await call("agnes-test-empty", "POST", "/api/settings/test", { scope: "agnes" })
+ok("空密钥探活诚实失败（不 5xx）", agnesTest.res.ok && agnesTest.json.ok === false, String(agnesTest.json.error ?? agnesTest.json.detail ?? "").slice(0, 60))
+
+// 视频通道语义
+const videoPut = await call("video-put", "PUT", "/api/settings", { scope: "video", value: { channel: "auto", secondsPerScene: 8 } })
+ok("视频通道 auto 保存", videoPut.res.ok, videoPut.json.message ?? "")
+const videoBack = await call("video-back", "PUT", "/api/settings", { scope: "video", value: { channel: "local" } })
+ok("视频通道回 local", videoBack.res.ok)
+const videoTest = await call("video-test", "POST", "/api/settings/test", { scope: "video" })
+ok("视频模型检查（未配置→诚实提示）", videoTest.res.ok, String(videoTest.json.error ?? videoTest.json.detail ?? "").slice(0, 60))
+
+// ---------- 4. pi-ai 模式语义 ----------
+section("pi-ai 统一引擎模式")
+const piPut = await call("pi-ai-put", "PUT", "/api/settings", { scope: "llm", value: { mode: "pi-ai", piProvider: "anthropic", model: "claude-3-5-sonnet", apiKey: "dummy-key-for-regression" } })
+ok("pi-ai 模式保存", piPut.res.ok, piPut.json.message ?? piPut.json.error ?? "")
+const piGet = await call("pi-ai-get", "GET", "/api/settings")
+ok("pi-ai 配置回显", piGet.json.settings?.llm?.mode === "pi-ai" && piGet.json.settings?.llm?.piProvider === "anthropic", `${piGet.json.settings?.llm?.piProvider}/${piGet.json.settings?.llm?.model}`)
+// chat 失败自动回退内置引擎（pi-ai dummy key 必失败 → 验证 fallback 不炸）
+const tLlm = await call("llm-test-fallback", "POST", "/api/settings/test", { scope: "llm" })
+ok("LLM 失败自动回退内置（不炸）", tLlm.json.ok === true, String(tLlm.json.detail ?? tLlm.json.error ?? "").slice(0, 70))
+// 恢复 builtin
+await call("llm-restore", "PUT", "/api/settings", { scope: "llm", value: { mode: "builtin" } })
+
+// ---------- 5. AI 搜索 ----------
+section("AI 搜索（真实联网，情报中心底座）")
+const search = await call("search", "POST", "/api/search", { query: "AI Agent 开发框架 2026", count: 10 })
+ok("搜索 REAL 且有结果", search.json.mode === "REAL" && (search.json.results?.length ?? 0) > 0, `mode=${search.json.mode} n=${search.json.results?.length ?? 0}`)
+
+// ---------- 6. 六步流水线端到端（新渲染引擎 + wewrite 主题） ----------
+section("六步流水线端到端（REAL · 渲染引擎 v2）")
+const created = await call("runs-create", "POST", "/api/runs", {
+  ideaTitle: "融合回归：多模态模型成本曲线观察",
+  ideaAngle: "从免费多模态 API 潮流看模型服务的定价演化",
+  persona: "cold-analyst",
+  theme: "tech-modern",
+})
+const runId = created.json.id
+ok("创建 run（tech-modern 主题）", created.res.ok && Boolean(runId), runId ?? "")
+
+if (runId) {
+  let run = null
+  for (let i = 0; i < 90; i++) {
+    await new Promise((r) => setTimeout(r, 4000))
+    const rj = await fetch(`${BASE}/api/runs/${runId}`).then((r) => r.json())
+    run = rj.run
+    if (run?.status === "done" || run?.status === "error") break
+  }
+  ok("流水线终态 done", run?.status === "done", `status=${run?.status} err=${(run?.error ?? "").slice(0, 60)}`)
+  const steps = run ? JSON.parse(run.steps || "[]") : []
+  ok("六步全 done", steps.length === 6 && steps.every((s) => s.status === "done"), steps.map((s) => `${s.name}:${s.status}`).join(" "))
+  ok("模式 REAL", run?.mode === "REAL")
+  const article = run?.articles?.[run.articles.length - 1]
+  const html = article?.formatted ?? ""
+  ok("成稿 + 排版 v2", Boolean(article?.markdown && html), `v${article?.version} ${html.length} 字符 HTML`)
+  ok("v2 引擎特征：span leaf 粘贴加固", html.includes('<span leaf="">'), `${(html.match(/<span leaf="">/g) ?? []).length} 处`)
+  ok("v2 引擎特征：暗黑模式属性", html.includes("data-darkmode-"))
+  ok("v2 引擎特征：真实 h2 标签", html.includes("<h2"))
+  ok("claims 脚注保留", html.includes("参考来源"))
+
+  // 主题切换（wewrite 体系内切换）
+  const retheme = await call("retheme-sspai", "POST", `/api/runs/${runId}/actions`, { action: "retheme", theme: "sspai" })
+  ok("主题切 sspai 重排", retheme.res.ok, retheme.json.message ?? retheme.json.error ?? "")
+  const retheme2 = await call("retheme-legacy-radar", "POST", `/api/runs/${runId}/actions`, { action: "retheme", theme: "radar" })
+  ok("旧主题 radar 兼容映射", retheme2.res.ok && retheme2.json.theme === "professional-clean", `resolved=${retheme2.json.theme}`)
+
+  // 分镜
+  const sb = await call("storyboard", "POST", `/api/runs/${runId}/actions`, { action: "storyboard", platform: "douyin" })
+  const sbData = sb.json.storyboard
+  ok("视频分镜生成", sb.res.ok && (sbData?.scenes?.length ?? 0) >= 3, `${sbData?.scenes?.length ?? 0} 分镜 ${sbData?.totalSeconds ?? 0}s`)
+
+  // 封面
+  const cover = await call("cover", "POST", `/api/runs/${runId}/actions`, { action: "cover" })
+  ok("封面动作（降级留痕也算通）", cover.res.ok, cover.json.ok ? `生成 ${cover.json.path}` : `降级：${String(cover.json.error ?? "").slice(0, 50)}`)
+
+  // ---------- 7. 视频双风格成片 ----------
+  if (sbData) {
+    // 7a. art 艺术动画线（Playwright + art-motion 引擎真出片）
+    const rvArt = await call("render-video-art", "POST", `/api/runs/${runId}/actions`, { action: "render-video", storyboard: sbData, voice: "xiaochen", aspect: "9:16", style: "art", channel: "local" })
+    ok("art 渲染启动", rvArt.res.ok, rvArt.json.message ?? rvArt.json.error ?? "")
+    let artMeta = null
+    for (let i = 0; i < 90; i++) {
+      await new Promise((r) => setTimeout(r, 5000))
+      const rj = await fetch(`${BASE}/api/runs/${runId}`).then((r) => r.json())
+      const va = [...(rj.run?.assets ?? [])].reverse().find((a) => a.role === "video-final")
+      if (!va) continue
+      artMeta = JSON.parse(va.meta || "{}")
+      if (["done", "error"].includes(artMeta.stage)) break
+    }
+    ok("art 成片终态", artMeta?.stage === "done", `stage=${artMeta?.stage} ${artMeta?.seconds ?? 0}s style=${artMeta?.style} ${(artMeta?.sizeBytes ?? 0) ? (artMeta.sizeBytes / 1048576).toFixed(1) + "MB" : ""} ${artMeta?.aiNote ?? ""}`)
+    if (artMeta?.stage === "done") {
+      const head = await fetch(BASE + `/assets/video-${runId}.mp4`, { method: "HEAD" })
+      ok("art 成片可访问", head.ok, `${head.headers.get("content-type")} ${(Number(head.headers.get("content-length") ?? 0) / 1048576).toFixed(1)}MB`)
+    }
+
+    // 7b. motion 商业片线（对照）
+    const rvM = await call("render-video-motion", "POST", `/api/runs/${runId}/actions`, { action: "render-video", storyboard: sbData, voice: "kazi", aspect: "16:9", style: "motion", channel: "local" })
+    ok("motion 渲染启动", rvM.res.ok, rvM.json.message?.slice(0, 60) ?? "")
+    let mMeta = null
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 5000))
+      const rj = await fetch(`${BASE}/api/runs/${runId}`).then((r) => r.json())
+      const va = [...(rj.run?.assets ?? [])].reverse().find((a) => a.role === "video-final")
+      if (!va) continue
+      mMeta = JSON.parse(va.meta || "{}")
+      if (["done", "error"].includes(mMeta.stage)) break
+    }
+    ok("motion 成片终态", mMeta?.stage === "done", `stage=${mMeta?.stage} ${mMeta?.seconds ?? 0}s ${mMeta?.width}×${mMeta?.height}`)
+  }
+
+  // 发布（三级降级）
+  const pub = await call("publish", "POST", `/api/runs/${runId}/actions`, { action: "publish" })
+  ok("发布三级降级", pub.res.ok && Boolean(pub.json.outcome?.levelName), `${pub.json.outcome?.level} ${pub.json.outcome?.levelName ?? ""}`)
+
+  // 清理 Agnes 回归账号
+  await call("agnes-cleanup", "PUT", "/api/settings", { scope: "agnes", value: { enabled: false, accounts: [] } })
+}
+
+// ---------- 8. 汇总 ----------
+section("HTTP 汇总")
+for (const r of results) {
+  console.log(`  ${r.status >= 200 && r.status < 500 ? "·" : "❌"} [${r.status}] ${r.method} ${r.path} (${r.ms}ms)`)
+}
+const bad = results.filter((r) => r.status === 0 || r.status >= 500)
+console.log(`\n${bad.length === 0 ? "✅ 全部 API 无 5xx/网络失败" : `❌ ${bad.length} 个失败`}`)
+process.exit(bad.length > 0 ? 1 : 0)

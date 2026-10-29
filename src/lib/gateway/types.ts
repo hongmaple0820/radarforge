@@ -1,42 +1,34 @@
-/**
- * 模型网关 v1 —— Provider 统一接口定义
- *
- * 借鉴 dsh 协议族适配器思想：
- *  - 每类模型能力（LLM / Search / Image / Video）各自实现 Provider 接口
- *  - 统一注册到运行时注册表，支持热插拔（后续插件包 origin='plugin'）
- *  - 每个 Provider 必须实现 healthCheck（对应 dsh 的 GET /models 零成本探活思想）
- *  - 未注册 / 未配置时明确报错，绝不静默降级到错误协议
- */
+// ============================================================
+// 模型网关 · Provider 插件体系（学 dsh：协议族适配器 + 未识别明确报错）
+// 四类能力：LLM / SEARCH / IMAGE / VIDEO
+// ============================================================
 
-export type ProviderKind = 'llm' | 'search' | 'image' | 'video'
+export type ProviderKind = "LLM" | "SEARCH" | "IMAGE" | "VIDEO"
 
-export interface ProviderInfo {
-  id: string
-  kind: ProviderKind
-  name: string
-  description?: string
-  /** builtin = 随代码内置；plugin = 外部注册（为插件市场预留） */
-  origin: 'builtin' | 'plugin'
-}
+export type ProviderStatus = "healthy" | "degraded" | "down" | "unknown"
 
 export interface HealthReport {
-  ok: boolean
+  status: ProviderStatus
   latencyMs: number
+  error?: string
   detail?: string
-  checkedAt: string
 }
 
-/** 检索类 Provider 入参（与元宝搜索 SearchPro 参数对齐，供多引擎复用） */
+// ---------- SEARCH ----------
+
 export interface SearchRequest {
   query: string
-  mode?: number
-  cnt?: number
-  industry?: string
-  freshness?: string
-  site?: string
+  /** 合法值：10/20/30/40/50（SearchPro 的 Cnt 只接受这五个值，传其他会被静默吞错） */
+  count?: number
+  /** d1/d7/d30 时间窗 */
+  freshness?: "d1" | "d7" | "d30" | "none"
+  /** 信源行业：news 限定新闻机构 / gov 强制党政机关信源 */
+  industry?: "news" | "gov" | "none"
+  /** 1=垂类 VR 卡（天气/股价/金价） 2=混合信源 */
+  mode?: 1 | 2
 }
 
-export interface SearchHit {
+export interface SearchResult {
   title: string
   url: string
   site: string
@@ -45,82 +37,122 @@ export interface SearchHit {
   score: number
 }
 
-export interface SearchResponse {
-  hits: SearchHit[]
-  latencyMs: number
-  requestId: string
-  /** true = 演示数据（未配置 Key 的降级路径） */
-  mock: boolean
-}
-
 export interface SearchProvider {
-  info: ProviderInfo
-  /** 动态判断是否具备真实调用条件（如环境变量 Key 是否配置） */
+  kind: "SEARCH"
+  name: string
+  label: string
+  notes: string
+  /** 密钥/配置是否就绪——不就绪的 provider 不进入降级链 */
   isConfigured(): boolean
-  healthCheck(): Promise<HealthReport>
-  search(req: SearchRequest): Promise<SearchResponse>
+  search(req: SearchRequest): Promise<SearchResult[]>
+  /** 零成本探活（不发真实查询） */
+  health?(): Promise<HealthReport>
 }
 
-/** LLM 对话类 Provider */
+// ---------- LLM ----------
+
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant'
+  role: "system" | "user" | "assistant"
   content: string
 }
 
-export interface LlmRequest {
-  messages: ChatMessage[]
-  maxTokens?: number
-  temperature?: number
-}
-
-export interface LlmResponse {
-  content: string
-  latencyMs: number
-  model?: string
-}
-
-export interface LlmProvider {
-  info: ProviderInfo
+export interface LLMProvider {
+  kind: "LLM"
+  name: string
+  label: string
+  notes: string
   isConfigured(): boolean
-  healthCheck(): Promise<HealthReport>
-  complete(req: LlmRequest): Promise<LlmResponse>
+  chat(messages: ChatMessage[], opts?: { temperature?: number }): Promise<string>
+  health?(): Promise<HealthReport>
 }
 
-/**
- * 生成类任务（图像 / 视频）统一走「提交 + 轮询」协议族
- * （对应 dsh: Agnes POST /v1/videos + 轮询、Seedance 方舟任务查询）
- * v1 只定义接口占位，Phase 3 落地首批实现
- */
-export interface GenTaskInfo {
-  taskId: string
-  status: 'queued' | 'running' | 'succeeded' | 'failed'
-  /** 产物 URL 列表（图片 / 视频地址） */
-  output?: string[]
-  error?: string
+// ---------- IMAGE ----------
+
+export interface ImageGenerateRequest {
+  prompt: string
+  /** 参考图（dataURL 或 URL，多图编辑/融合） */
+  referenceImages?: string[]
+  size?: string
+}
+
+export interface ImageGenerateResult {
+  /** dataURL（data:image/png;base64,...）或远程 URL */
+  images: string[]
+  provider: string
 }
 
 export interface ImageProvider {
-  info: ProviderInfo
+  kind: "IMAGE"
+  name: string
+  label: string
+  notes: string
   isConfigured(): boolean
-  healthCheck(): Promise<HealthReport>
-  generate(prompt: string, opts?: Record<string, unknown>): Promise<GenTaskInfo>
+  /** 同步生图（OpenAI 兼容 images/generations 协议族） */
+  generate?(req: ImageGenerateRequest): Promise<ImageGenerateResult>
+  health?(): Promise<HealthReport>
+}
+
+// ---------- VIDEO ----------
+// 异步三件套（学 dsh VideoTaskQueue：提交 → 轮询 → 取产物，绝不阻塞 HTTP 请求线程）
+
+export interface VideoGenerateRequest {
+  prompt: string
+  /** text 纯文生视频 / keyframe 首帧引导 / reference 参考图 */
+  mode: "text" | "keyframe" | "reference"
+  seconds: number
+  aspectRatio?: string
+  /** 首帧图（keyframe 模式；dataURL/URL） */
+  firstFrame?: string
+  /** 参考图（reference 模式） */
+  images?: string[]
+}
+
+export type VideoTaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "unknown"
+
+export interface VideoTask {
+  id: string
+  status: VideoTaskStatus
+  /** 供应商任务 id（轮询凭据） */
+  remoteTaskId?: string
+  /** 完成后的产物地址（下载后转本地） */
+  resultUrl?: string
+  error?: string
+  /** 已等待秒数（前端展示进度感） */
+  waitedSeconds?: number
 }
 
 export interface VideoProvider {
-  info: ProviderInfo
+  kind: "VIDEO"
+  name: string
+  label: string
+  notes: string
   isConfigured(): boolean
-  healthCheck(): Promise<HealthReport>
-  submit(prompt: string, opts?: Record<string, unknown>): Promise<{ taskId: string }>
-  poll(taskId: string): Promise<GenTaskInfo>
+  /** 提交视频生成任务（立即返回，不等待完成） */
+  submitVideo?(req: VideoGenerateRequest): Promise<VideoTask>
+  /** 查询任务状态 */
+  getVideoTask?(remoteTaskId: string): Promise<VideoTask>
+  /** 尽力取消（供应商不支持时返回 unsupported 提示） */
+  cancelVideoTask?(remoteTaskId: string): Promise<{ supported: boolean; message?: string }>
+  health?(): Promise<HealthReport>
 }
 
-export type AnyProvider = SearchProvider | LlmProvider | ImageProvider | VideoProvider
+export type AnyProvider = SearchProvider | LLMProvider | ImageProvider | VideoProvider
 
-/** 供 API 序列化输出的 Provider 概要 */
-export interface ProviderSummary extends ProviderInfo {
+export interface ProviderDescriptor {
+  kind: ProviderKind
+  name: string
+  label: string
+  notes: string
+  builtin: boolean
   configured: boolean
 }
 
-export function summarize(p: AnyProvider): ProviderSummary {
-  return { ...p.info, configured: p.isConfigured() }
+/** 网关统一错误：未识别 provider / 全链失败时明确报错（不静默吞掉） */
+export class GatewayError extends Error {
+  constructor(
+    message: string,
+    public code: "PROVIDER_NOT_FOUND" | "NOT_CONFIGURED" | "ALL_PROVIDERS_FAILED" | "PROTOCOL_ERROR",
+  ) {
+    super(message)
+  }
 }

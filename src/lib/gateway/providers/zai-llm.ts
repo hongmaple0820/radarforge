@@ -1,66 +1,42 @@
-/**
- * 内建 LLMProvider：Z.ai GLM（z-ai-web-dev-sdk）
- *
- * 1.0 的 /api/briefing 已在用它生成早报；网关化后统一收口，
- * 后续新增 OpenAI / Anthropic / DeepSeek 等 Provider 时走同一 LlmProvider 接口。
- */
+// ============================================================
+// z-ai LLM Provider —— z-ai-web-dev-sdk（仅后端）
+// ============================================================
 
-import ZAI from 'z-ai-web-dev-sdk'
-import type { HealthReport, LlmProvider, LlmRequest, LlmResponse } from '../types'
+import type { ChatMessage, HealthReport, LLMProvider } from "../types"
 
-type ZaiClient = Awaited<ReturnType<typeof ZAI.create>>
-let cached: ZaiClient | null = null
-
-async function getClient(): Promise<ZaiClient> {
-  if (!cached) cached = await ZAI.create()
-  return cached
-}
-
-export const zaiLlmProvider: LlmProvider = {
-  info: {
-    id: 'zai-llm',
-    kind: 'llm',
-    name: 'Z.ai GLM（内建）',
-    description: '运行环境自带的 GLM 系列模型，承担早报生成 / 选题打分 / 审稿等文本任务',
-    origin: 'builtin',
+export const zaiLlm: LLMProvider = {
+  kind: "LLM",
+  name: "zai-llm",
+  label: "Z.ai LLM（z-ai-web-dev-sdk）",
+  notes: "平台内置文本生成引擎：早报撰写 / run 执行 / 审稿均经由此 provider",
+  isConfigured: () => true, // 沙箱内 SDK 免密钥
+  async chat(messages: ChatMessage[], opts?: { temperature?: number }): Promise<string> {
+    const { default: ZAI } = await import("z-ai-web-dev-sdk")
+    const zai = await ZAI.create()
+    const response = await zai.chat.completions.create({
+      messages,
+      stream: false,
+      thinking: { type: "disabled" },
+      temperature: opts?.temperature ?? 0.7,
+    })
+    return response.choices?.[0]?.message?.content ?? ""
   },
-  isConfigured: () => true,
-  async healthCheck(): Promise<HealthReport> {
-    const started = Date.now()
+  async health(): Promise<HealthReport> {
+    const t0 = Date.now()
     try {
-      const zai = await getClient()
-      const completion = await zai.chat.completions.create({
-        messages: [{ role: 'user', content: 'ping' }],
-        max_tokens: 8,
-        thinking: { type: 'disabled' },
-      })
-      const content = completion.choices[0]?.message?.content ?? ''
+      const reply = await this.chat(
+        [
+          { role: "user", content: "回复两个字：正常" },
+        ],
+        { temperature: 0 },
+      )
       return {
-        ok: content.trim().length > 0,
-        latencyMs: Date.now() - started,
-        detail: content.trim() ? '对话链路正常' : '返回内容为空',
-        checkedAt: new Date().toISOString(),
+        status: reply ? "healthy" : "degraded",
+        latencyMs: Date.now() - t0,
+        detail: reply ? `探活回复: ${reply.slice(0, 20)}` : "空回复",
       }
     } catch (e) {
-      return {
-        ok: false,
-        latencyMs: Date.now() - started,
-        detail: (e as Error)?.message || 'SDK 初始化失败',
-        checkedAt: new Date().toISOString(),
-      }
+      return { status: "down", latencyMs: Date.now() - t0, error: (e as Error).message }
     }
-  },
-  async complete(req: LlmRequest): Promise<LlmResponse> {
-    const started = Date.now()
-    const zai = await getClient()
-    const completion = await zai.chat.completions.create({
-      messages: req.messages,
-      temperature: req.temperature,
-      max_tokens: req.maxTokens,
-      thinking: { type: 'disabled' },
-    })
-    const content = completion.choices[0]?.message?.content ?? ''
-    if (!content.trim()) throw new Error('LLM 返回内容为空')
-    return { content, latencyMs: Date.now() - started, model: completion.model }
   },
 }
