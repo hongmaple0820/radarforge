@@ -280,3 +280,19 @@ wewrite 集成（MIT，纯增量吸收）：
 - 修复：`bun run db:generate`（6.19.2 重生成，首次因瞬时网络抖动失败，重试成功）+ `bun run db:push` 同步确认
 - 复验：首页 + 11 个 GET 端点全 200，dev.log 零错误；agent-browser 实测四 Tab（情报中心/创作台/插件生态/设置中心）渲染与切换正常，图文/视频双线、7 人格、导演三方向、Agnes/pi-ai 供应商卡片均在线
 - 截图：download/preview-home.png、download/preview-settings.png
+
+## 2026-10-29 · 「演示状态」根因排查与防御性修复
+
+**用户质疑**：为何全部显示演示状态，底层能力是否真实？
+
+**排查结论（当场实测证据）**：
+- LLM（zai-llm）：真实 ✓（实测 chat 返回真实文本；注册表 96 次调用 healthy）
+- 生图（zai-image）：真实 ✓（实测生成 154KB PNG 落盘 public/assets/）
+- TTS：真实 ✓（实测 68KB WAV，RIFF 头完整）
+- ffmpeg 7.1.5：真实 ✓（本地编码）
+- 元宝搜索：**降级演示** ✗ —— 根因：WSA_API_KEY 只存在未提交的 .env 中，今晨 08:30 容器重启被平台重置（.env 仅剩 DATABASE_URL），密钥永久丢失（git 历史与 DB 均无备份）；搜索是所有流水线第一步，故全链路产物带「演示」徽章
+- Agnes/视频大模型/自定义 OpenAI：架构真实、等待用户在设置中心配置账号池与密钥
+
+**防御性修复**（settings.ts）：新增 seedEnvKeysToDb()——env 密钥首次读取时沉淀入 SettingKV 并打 env:seeded 标记，DB 优先、用户清空不被覆盖；假密钥注入→重启→验证入库→清理→复验全过；tsc/ESLint 双零，首页+API 全 200
+
+**待用户操作**：设置中心 → 模型服务 → AI 搜索，重新填入元宝 SearchPro API KEY（此次将落库，重启不再丢失）

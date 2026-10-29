@@ -140,9 +140,38 @@ export async function getSettings(force = false): Promise<AppSettings> {
   } catch {
     /* DB 未就绪 → 用默认值 + env 兜底 */
   }
+  await seedEnvKeysToDb(out)
   cache = out
   loadedAt = Date.now()
   return out
+}
+
+// ---------- env → DB 密钥沉淀（防容器重置 .env 丢密钥） ----------
+// 场景：密钥经 .env / 平台环境变量注入但未走过设置中心落库；容器重置会清掉 .env，
+// 密钥随之丢失、搜索被迫降级演示模式。此处在首次读取时把 env 密钥一次性写入 DB，
+// 写入后打标记（env:seeded）——用户之后在设置中心清空密钥不会被 env 反复覆盖。
+async function seedEnvKeysToDb(out: AppSettings): Promise<void> {
+  try {
+    const envKey = process.env.WSA_API_KEY?.trim()
+    if (!envKey) return
+    if (out.search.apiKey) return // DB 已有密钥 → DB 优先
+    const seeded = await db.settingKV.findUnique({ where: { key: "env:seeded:search" } })
+    if (seeded) return // 曾沉淀过（之后密钥被用户清空视为有意为之）
+    await db.settingKV.upsert({
+      where: { key: "provider:search" },
+      update: { value: JSON.stringify({ apiKey: envKey }) },
+      create: { key: "provider:search", value: JSON.stringify({ apiKey: envKey }) },
+    })
+    await db.settingKV.upsert({
+      where: { key: "env:seeded:search" },
+      update: { value: JSON.stringify({ at: new Date().toISOString() }) },
+      create: { key: "env:seeded:search", value: JSON.stringify({ at: new Date().toISOString() }) },
+    })
+    out.search.apiKey = envKey
+    console.log("[settings] 已将 WSA_API_KEY 沉淀入库（容器重启不再丢失）")
+  } catch {
+    /* DB 未就绪则下次再试 */
+  }
 }
 
 /** 同步窥视（供 provider 的同步 isConfigured 用；首次调用前为 null） */
