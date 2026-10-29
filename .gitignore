@@ -40,14 +40,15 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-local-*
 .claude
 .z-ai-config
 *.log
 dev.log
 dev.out.log
-test
-prompt
+# 根目录本地杂项（收窄到根：避免误伤 src/app/api/**/test/ 等源码目录）
+/test
+/prompt
+/local-*
 
 server.log
 # Skills directory

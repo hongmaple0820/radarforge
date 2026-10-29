@@ -331,3 +331,31 @@ wewrite 集成（MIT，纯增量吸收）：
 2. settings-panel.tsx 前端防御：res.ok 与 content-type 检查，HTML/非 JSON 响应转为可读错误文案
 
 **验证**：API 五 scope 实测（search 222ms 10 条真实结果 / llm 334ms 回复「正常」/ image 73s 真实出图 41KB 含 WAF 重试穿透 / video ffmpeg 7.1.5 / agnes 如实报未启用）；浏览器端到端「测试连通」「真实查询一条」按钮均正常弹 toast；tsc/ESLint 双零；截图 download/settings-test-fixed.png
+
+## 2026-10-29 · Agnes 探活失败排查（「连接失败：Agnes 未启用或账号池为空」）
+
+**用户报错**：设置中心 Agnes 池填了 2 个账号密钥，点「全池探活」报「连接失败：Agnes 未启用或账号池为空」。
+
+**根因（双因叠加，探活逻辑本身如实报错）**：
+1. **密钥只存在于表单草稿、从未落库**——DB 直查 `provider:agnes`：`enabled=false, accounts=[]`。用户填完密钥直接点「全池探活」，没有先点「保存账号池」+「启用 Agnes 池」；后端只能看到旧状态（空池）→ 如实报错
+2. **交互陷阱**：旧流程「探活」不保存表单，用户心智模型是「我填了密钥，点测试就该测它」——UI 与后端状态错位
+
+**历史隐患连带修复（本次最重要的发现）**：`.gitignore` 第 49 行裸 `test` 规则静默忽略 `src/app/api/settings/test/` 目录——上一会话写盘验证通过、声称已提交，但 `git add` 被忽略规则吞掉，**该路由从未进入版本库**（`git log --all -- 该路径` 为空）。容器一旦重置文件即丢失，「Unexpected token '<'」必然复发。已收窄为 `/test`（连同 `/prompt`、`/local-*` 一并收窄到根路径，`git ls-files` 复核无已跟踪文件受影响）。
+
+**修复**：
+1. `.gitignore`：`test|prompt|local-*` → `/test|/prompt|/local-*`，test 路由正式入库
+2. 后端探活改造（route.ts agnes scope）：
+   - 有可用账号但池开关未开 → **也逐号 probeAccount**（启用前即可验密钥），报「X/Y 个账号密钥有效——池开关未开，点『启用 Agnes 池』后生效」
+   - 空池 → 可操作指引文案（区分「完全没账号」vs「有账号但无密钥/全停用」）
+3. 前端「先落库再探活」模式（settings-panel.tsx）：
+   - 新增 `probeAgnes`/`probeScope`：探活前静默保存表单（密钥草稿落库），杜绝「UI 填了密钥、探活却说池为空」的错位；保存失败则中止探测
+   - 推广到全部五个测试按钮（llm/search/image/video/agnes），杜绝「改了配置没保存、测到的还是旧配置」同类陷阱
+   - save/saveAgnes/saveVideo 加 silent 参数 + 布尔返回；保存成功后清空密钥草稿（防旧草稿覆盖后续修改）
+   - 修复单号测试结果渲染：`keyTest.results?.[0]?.detail`（字段不存在恒空）→ `keyTest.detail`；账号开关 chip 改状态语义「● 启用中 / ○ 已停用」+ title 提示
+4. zai-llm 补 429 退避重试（2.5s/6s ×2，与 yuanbao-search/zai-image 同款加固）：连续跑全量回归会打满沙箱 AI 网关配额，旧实现直接抛错导致整条 run status=error
+
+**验证**：
+- API 实测三态：空池 → 指引文案；未启用+假密钥 → 逐号探活「0/1 密钥无效（401）」（147ms，沙箱→api.agnes-ai.cn 可达）
+- 浏览器端到端复现用户场景（agent-browser）：添加账号→填密钥→「全池探活」→ 自动落库（DB: hasKey=true）→ 真实探测 401 反馈；enabled 保持 false（探活不替用户做启用决定）；截图 download/agnes-probe-fix.png / agnes-probe-e2e.png
+- 回归：Agnes/视频/设置/pi-ai/搜索断言全绿；LLM 相关项因当日配额耗尽（前序会话 ~100 调用 + 本次连跑 3 遍全量回归）报 429——上游配额问题非代码缺陷，配额窗口恢复后 `bun scripts/full-regression.mjs` 可复跑
+- tsc 0 错误 / eslint src/ 0 问题

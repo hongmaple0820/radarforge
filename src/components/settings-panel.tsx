@@ -106,7 +106,8 @@ export function SettingsPanel() {
     return () => clearTimeout(t)
   }, [load])
 
-  const save = async (scope: "llm" | "search" | "image" | "style", clearKey = false) => {
+  // silent：探活前的自动落库（不弹保存 toast，失败仍弹）
+  const save = async (scope: "llm" | "search" | "image" | "style", clearKey = false, silent = false): Promise<boolean> => {
     setSaving(scope)
     try {
       const value = scope === "llm" ? llmForm : scope === "search" ? searchForm : scope === "image" ? imageForm : styleForm
@@ -117,22 +118,24 @@ export function SettingsPanel() {
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error)
-      toast({ title: clearKey ? "密钥已清除" : "已保存", description: json.message })
+      if (!silent) toast({ title: clearKey ? "密钥已清除" : "已保存", description: json.message })
       if (clearKey) {
         if (scope === "llm") setLlmForm((f) => ({ ...f, apiKey: "" }))
         if (scope === "search") setSearchForm({ apiKey: "" })
         if (scope === "image") setImageForm((f) => ({ ...f, apiKey: "" }))
       }
       await load()
+      return true
     } catch (e) {
       toast({ title: clearKey ? "清除失败" : "保存失败", description: (e as Error).message, variant: "destructive" })
+      return false
     } finally {
       setSaving(null)
     }
   }
 
-  // ---------- Agnes 保存 ----------
-  const saveAgnes = async (patch?: Record<string, unknown>) => {
+  // ---------- Agnes 保存（返回是否成功：探活前自动保存依赖此返回值） ----------
+  const saveAgnes = async (patch?: Record<string, unknown>, silent = false): Promise<boolean> => {
     setSaving("agnes")
     try {
       const accounts = agnesForm.accounts.map((a) => ({
@@ -147,16 +150,38 @@ export function SettingsPanel() {
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error)
-      toast({ title: "Agnes 配置已保存", description: json.message })
+      if (!silent) toast({ title: "Agnes 配置已保存", description: json.message })
       await load()
+      // 保存成功后密钥已落库，草稿使命完成（避免重复提交旧草稿覆盖后续修改）
+      setAgnesKeyDrafts({})
+      return true
     } catch (e) {
       toast({ title: "保存失败", description: (e as Error).message, variant: "destructive" })
+      return false
     } finally {
       setSaving(null)
     }
   }
 
-  const saveVideo = async () => {
+  // 探活前先把表单（含新输入的密钥草稿）静默落库——否则后端只能看到旧状态，
+  // 出现「UI 明明填了密钥，探活却说账号池为空」的错位
+  const probeAgnes = async (accountId?: string) => {
+    if (agnesForm.accounts.length > 0 || Object.keys(agnesKeyDrafts).length > 0) {
+      const saved = await saveAgnes(undefined, true)
+      if (!saved) return
+    }
+    await test("agnes", accountId)
+  }
+
+  // 同一模式推广到 llm/search/image/video：先静默保存表单再探测，
+  // 避免「改了配置没保存，测到的还是旧配置」
+  const probeScope = async (scope: "llm" | "search" | "image" | "video") => {
+    const saved = scope === "video" ? await saveVideo(true) : await save(scope, false, true)
+    if (!saved) return
+    await test(scope)
+  }
+
+  const saveVideo = async (silent = false): Promise<boolean> => {
     setSaving("video")
     try {
       const res = await fetch("/api/settings", {
@@ -166,10 +191,12 @@ export function SettingsPanel() {
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error)
-      toast({ title: "视频通道已保存", description: json.message })
+      if (!silent) toast({ title: "视频通道已保存", description: json.message })
       await load()
+      return true
     } catch (e) {
       toast({ title: "保存失败", description: (e as Error).message, variant: "destructive" })
+      return false
     } finally {
       setSaving(null)
     }
@@ -364,8 +391,8 @@ export function SettingsPanel() {
             <Button size="sm" onClick={() => save("llm")} disabled={saving === "llm"} className="bg-amber-500 hover:bg-amber-600 text-white">
               {saving === "llm" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}保存
             </Button>
-            <Button size="sm" variant="outline" onClick={() => test("llm")} disabled={testing === "llm"}>
-              {testing === "llm" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}测试连通
+            <Button size="sm" variant="outline" onClick={() => void probeScope("llm")} disabled={testing === "llm" || saving === "llm"}>
+              {testing === "llm" || saving === "llm" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}测试连通
             </Button>
             {data.llm.apiKey && (
               <Button size="sm" variant="ghost" onClick={() => save("llm", true)} disabled={saving === "llm"} className="text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30">
@@ -421,8 +448,8 @@ export function SettingsPanel() {
             <Button size="sm" onClick={() => save("search")} disabled={saving === "search"} className="bg-amber-500 hover:bg-amber-600 text-white">
               {saving === "search" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}保存
             </Button>
-            <Button size="sm" variant="outline" onClick={() => test("search")} disabled={testing === "search"}>
-              {testing === "search" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}真实查询一条
+            <Button size="sm" variant="outline" onClick={() => void probeScope("search")} disabled={testing === "search" || saving === "search"}>
+              {testing === "search" || saving === "search" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}真实查询一条
             </Button>
             {data.search.apiKey && (
               <Button size="sm" variant="ghost" onClick={() => save("search", true)} disabled={saving === "search"} className="text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30">
@@ -465,8 +492,8 @@ export function SettingsPanel() {
             <Button size="sm" onClick={() => save("image")} disabled={saving === "image"} className="bg-amber-500 hover:bg-amber-600 text-white">
               {saving === "image" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}保存
             </Button>
-            <Button size="sm" variant="outline" onClick={() => test("image")} disabled={testing === "image"}>
-              {testing === "image" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}检查配置
+            <Button size="sm" variant="outline" onClick={() => void probeScope("image")} disabled={testing === "image" || saving === "image"}>
+              {testing === "image" || saving === "image" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}检查配置
             </Button>
             {data.image.apiKey && (
               <Button size="sm" variant="ghost" onClick={() => save("image", true)} disabled={saving === "image"} className="text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30">
@@ -548,8 +575,9 @@ export function SettingsPanel() {
                     <button
                       onClick={() => setAgnesForm((f) => ({ ...f, accounts: f.accounts.map((x) => (x.id === a.id ? { ...x, enabled: !x.enabled } : x)) }))}
                       className={`text-[10px] border rounded-full px-2 py-0.5 ${a.enabled ? "border-emerald-400 text-emerald-600" : "text-muted-foreground"}`}
+                      title={a.enabled ? "点击停用该账号" : "点击启用该账号"}
                     >
-                      {a.enabled ? "启用" : "停用"}
+                      {a.enabled ? "● 启用中" : "○ 已停用"}
                     </button>
                     <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setAgnesForm((f) => ({ ...f, accounts: f.accounts.filter((x) => x.id !== a.id) }))}>
                       <Trash2 className="h-3 w-3" />
@@ -571,13 +599,13 @@ export function SettingsPanel() {
                       value={agnesKeyDrafts[a.id] ?? ""}
                       onChange={(e) => setAgnesKeyDrafts((d) => ({ ...d, [a.id]: e.target.value }))}
                     />
-                    <Button size="sm" variant="outline" className="h-7 text-[10px] shrink-0" onClick={() => void test("agnes", a.id)} disabled={testing === `agnes:${a.id}`}>
+                    <Button size="sm" variant="outline" className="h-7 text-[10px] shrink-0" onClick={() => void probeAgnes(a.id)} disabled={testing === `agnes:${a.id}`}>
                       {testing === `agnes:${a.id}` ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}测试
                     </Button>
                   </div>
                   {keyTest && (
                     <p className={`text-[10px] ${keyTest.ok ? "text-emerald-600" : "text-red-500"}`}>
-                      {keyTest.ok ? "✓ " : "✗ "}{keyTest.results?.[0]?.detail ?? keyTest.error ?? ""}
+                      {keyTest.ok ? "✓ " : "✗ "}{keyTest.detail ?? keyTest.error ?? ""}
                     </p>
                   )}
                 </div>
@@ -640,8 +668,8 @@ export function SettingsPanel() {
             <Button size="sm" onClick={() => void saveAgnes()} disabled={saving === "agnes"} className="bg-emerald-600 hover:bg-emerald-700 text-white">
               {saving === "agnes" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}保存账号池
             </Button>
-            <Button size="sm" variant="outline" onClick={() => void test("agnes")} disabled={testing === "agnes"}>
-              {testing === "agnes" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}全池探活
+            <Button size="sm" variant="outline" onClick={() => void probeAgnes()} disabled={testing === "agnes" || saving === "agnes"}>
+              {(testing === "agnes" || saving === "agnes") ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}全池探活
             </Button>
           </div>
         </CardContent>
@@ -696,8 +724,8 @@ export function SettingsPanel() {
             <Button size="sm" onClick={() => void saveVideo()} disabled={saving === "video"} className="bg-amber-500 hover:bg-amber-600 text-white">
               {saving === "video" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}保存
             </Button>
-            <Button size="sm" variant="outline" onClick={() => void test("video")} disabled={testing === "video"}>
-              {testing === "video" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}检查视频模型
+            <Button size="sm" variant="outline" onClick={() => void probeScope("video")} disabled={testing === "video" || saving === "video"}>
+              {(testing === "video" || saving === "video") ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}检查视频模型
             </Button>
           </div>
         </CardContent>
