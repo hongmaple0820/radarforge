@@ -483,3 +483,32 @@ Stage Summary:
 - 本轮文档：docs/product-deep-dive.md（产品深化方案，Markdown 入库随 git 走）
 - 质量证据：主段 40+ 断言 + 视频段 + VLM 终检 + tsc/eslint 双零
 - 待办（P0 起步项）：大纲先行管线、分节生成+跨家族审稿、原子断言核验、固定评测集、视频线选题直出（详见方案第 5 章路线图）
+
+---
+Task ID: p0-quality-pipeline（P0 质量翻身仗：评测集 + 大纲先行管线 + 视频选题直出）
+Agent: 主 Agent（Z.ai）
+Task: 按产品深化方案 P0 路线图开工并全部落地——固定评测集（50 题 + G-Eval 量表 + 质量门禁）、大纲先行管线（大纲 JSON → 分节生成 → 跨家族审稿 ≤2 轮 → 原子断言核验）、视频线选题直出（解耦图文线）
+
+Work Log:
+- 环境修复（沙箱回收善后）：prisma 引擎二进制随 ~/.cache 被清 → 手动下载 schema-engine/libquery_engine（binaries.prisma.sh 慢链路超时，长超时分块拉取后按 fetch-engine 缓存命名规则落位：裸名 + 纯哈希 .sha256，踩了两坑：sha256 文件必须只存裸哈希、libquery-engine 缓存名不带平台后缀）→ generate 恢复 → db push 重建业务表；运行时数据可再生，代码无损
+- 环境事实：搜索密钥随 DB 清空丢失（密钥只存 DB/env，永不入库）→ 搜索诚实降级 DEMO；重播一条命令即可恢复（scripts/set-search-key.mjs）
+- P0-1 固定评测集：eval-topics.ts（50 题 × 10 类，persona/theme 固定保证同题同配置可回归）+ eval.ts（G-Eval 式五维量表：评分锚点 9/8/7/6 分层 + 反偏差指令「不聚 7 不偏长文」+ 裁判跨家族优先）+ /api/eval（GET 题库/最近评分 + POST score）+ scripts/eval-set.mjs（跑题→等终态→评分→汇总五维均分/门禁率/断言统计→报告 JSON 落 download/）+ Asset(role=eval-score) 留痕
+- P0-2 大纲先行管线（七步→九步）：①outline 步骤（radar-outline.ts：JSON 大纲每节论点/证据编号/配图位/字数预算；失败降级回老单遍管线）②draft 改分节生成（sectionMessages 逐节聚焦 + writtenSoFar 上下文衔接 + assembleDraft 归一 ## 层级）③review 改跨家族（gateway 增 chatVia 指定 provider 直调 + pickCrossFamilyReviewer 换家族裁判，无第二家族时同家族如实留痕）+ ≤2 轮修订上限（防过度修改漂移）+ pairwiseMessages 成对比较交换位置裁决（v1 A=原/B=修、v2 反向，修订稿胜场多才采纳——防越改越差）④verify 原子断言步（radar-verify.ts：FActScore 式拆 10~20 条原子事实断言→逐条检索 bestMatch 核验→无据率>30% 置 gateBlocked；DEMO 搜索诚实跳过）⑤claims/断言共用 matching.ts（tokenize CJK bigram+拉丁词、bestMatch、MIN_HITS=2）⑥断言落 Claim 表 kind=ASSERT idx=0（不进脚注渲染，UI 走 artifacts 断言卡）
+- 发布门禁：actions 路由 publish 前置三查（无审稿记录/审稿均分<7.0/断言无据率>30% → 400 + reasons；force 可强发自担风险）；run-detail 发布按钮改双态（拦截面板 + 「仍要发布」）
+- P0-3 视频线选题直出：video-runs.ts（run kind=video 三步：research 检索摘要落 artifacts → directions 导演三方向 → status=blocked 等用户选向 → generateDirectStoryboard 同步出分镜 + output 落 markdown 脚本）+ radar-rewrite.ts 增 storyboardDirectMessages/directionsDirectMessages（事实只能来自检索摘要、DEMO 数据不带具体数字的诚实条款）+ /api/video-runs（GET 列表 + POST 创建/storyboard）+ video-panel 增源模式切换（从图文成稿/选题直出）+ 三方向卡与分镜渲染控件复用（渲染/指着改/版本树挂 video run）
+- UI 九步适配：run-detail STEP_LABELS 九项 + grid-cols-9 + 大纲卡（节标题/证据编号/配图位徽章）+ 断言卡（无据率进度条 + 逐条 ✅/❌ + 来源链接）+ studio-panel/page 文案
+- gateway 429 长退避：chatRetry 纳入 429/too many requests 到 TRANSIENT + 15s/30s 长退避（配额按窗口结算，密集分节调用会触顶；配合 provider 内部短退避）
+- 回归升级：full-regression 九步断言（outline 产物/分节对齐/审稿留痕 rounds+pairwise/断言统计与 ASSERT 账本/DEMO 诚实跳过）+ G-Eval 评分与题库断言 + 视频直出 E2E（blocked→分镜→done）+ 发布门禁双态断言（放行或拦截+force 强发）+ 搜索 DEMO 容忍；test-claim-match 离线用例不动全过
+- 回归与验证：主段 55 项断言全绿 0 失败零 5xx（九步 done：大纲 5 节/分节 5/5 对齐/审稿 R1:8.2 一轮通过/断言 DEMO 诚实跳过/配图 3 张降级留痕/排版 6995 字符）+ G-Eval 评分 8.3 门禁 PASS + 视频直出 E2E（blocked→7 镜 60s→done）+ 5 平台导出（mode 感知探针）；视频段 art 50s/0.8MB + motion 59s/1280×720 双成片 done；评测集试跑 4 题（m01 8.3/m02 8.2/m03 8.2/m05 8.3，门禁 100%，报告落 download/ + 基线文档入库 docs/eval-baseline-2026-10-30.md）；agent-browser 端到端：九列步骤条/大纲卡/断言标签/门禁按钮全渲染 + 直出 UI 全链 + console 零错误
+- 诚实性修复两处（回归当场暴露）：①跨家族裁判标签——pi-ai 假就绪（回归早段写入的 dummy key）→ 裁判调用失败回退 zai-llm 但仍标「跨家族」→ 改为回退后如实改标「同家族」；②导出探针 mode 感知——DEMO 搜索无已核实 claims 时 markdown/zhihu/小红书/头条的来源类探针必然落空 → 放宽为 REAL 模式才断言来源行为
+- 鲁棒性修复两处：①brief 三档温度（0.4/0.2/0.3）+ 空返回重试（m01 首跑两档均空/畸形返回失败）；②评测运行器题间节拍 75s + 失败题等 100s 二次重试 + 评分 429 等 90s 重试（用户级 10 分钟 30 次限流实锤：管线连跑 3 题必撞）
+- 视频段回归脚本改造：建 run 行从 POST /api/runs 改为 Prisma 直插——否则九步管线后台连跑与视频渲染抢 LLM 配额
+- 平台配额工程事实（重要）：内置引擎按 chat 计日 300 次（北京时间零点重置，x-ratelimit-limit-daily 头可查）+ 用户级 10 分钟 30 次；本轮 14:36-24:00 全程 429 即前轮回归耗尽日配额，零点后恢复；评测集全量 50 题需分 5 次跑（scripts/quota-wait.mjs 可等窗口）
+- 平台生图端点 405（阿里云网关页，全尺寸同症状）：配图/封面/纯图线全部诚实降级留痕，非代码问题；配图恰当率指标待端点恢复重测
+- 沙箱回收善后两件：prisma 引擎缓存（~/.cache/prisma）随回收清空 → 手动下载二进制按 fetch-engine 命名规则落位（踩坑：.sha256 必须只存裸哈希；libquery-engine 缓存名不带平台后缀）；搜索密钥随 DB 清空 → DEMO 降级，重播一条命令恢复
+
+Stage Summary:
+- 本轮代码：P0 全部五项 + 解耦（九步管线/评测集三件套/发布门禁/视频直出/429 长退避）
+- 本轮文档：README 核心能力更新、方案附录 D（改动清单+回归证据）、评测基线报告入库
+- 质量证据：主段 55 断言全绿 + 视频双成片 + 评测 4 题 8.25 均分门禁 100% + 浏览器 E2E + tsc/eslint 双零
+- 待办（用户侧）：①重播搜索密钥后跑全量 50 题基线 + 断言核验指标生效（SEARCH_KEY=xxx bun scripts/set-search-key.mjs）②配置第二 LLM 家族启用真跨家族裁判 ③生图端点恢复后重测配图恰当率 ④git push 需新令牌

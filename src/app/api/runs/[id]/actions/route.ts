@@ -14,7 +14,7 @@ import { resolveThemeId } from "@/lib/runtime/render"
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   try {
-    const body = (await req.json()) as { action?: string; markdown?: string; target?: string; theme?: string; platform?: string; voice?: string; aspect?: string; storyboard?: unknown; style?: string; channel?: string; bgm?: string; direction?: unknown; sceneId?: number; feedback?: string; baseAssetId?: string }
+    const body = (await req.json()) as { action?: string; markdown?: string; target?: string; theme?: string; platform?: string; voice?: string; aspect?: string; storyboard?: unknown; style?: string; channel?: string; bgm?: string; direction?: unknown; sceneId?: number; feedback?: string; baseAssetId?: string; force?: boolean }
     const action = body.action ?? ""
 
     // ---------- edit：用户改稿 → 喂飞轮 ----------
@@ -271,8 +271,46 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       return NextResponse.json({ theme, htmlLength: relayout.formatted.length, message: `已切换为 ${theme} 主题并重排版（${relayout.formatted.length} 字符 HTML）` })
     }
 
-    // ---------- publish：三级降级发布 ----------
+    // ---------- publish：三级降级发布（P0 起前置质量门禁） ----------
+    // 门禁规则（诚实拦截，可 force 强发）：
+    //   ① 审稿均分 < 7.0 → 拦（内容质量未达发布线）
+    //   ② 原子断言无据率 > 30% → 拦（事实风险；DEMO 搜索/未核验不拦）
+    //   ③ 没有任何审稿记录 → 拦（管线不完整）
     if (action === "publish") {
+      const force = Boolean(body.force)
+      if (!force) {
+        const run = await db.agentRun.findUnique({
+          where: { id },
+          include: { reviews: { orderBy: { round: "asc" } } },
+        })
+        let artifacts: Record<string, unknown> = {}
+        try {
+          artifacts = JSON.parse(run?.artifacts || "{}") as Record<string, unknown>
+        } catch {
+          /* ignore */
+        }
+        const lastReview = run?.reviews[run.reviews.length - 1] ?? null
+        const assertions = (artifacts.assertions ?? null) as
+          | { gateBlocked?: boolean; unsupportedRate?: number; total?: number; threshold?: number }
+          | null
+        const reasons: string[] = []
+        if (!lastReview) reasons.push("无审稿记录（流水线不完整）")
+        if (lastReview && lastReview.average < 7.0) reasons.push(`审稿均分 ${lastReview.average} < 7.0`)
+        if (assertions?.gateBlocked) {
+          reasons.push(
+            `原子断言无据率 ${(Number(assertions.unsupportedRate ?? 0) * 100).toFixed(0)}% > ${(Number(assertions.threshold ?? 0.3) * 100).toFixed(0)}%（${assertions.total} 条中无据过多）`,
+          )
+        }
+        if (reasons.length > 0) {
+          return NextResponse.json(
+            {
+              gate: { blocked: true, reasons },
+              error: `发布门禁拦截：${reasons.join("；")}。改稿后重试，或带 force 参数强制发布（自担风险）`,
+            },
+            { status: 400 },
+          )
+        }
+      }
       const outcome = await publishWechat(id)
       return NextResponse.json({ outcome })
     }

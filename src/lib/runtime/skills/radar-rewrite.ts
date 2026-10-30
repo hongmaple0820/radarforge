@@ -128,6 +128,121 @@ export function storyboardMessages(markdown: string, platform: string, direction
   ]
 }
 
+// ---------- 选题直出（P0：视频线解耦图文线） ----------
+// 输入是「选题 + 检索摘要」而非成稿；分镜吃检索要点而非全文，
+// 事实密度有下限（检索摘要带着日期与来源）；没有的文章细节不编造。
+
+export interface ResearchDigestItem {
+  title: string
+  site: string
+  date: string
+  url: string
+  snippet: string
+}
+
+export interface ResearchDigest {
+  mode: "REAL" | "DEMO"
+  items: ResearchDigestItem[]
+}
+
+export function digestToText(digest: ResearchDigest): string {
+  return digest.items
+    .map((r, i) => `${i + 1}. ${r.title}（${r.site} · ${r.date}）\n   ${r.snippet}`)
+    .join("\n")
+}
+
+export function storyboardDirectMessages(input: {
+  topic: string
+  angle: string
+  digest: ResearchDigest
+  platform: string
+  direction?: DirectionBrief
+}): ChatMessage[] {
+  const dirBlock = input.direction
+    ? [
+        "",
+        "【已选定导演方向（分镜必须贯彻它的语言与节奏）】",
+        `方向 ${input.direction.key} · ${input.direction.name}（${input.direction.kind === "amplify" ? "B·放大" : input.direction.kind === "unexpected" ? "C·意外" : "A·贴合"}）`,
+        `语言与技法：${input.direction.language}`,
+        `节奏：${input.direction.feel}`,
+        `主视觉色 #${input.direction.accent.replace("#", "")}（场景卡/字幕强调都用这个色系）`,
+        "分镜的 visual 要按这个方向的语言写（怎么动、什么材质），不是通用描述。",
+      ].join("\n")
+    : ""
+  return [
+    {
+      role: "system",
+      content: [
+        "你是短视频编导。用户给一个选题（没有成稿），你基于检索到的资讯要点直接创作分镜脚本。",
+        `目标平台：${input.platform}。总时长 45~75 秒，6~9 个分镜。`,
+        "要求：",
+        "- hook：前 3 秒钩子（提问/冲突/反常识），一句话",
+        "- 每个分镜：seconds（2~12 秒）、visual（画面怎么做：数据卡/大字/素材混剪）、narration（口播，口语短句）、subtitle（屏幕大字 ≤12 字）、broll（空镜素材建议）",
+        "- caption：发布文案（含 3~5 个 #话题标签）",
+        "- 事实数字只能来自检索摘要（保留原文数字与日期），检索没有的细节一律不编造——宁可讲观点也不造事实",
+        "- 检索摘要为 DEMO 演示数据时（标题带「演示数据」），只借用主题方向，不使用其中的具体数字",
+        "严格输出 JSON（不要 markdown 代码块）：",
+        `{`,
+        `  "title": "视频标题",`,
+        `  "hook": "前3秒钩子",`,
+        `  "totalSeconds": 60,`,
+        `  "scenes": [ { "id": 1, "seconds": 5, "visual": "...", "narration": "...", "subtitle": "...", "broll": "..." } ],`,
+        `  "bgm": "音乐风格建议",`,
+        `  "caption": "发布文案 #标签"`,
+        `}`,
+      ].join("\n") + dirBlock,
+    },
+    {
+      role: "user",
+      content: [
+        `选题：${input.topic}`,
+        `角度：${input.angle || "（自行判断最佳角度）"}`,
+        "",
+        "【检索摘要（唯一的事实来源）】",
+        digestToText(input.digest) || "（无检索结果：全部用观点推进，不出现任何具体数字）",
+      ].join("\n"),
+    },
+  ]
+}
+
+export function directionsDirectMessages(input: { topic: string; angle: string; digest: ResearchDigest; platform: string }): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: [
+        "你是宣传片导演（学 huashu-motion 的导演工作流）。理解这个选题与检索要点，为它提出三个真正不同的视频方向，供用户三选一。",
+        `目标平台：${input.platform}，成片 45~75 秒。`,
+        "三方向规则（严格执行）：",
+        "- A · Fit（贴合）：信息形态与内容个性指向的、稳妥而优秀的语言。是安全选择。",
+        "- B · Amplify（放大）：同一信息推向更大胆的语言——一镜到底 / 大字报字体当主角 / 更快节奏蒙太奇 / 空间纵深，任选其一。能量比 A 高。",
+        "- C · Unexpected（意外）：换一种仍然承载信息、契合气质的意外语言——艺术史重构 / 角色小故事 / 编辑拼贴 / 日常器物开场等。仍要讲这件事本身，不是为新奇而新奇。",
+        "- 恰好一个方向使用「空间纵深」（把界面/数据/物件放进空间里运镜），其余两个以平面语言为主。",
+        "- 三个方向的差异必须在「语言与材质」，不许只是换配色；能量轴也要有差异，至少一个是快节奏蒙太奇版。",
+        "- 每个方向 palette.accent 取内容自然衍生色（主题色/数据色/情绪色），base 一深一浅要有别，note 一句话说明颜色从哪来。",
+        "- 推荐标记 recommended：按内容形态选一个最合适的（不默认 A）。",
+        "每字段都短而具体（feel 要提到前 3 秒无声时观众看到什么）。严格输出 JSON（不要 markdown 代码块）：",
+        `{`,
+        `  "directions": [`,
+        `    { "key": "A", "kind": "fit", "name": "证据链", "language": "节奏卡点 + 数据砸入（语言 + 技法）", "logline": "一句话：钩子→…→结尾", "why": "信息形态+个性 → 该语言", "feel": "蒙太奇 · 120BPM · 前3秒：大数字砸满屏", "palette": { "accent": "#38bdf8", "base": "#0b1220", "note": "科技蓝取自数据图表" }, "depth": false, "recommended": false },`,
+        `    { "key": "B", "kind": "amplify", "name": "…", "language": "…", "logline": "…", "why": "…", "feel": "…", "palette": { "accent": "…", "base": "…", "note": "…" }, "depth": true, "recommended": true },`,
+        `    { "key": "C", "kind": "unexpected", "name": "…", "language": "…", "logline": "…", "why": "…", "feel": "…", "palette": { "accent": "…", "base": "…", "note": "…" }, "depth": false, "recommended": false }`,
+        `  ]`,
+        `}`,
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: [
+        `选题：${input.topic}`,
+        `角度：${input.angle || "（自行判断）"}`,
+        "",
+        "【检索摘要（供理解内容形态）】",
+        digestToText(input.digest).slice(0, 4000) || "（无检索结果，按选题字面理解）",
+      ].join("\n"),
+    },
+  ]
+}
+
 // ---------- 导演三方向提案（学 huashu-motion director §4：A·Fit / B·Amplify / C·Unexpected） ----------
 
 export interface DirectionProposal {

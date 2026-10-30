@@ -58,7 +58,7 @@ interface VideoMeta {
 
 const VIDEO_STAGE_LABELS: Record<string, string> = { queued: "排队中", tts: "TTS 口播合成", spec: "分镜转动画 spec（LLM）", frames: "逐帧渲染", submit: "提交 AI 模型", poll: "AI 生成中", download: "下载成片", encode: "分段编码", concat: "合成 MP4", done: "完成", error: "失败" }
 
-const STEP_LABELS: Record<string, string> = { brief: "任务书", claims: "主张取证", draft: "初稿", review: "五维审稿", illustrate: "正文配图", cover: "封面", layout: "微信排版" }
+const STEP_LABELS: Record<string, string> = { brief: "任务书", claims: "主张取证", outline: "大纲先行", draft: "分节初稿", review: "跨家族审稿", verify: "原子断言", illustrate: "正文配图", cover: "封面", layout: "微信排版" }
 const DIM_LABELS: Record<string, string> = { accuracy: "准确", viewpoint: "观点", usefulness: "有用", voice: "合声", readability: "好读" }
 
 export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () => void }) {
@@ -136,6 +136,7 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
   const [exportData, setExportData] = useState<{ platform: string; label: string; kind: "html" | "markdown" | "text"; content: string; instruction: string; note?: string } | null>(null)
   const [exportTheme, setExportTheme] = useState("")
   const [exportBusy, setExportBusy] = useState(false)
+  const [gateBlocked, setGateBlocked] = useState<{ reasons: string[] } | null>(null)
 
   const doExport = async (platform: string, theme?: string) => {
     if (!runId) return
@@ -258,16 +259,25 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
     }
   }
 
-  const doPublish = async () => {
+  const doPublish = async (force = false) => {
     setBusy("publish")
     try {
       const res = await fetch(`/api/runs/${run.id}/actions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "publish" }),
+        body: JSON.stringify({ action: "publish", ...(force ? { force: true } : {}) }),
       })
       const json = await res.json()
-      if (!res.ok) throw new Error(json.error)
+      if (!res.ok) {
+        if (json.gate?.blocked) {
+          setGateBlocked(json.gate)
+          toast({ title: "发布门禁拦截", description: json.gate.reasons?.[0] ?? "质量未达标", variant: "destructive" })
+        } else {
+          throw new Error(json.error)
+        }
+        return
+      }
+      setGateBlocked(null)
       setPublishOut(json.outcome)
       toast({ title: `发布走通：${json.outcome.levelName}`, description: json.outcome.instruction.slice(0, 60) })
       await refresh()
@@ -442,10 +452,10 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
         </div>
       </motion.div>
 
-      {/* 七步进度 */}
+      {/* 九步进度 */}
       <Card>
         <CardContent className="pt-4">
-          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-2">
+          <div className="grid grid-cols-2 md:grid-cols-5 xl:grid-cols-9 gap-2">
             {steps.map((s, i) => (
               <div key={i} className={`rounded-lg border px-3 py-2 space-y-1 ${s.status === "done" ? "border-emerald-200 bg-emerald-50/50 dark:bg-emerald-950/20" : s.status === "running" ? "border-amber-300 bg-amber-50/50 dark:bg-amber-950/20" : s.status === "error" ? "border-red-200 bg-red-50/50 dark:bg-red-950/20" : s.status === "skipped" ? "border-muted bg-muted/30" : ""}`}>
                 <div className="flex items-center gap-1.5">
@@ -483,6 +493,84 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
               })()}
             </CardContent>
           </Card>
+
+          {/* 大纲（P0 大纲先行产物） */}
+          {(() => {
+            let outline: { title: string; sections: { heading: string; point: string; evidence: number[]; illustration: string }[] } | null = null
+            try { outline = JSON.parse(run.artifacts).outline ?? null } catch { /* ignore */ }
+            if (!outline) return null
+            return (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm flex items-center justify-between">
+                    <span>大纲（{outline.sections.length} 节）</span>
+                    <Badge variant="outline" className="text-[9px]">先规划后写作</Badge>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  <div className="space-y-1.5">
+                    {outline.sections.map((s, i) => (
+                      <div key={i} className="rounded-md border px-2 py-1.5 space-y-0.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <Badge variant="outline" className="text-[9px] px-1 py-0">{i + 1}</Badge>
+                          <span className="text-[11px] font-semibold">{s.heading}</span>
+                          {s.evidence?.length > 0 && (
+                            <Badge variant="outline" className="text-[8px] px-1 py-0 border-amber-400 text-amber-600 dark:text-amber-400">
+                              证据 {s.evidence.join(",")}
+                            </Badge>
+                          )}
+                          {s.illustration && <Badge variant="outline" className="text-[8px] px-1 py-0">配图位</Badge>}
+                        </div>
+                        <p className="text-[10px] text-muted-foreground leading-snug line-clamp-2">{s.point}</p>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )
+          })()}
+
+          {/* 原子断言核验（P0 事实层产物） */}
+          {(() => {
+            let assertions: { total: number; verified: number; unsupported: number; unsupportedRate: number; threshold: number; gateBlocked: boolean; items?: { text: string; verified: boolean; sourceUrl: string; sourceSite: string }[] } | null = null
+            try { assertions = JSON.parse(run.artifacts).assertions ?? null } catch { /* ignore */ }
+            if (!assertions) return null
+            const pct = Math.round((assertions.unsupportedRate ?? 0) * 100)
+            return (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm flex items-center justify-between">
+                    <span>原子断言核验</span>
+                    <Badge variant={assertions.gateBlocked ? "destructive" : "default"} className={`text-[9px] ${assertions.gateBlocked ? "" : "bg-emerald-600"}`}>
+                      {assertions.gateBlocked ? "门禁拦截" : "门禁通过"}
+                    </Badge>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-0 space-y-1.5">
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <span className="text-muted-foreground">无据率</span>
+                    <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full ${pct <= Math.round((assertions.threshold ?? 0.3) * 100) ? "bg-emerald-500" : "bg-red-400"}`} style={{ width: `${Math.min(100, pct)}%` }} />
+                    </div>
+                    <span className={`font-semibold ${assertions.gateBlocked ? "text-red-500" : "text-emerald-600"}`}>{pct}%</span>
+                    <span className="text-[9px] text-muted-foreground">阈值 {Math.round((assertions.threshold ?? 0.3) * 100)}%</span>
+                  </div>
+                  {(assertions.items ?? []).slice(0, 8).map((x, i) => (
+                    <div key={i} className="flex items-start gap-1.5">
+                      {x.verified ? <CheckCircle2 className="h-3 w-3 text-emerald-600 shrink-0 mt-0.5" /> : <XCircle className="h-3 w-3 text-red-400 shrink-0 mt-0.5" />}
+                      <p className="text-[10px] leading-snug line-clamp-1 flex-1">{x.text}</p>
+                      {x.verified && x.sourceUrl && (
+                        <a href={x.sourceUrl} target="_blank" rel="noreferrer" className="text-[9px] text-muted-foreground hover:text-amber-600 shrink-0 max-w-[70px] truncate">{x.sourceSite}</a>
+                      )}
+                    </div>
+                  ))}
+                  {(assertions.items ?? []).length > 8 && (
+                    <p className="text-[9px] text-muted-foreground">…共 {assertions.total} 条（{assertions.verified} 有据 / {assertions.unsupported} 无据）</p>
+                  )}
+                </CardContent>
+              </Card>
+            )
+          })()}
 
           {/* claims 账本 */}
           <Card>
@@ -635,11 +723,30 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
                   <Button size="sm" variant="outline" onClick={copyHtmlSource} disabled={!latest.formatted}>
                     <Copy className="h-3.5 w-3.5 mr-1" />复制 HTML
                   </Button>
-                  <Button size="sm" className="bg-amber-500 hover:bg-amber-600 text-white" onClick={doPublish} disabled={busy === "publish"}>
-                    {busy === "publish" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Send className="h-3.5 w-3.5 mr-1" />}发布（三级降级）
+                  <Button size="sm" className="bg-amber-500 hover:bg-amber-600 text-white" onClick={() => doPublish(false)} disabled={busy === "publish"}>
+                    {busy === "publish" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Send className="h-3.5 w-3.5 mr-1" />}发布（质量门禁 + 三级降级）
                   </Button>
                 </div>
-                <p className="text-[10px] text-muted-foreground">排版主题切换与多平台复制已移至下方「多平台发布中心」（18 主题即时预览，应用后秒级重排）</p>
+                {/* 发布门禁拦截面板（诚实告知原因，可强制发布自担风险） */}
+                {gateBlocked && (
+                  <div className="rounded-lg border border-red-300 bg-red-50/60 dark:bg-red-950/20 px-3 py-2 space-y-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <XCircle className="h-3.5 w-3.5 text-red-500" />
+                      <span className="text-xs font-semibold text-red-600 dark:text-red-400">发布门禁拦截</span>
+                    </div>
+                    {gateBlocked.reasons?.map((r, i) => (
+                      <p key={i} className="text-[11px] text-red-700 dark:text-red-300 leading-snug">· {r}</p>
+                    ))}
+                    <div className="flex items-center gap-2 pt-0.5">
+                      <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => doPublish(true)} disabled={busy === "publish"}>
+                        {busy === "publish" ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Send className="h-3 w-3 mr-1" />}
+                        仍要发布（自担风险）
+                      </Button>
+                      <span className="text-[10px] text-muted-foreground">建议先在左侧「原子断言」核对无据条目，或改稿后重试</span>
+                    </div>
+                  </div>
+                )}
+                <p className="text-[10px] text-muted-foreground">门禁规则：审稿均分 ≥7.0 且断言无据率 ≤30% 才放行；排版主题切换与多平台复制已移至下方「多平台发布中心」</p>
               </CardContent>
             </Card>
           )}

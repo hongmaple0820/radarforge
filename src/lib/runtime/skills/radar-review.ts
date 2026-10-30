@@ -1,7 +1,10 @@
 // ============================================================
 // radar-review —— 五维审稿 skill（学 wewrite 编辑飞轮）
 // 准确 / 观点 / 有用 / 合声 / 好读，JSON 评分
-// 不过关 → revise 修订一轮
+// P0 升级：跨家族审稿 ≤2 轮 + 成对比较裁决（防「越改越差」）
+// —— LLM-as-a-Judge 综述（2411.15594）的三个系统性偏差对策：
+//    自我偏好 → 裁判换供应商家族；位置偏差 → A/B 交换位置各评一次；
+//    过度修改漂移 → 修订上限 2 轮 + 成对比较只在接受修订更优时通过
 // ============================================================
 
 import type { ChatMessage } from "@/lib/gateway/types"
@@ -90,3 +93,75 @@ export function parseReview(raw: unknown): Review | null {
 }
 
 export { DIMS }
+
+// ---------- 成对比较（pairwise，交换位置防位置偏差） ----------
+
+export interface PairwiseInput {
+  original: string
+  revised: string
+  /** 审稿意见摘要（裁判知道「改」的目标是什么） */
+  reviewSummary: string
+}
+
+/**
+ * 成对比较裁判。orientation=false 时 A=原文 B=修订稿；
+ * orientation=true 时交换（A=修订稿 B=原文）。
+ * 输出 winner: "A" | "B" | "tie"（按 orientation 归一化回「修订稿是否更优」由调用方处理）
+ */
+export function pairwiseMessages(input: PairwiseInput, orientation: boolean): ChatMessage[] {
+  const a = orientation ? input.revised : input.original
+  const b = orientation ? input.original : input.revised
+  const aLabel = orientation ? "修订稿" : "原文"
+  const bLabel = orientation ? "原文" : "修订稿"
+  return [
+    {
+      role: "system",
+      content: [
+        "你是严格的第三方内容编辑，裁决两版稿件哪版更好。不知道也不关心哪版是谁写的。",
+        "评判标准（按重要性）：① 事实与引用严谨（编造/无据陈述最严重）② 论点清晰敢表态 ③ 结构与节奏 ④ 与人格设定一致。",
+        "注意：不要因篇幅更长就偏袒某版；先指出各自最具体的优缺点再下结论。",
+        "严格输出 JSON（不要 markdown 代码块）：",
+        `{ "winner": "A" | "B" | "tie", "reason": "一句话最关键的裁决理由", "aWeakness": "A 版最具体的问题", "bWeakness": "B 版最具体的问题" }`,
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: [
+        input.reviewSummary ? `本次修订目标：${input.reviewSummary.slice(0, 300)}` : "",
+        "",
+        `【A 版（${aLabel}）】`,
+        a.slice(0, 8000),
+        "",
+        `【B 版（${bLabel}）】`,
+        b.slice(0, 8000),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    },
+  ]
+}
+
+export interface PairwiseVerdict {
+  winner: "A" | "B" | "tie"
+  reason: string
+}
+
+export function parsePairwise(raw: unknown): PairwiseVerdict | null {
+  if (!raw || typeof raw !== "object") return null
+  const o = raw as Record<string, unknown>
+  const winner = String(o.winner ?? "").toUpperCase()
+  if (winner !== "A" && winner !== "B" && winner !== "TIE") return null
+  return {
+    winner: winner === "TIE" ? "tie" : (winner as "A" | "B"),
+    reason: String(o.reason ?? "").slice(0, 200),
+  }
+}
+
+/** 审稿意见摘要（喂给成对裁判当「修订目标」） */
+export function reviewSummary(review: Review): string {
+  return review.comments
+    .filter((c) => review.scores[c.dim as keyof ReviewScores] !== undefined && review.scores[c.dim as keyof ReviewScores] < 8)
+    .map((c) => `${c.dim}：${c.comment}`)
+    .join("；")
+    .slice(0, 300)
+}

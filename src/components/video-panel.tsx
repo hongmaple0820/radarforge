@@ -86,6 +86,14 @@ export function VideoPanel() {
   const [runId, setRunId] = useState<string | null>(null)
   const [storyboard, setStoryboard] = useState<StoryboardData | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  // 源模式：article（从图文成稿，推荐）/ direct（选题直出，P0 解耦）
+  const [srcMode, setSrcMode] = useState<"article" | "direct">("article")
+  // 直出模式状态
+  const [dTopic, setDTopic] = useState("")
+  const [dAngle, setDAngle] = useState("")
+  const [dPlatform, setDPlatform] = useState("douyin")
+  const [dRunId, setDRunId] = useState<string | null>(null)
+  const [dRun, setDRun] = useState<{ id: string; status: string; steps: string; artifacts: string; error: string; mode: string } | null>(null)
   // 渲染参数
   const [style, setStyle] = useState<VideoStyle>("motion")
   const [channel, setChannel] = useState<VideoChannel>("local")
@@ -312,6 +320,95 @@ export function VideoPanel() {
     }
   }
 
+  // ---------- 选题直出（P0：视频线解耦图文线） ----------
+  const startDirect = async () => {
+    if (!dTopic.trim()) return
+    setBusy("direct-start")
+    setDirections(null)
+    setSelDir(null)
+    setStoryboard(null)
+    try {
+      const res = await fetch("/api/video-runs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic: dTopic, angle: dAngle, platform: dPlatform }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      setDRunId(json.id)
+      setDRun(null)
+      toast({ title: "选题直出已启动", description: "检索摘要 → 导演三方向，约半分钟" })
+    } catch (e) {
+      toast({ title: "启动失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // 直出 run 轮询：queued/running → blocked（三方向就绪等选择）
+  useEffect(() => {
+    if (!dRunId) return
+    let stop = false
+    const poll = async () => {
+      try {
+        const json = await fetch(`/api/runs/${dRunId}`).then((x) => x.json())
+        const run = json.run as { id: string; status: string; steps: string; artifacts: string; error: string; mode: string } | null
+        if (stop || !run) return
+        setDRun(run)
+        if (run.status === "blocked") {
+          // 三方向就绪 → 填入共用方向卡 UI
+          try {
+            const arts = JSON.parse(run.artifacts || "{}") as { directions?: DirectionCard[] }
+            if (arts.directions?.length) {
+              setDirections(arts.directions)
+              setSelDir(arts.directions.find((d) => d.recommended) ?? arts.directions[0] ?? null)
+            }
+          } catch {
+            /* 无方向也可直接分镜 */
+          }
+        }
+      } catch {
+        /* 网络抖动继续轮询 */
+      }
+    }
+    void poll()
+    const t = setInterval(() => {
+      if (!stop) void poll()
+    }, 3000)
+    return () => {
+      stop = true
+      clearInterval(t)
+    }
+  }, [dRunId])
+
+  const doDirectStoryboard = async (direction: DirectionCard | null) => {
+    if (!dRunId) return
+    setBusy("storyboard")
+    try {
+      const res = await fetch("/api/video-runs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "storyboard",
+          runId: dRunId,
+          ...(direction
+            ? { direction: { key: direction.key, kind: direction.kind, name: direction.name, language: direction.language, accent: direction.palette.accent, base: direction.palette.base, feel: direction.feel } }
+            : {}),
+        }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      setStoryboard(json.storyboard)
+      setRunId(dRunId) // 渲染/指着改/版本树都挂在这个 video run 上
+      await loadRun(dRunId)
+      toast({ title: "直出分镜已生成", description: `${json.storyboard.scenes.length} 个分镜 · ${json.storyboard.totalSeconds}s${direction ? ` · 方向「${direction.name}」` : ""}` })
+    } catch (e) {
+      toast({ title: "分镜生成失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const selectedRun = runs.find((r) => r.id === runId)
   const reviseScene = storyboard?.scenes.find((s) => s.id === reviseSceneId) ?? null
   // 时间线（分镜等比分段 + 渲染进度头）
@@ -320,36 +417,112 @@ export function VideoPanel() {
 
   return (
     <div className="space-y-4">
-      {/* 源稿选择 + 导演三方向 */}
+      {/* 源模式切换：从图文成稿（推荐）/ 选题直出（P0 解耦） */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base"><Clapperboard className="h-4 w-4 text-rose-500" />视频线 · 工作台</CardTitle>
-          <p className="text-[11px] text-muted-foreground">图文成稿 → 导演三方向 → 分镜 → 三通道成片 + BGM → 指着改出 v2/v3</p>
+          <p className="text-[11px] text-muted-foreground">两种源：图文成稿（信息密度高，推荐）或选题直出（免写文章，检索要点直出分镜）→ 三方向 → 分镜 → 三通道成片 → 指着改</p>
         </CardHeader>
         <CardContent className="space-y-2.5">
-          <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto_auto] gap-2">
-            <select value={runId ?? ""} onChange={(e) => setRunId(e.target.value)} className="h-9 rounded-md border bg-background px-2 text-xs" aria-label="选择源稿">
-              {runs.length === 0 && <option value="">暂有可用的成稿 Run（先去图文线出稿）</option>}
-              {runs.map((r) => (
-                <option key={r.id} value={r.id}>{r.ideaTitle.slice(0, 40)}{r._count?.articles ? `（${r._count.articles} 稿）` : ""}</option>
-              ))}
-            </select>
-            <Button variant="outline" onClick={doDirections} disabled={!runId || busy === "directions"}>
-              {busy === "directions" ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Compass className="h-4 w-4 mr-1" />}
-              导演三方向
-            </Button>
-            <Button variant="outline" onClick={doStoryboard} disabled={!runId || busy === "storyboard"}>
-              {busy === "storyboard" ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Sparkles className="h-4 w-4 mr-1" />}
-              {storyboard ? "重新生成分镜" : "直接生成分镜"}
-            </Button>
-            {storyboard && (
-              <Button variant="ghost" size="sm" onClick={copyStoryboard}><FileText className="h-3.5 w-3.5 mr-1" />复制脚本</Button>
-            )}
+          <div className="flex items-center gap-1.5">
+            {(["article", "direct"] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => { setSrcMode(m); setDirections(null); setSelDir(null); setStoryboard(null) }}
+                className={`text-[11px] border rounded-full px-2.5 py-1 transition-colors ${srcMode === m ? "border-rose-400 bg-rose-50 dark:bg-rose-950/30 text-rose-600 font-semibold" : "hover:border-rose-300 text-muted-foreground"}`}
+              >
+                {m === "article" ? "从图文成稿（推荐）" : "选题直出（新）"}
+              </button>
+            ))}
           </div>
-          {selectedRun && (
-            <p className="text-[10px] text-muted-foreground">
-              源稿：{selectedRun.ideaTitle} · {selectedRun._count?.articles ?? 0} 稿 · {new Date(selectedRun.createdAt).toLocaleString("zh-CN")}
-            </p>
+
+          {srcMode === "article" && (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto_auto] gap-2">
+                <select value={runId ?? ""} onChange={(e) => setRunId(e.target.value)} className="h-9 rounded-md border bg-background px-2 text-xs" aria-label="选择源稿">
+                  {runs.length === 0 && <option value="">暂无可用成稿（先去图文线出稿）</option>}
+                  {runs.map((r) => (
+                    <option key={r.id} value={r.id}>{r.ideaTitle.slice(0, 40)}{r._count?.articles ? `（${r._count.articles} 稿）` : ""}</option>
+                  ))}
+                </select>
+                <Button variant="outline" onClick={doDirections} disabled={!runId || busy === "directions"}>
+                  {busy === "directions" ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Compass className="h-4 w-4 mr-1" />}
+                  导演三方向
+                </Button>
+                <Button variant="outline" onClick={doStoryboard} disabled={!runId || busy === "storyboard"}>
+                  {busy === "storyboard" ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Sparkles className="h-4 w-4 mr-1" />}
+                  {storyboard ? "重新生成分镜" : "直接生成分镜"}
+                </Button>
+                {storyboard && (
+                  <Button variant="ghost" size="sm" onClick={copyStoryboard}><FileText className="h-3.5 w-3.5 mr-1" />复制脚本</Button>
+                )}
+              </div>
+              {selectedRun && (
+                <p className="text-[10px] text-muted-foreground">
+                  源稿：{selectedRun.ideaTitle} · {selectedRun._count?.articles ?? 0} 稿 · {new Date(selectedRun.createdAt).toLocaleString("zh-CN")}
+                </p>
+              )}
+            </>
+          )}
+
+          {srcMode === "direct" && (
+            <div className="space-y-2.5">
+              <div className="grid grid-cols-1 md:grid-cols-[1fr_150px_auto] gap-2">
+                <input
+                  value={dTopic}
+                  onChange={(e) => setDTopic(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && startDirect()}
+                  placeholder="视频选题，如：开源模型追赶商业模型还差什么"
+                  className="h-9 rounded-md border bg-background px-3 text-xs w-full"
+                />
+                <select value={dPlatform} onChange={(e) => setDPlatform(e.target.value)} className="h-9 rounded-md border bg-background px-2 text-xs" aria-label="目标平台">
+                  <option value="douyin">抖音</option>
+                  <option value="shipinhao">视频号</option>
+                  <option value="bilibili">B 站</option>
+                </select>
+                <Button variant="outline" onClick={startDirect} disabled={!dTopic.trim() || busy === "direct-start" || dRunId !== null}>
+                  {busy === "direct-start" ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Sparkles className="h-4 w-4 mr-1" />}
+                  检索 + 三方向
+                </Button>
+              </div>
+              <input
+                value={dAngle}
+                onChange={(e) => setDAngle(e.target.value)}
+                placeholder="切入角度（可选）"
+                className="h-8 rounded-md border bg-background px-3 text-xs w-full"
+              />
+              {dRunId && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-muted-foreground">
+                    <Badge variant={dRun?.status === "blocked" ? "default" : dRun?.status === "error" ? "destructive" : "secondary"} className={`text-[9px] ${dRun?.status === "blocked" ? "bg-amber-500" : dRun?.status === "running" ? "animate-pulse" : ""}`}>
+                      {dRun?.status === "blocked" ? "等待选方向" : dRun?.status === "running" ? "检索/提案中" : dRun?.status === "error" ? "失败" : dRun?.status ?? "排队中"}
+                    </Badge>
+                    {(dRun ? JSON.parse(dRun.steps || "[]") : []).map((s: { name: string; status: string; detail: string }, i: number) => (
+                      <span key={i} className={s.status === "done" ? "text-emerald-600" : s.status === "running" ? "text-amber-600" : s.status === "error" ? "text-red-500" : ""}>
+                        {s.name}:{s.status === "done" ? "✓" : s.status === "running" ? "…" : s.status === "error" ? "✗" : "–"}
+                      </span>
+                    ))}
+                    {dRun?.status === "error" && <span className="text-red-500">{dRun.error?.slice(0, 80)}</span>}
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Button size="sm" variant="ghost" className="h-6 text-[10px]" onClick={() => { setDRunId(null); setDRun(null); setDirections(null); setSelDir(null) }}>
+                      换个选题
+                    </Button>
+                    {dRun?.status === "blocked" && (
+                      <>
+                        <Button size="sm" className="h-7 text-[11px] bg-rose-500 hover:bg-rose-600 text-white" onClick={() => doDirectStoryboard(selDir)} disabled={busy === "storyboard"}>
+                          {busy === "storyboard" ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Sparkles className="h-3 w-3 mr-1" />}
+                          {selDir ? `按方向「${selDir.name}」生成分镜` : "生成分镜"}
+                        </Button>
+                        <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={() => doDirectStoryboard(null)} disabled={busy === "storyboard"}>
+                          跳过方向直接分镜
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </CardContent>
       </Card>
@@ -398,11 +571,11 @@ export function VideoPanel() {
               })}
             </div>
             <div className="flex items-center gap-2 mt-2.5 flex-wrap">
-              <Button size="sm" className="h-7 text-[11px] bg-rose-500 hover:bg-rose-600 text-white" onClick={doStoryboard} disabled={busy === "storyboard"}>
+              <Button size="sm" className="h-7 text-[11px] bg-rose-500 hover:bg-rose-600 text-white" onClick={() => (srcMode === "direct" ? doDirectStoryboard(selDir) : doStoryboard())} disabled={busy === "storyboard"}>
                 {busy === "storyboard" ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Sparkles className="h-3 w-3 mr-1" />}
                 按方向「{selDir?.name ?? "—"}」生成分镜
               </Button>
-              <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={() => { setSelDir(null); void doStoryboard() }} disabled={busy === "storyboard"}>
+              <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={() => (srcMode === "direct" ? doDirectStoryboard(null) : (setSelDir(null), void doStoryboard()))} disabled={busy === "storyboard"}>
                 跳过方向直接分镜
               </Button>
             </div>

@@ -18,7 +18,7 @@ import { agnesLlm } from "./providers/agnes/agnes-llm"
 import { agnesImage } from "./providers/agnes/agnes-image"
 import { agnesVideo } from "./providers/agnes/agnes-video"
 import { piAiLlm } from "./providers/pi-ai-llm"
-import { getSettings } from "@/lib/settings"
+import { getSettings, peekSettings } from "@/lib/settings"
 
 // ---------- 启动注册内置 provider ----------
 let registered = false
@@ -110,8 +110,11 @@ export async function chat(messages: ChatMessage[], opts?: { temperature?: numbe
   }
 }
 
-// ---------- LLM 瞬时故障重试（网络抖动 / 超时 / 5xx：流水线长链路必备） ----------
-const TRANSIENT = /fetch failed|timeout|timed out|aborted|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|socket hang up|network|502|503|504/i
+// ---------- LLM 瞬时故障重试（网络抖动 / 超时 / 5xx / 429 配额窗口） ----------
+// 429：内置引擎配额按窗口结算，密集调用（分节生成/回归连跑）会触顶；
+// 用长退避等窗口结算，配合 provider 内部短退避，绝不炸流水线。
+
+const TRANSIENT = /fetch failed|timeout|timed out|aborted|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|socket hang up|network|502|503|504|429|too many requests/i
 
 export async function chatRetry(
   messages: ChatMessage[],
@@ -126,10 +129,76 @@ export async function chatRetry(
       lastErr = e
       const msg = (e as Error).message ?? ""
       if (!TRANSIENT.test(msg) || i === tries - 1) throw e
-      await new Promise((r) => setTimeout(r, 900 * (i + 1)))
+      const is429 = /429|too many requests/i.test(msg)
+      // 429 配额窗口结算慢 → 长退避（15s/30s）；其他瞬时故障短退避
+      await new Promise((r) => setTimeout(r, is429 ? 15_000 * (i + 1) : 900 * (i + 1)))
     }
   }
   throw lastErr
+}
+
+// ---------- 指定 provider 直调（跨家族审稿用：绕过设置中心的 mode 选择） ----------
+// 调用方明确指定 provider 名（如审稿换家族），统计照记，失败由调用方降级。
+export async function chatVia(
+  name: string,
+  messages: ChatMessage[],
+  opts?: { temperature?: number },
+): Promise<string> {
+  const p = registry.get(name)
+  if (p.kind !== "LLM") throw new GatewayError(`${name} 注册异常（非 LLM）`, "PROTOCOL_ERROR")
+  const t0 = Date.now()
+  try {
+    const out = await p.chat(messages, opts)
+    await recordCall(name, true, Date.now() - t0)
+    return out
+  } catch (e) {
+    await recordCall(name, false, Date.now() - t0, (e as Error).message)
+    throw e
+  }
+}
+
+// ---------- 跨家族审稿裁判选择（LLM-as-a-Judge 自我偏好对策） ----------
+// 写作用哪个 provider，审稿就尽量换一个「家族」（不同实现/不同账号池）；
+// 都不可用则退回同家族并如实留痕——诚实降级，绝不冒充跨家族。
+
+export interface ReviewerChoice {
+  provider: string // 实际将使用的 provider 名
+  crossFamily: boolean // 是否真正换了家族
+  note: string // 留痕说明
+}
+
+/** 当前设置模式下 chat() 实际会用的 provider 名 */
+export function resolveDraftLlmName(): string {
+  const s = peekSettings()
+  if (!s) return "zai-llm"
+  const useAgnes = s.llm.mode === "agnes" && s.agnes.enabled && s.agnes.accounts.some((a) => a.enabled && a.apiKey)
+  const usePiAi = s.llm.mode === "pi-ai" && s.llm.piProvider && s.llm.model
+  const useCustom = s.llm.mode === "custom" && s.llm.baseUrl && s.llm.apiKey
+  return useAgnes ? "agnes-llm" : usePiAi ? "pi-ai-llm" : useCustom ? "custom-openai-llm" : "zai-llm"
+}
+
+/** 选一个与写作家族不同的裁判（按可用性优先级；找不到则同家族+说明） */
+export function pickCrossFamilyReviewer(draftName: string): ReviewerChoice {
+  const s = peekSettings()
+  const agnesReady = Boolean(s?.agnes.enabled && s.agnes.accounts.some((a) => a.enabled && a.apiKey))
+  const customReady = Boolean(s?.llm.baseUrl && s.llm.apiKey)
+  const piAiReady = Boolean(s?.llm.piProvider && s.llm.model && s.llm.apiKey)
+  // 候选（除写作家族外，按稳定性排序）
+  const candidates: { name: string; ready: boolean }[] = [
+    { name: "zai-llm", ready: true }, // 平台内置，永远可用
+    { name: "agnes-llm", ready: agnesReady },
+    { name: "custom-openai-llm", ready: customReady },
+    { name: "pi-ai-llm", ready: piAiReady },
+  ]
+  const alt = candidates.find((c) => c.ready && c.name !== draftName)
+  if (alt) {
+    return { provider: alt.name, crossFamily: true, note: `跨家族审稿：写作 ${draftName} → 裁判 ${alt.name}` }
+  }
+  return {
+    provider: draftName,
+    crossFamily: false,
+    note: `同家族审稿（${draftName}）：未配置第二 LLM 家族，自我偏好偏差无法完全消除；配置 Agnes/自定义模型后自动启用跨家族`,
+  }
 }
 
 // ---------- 健康巡检 ----------

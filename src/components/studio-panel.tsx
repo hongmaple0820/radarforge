@@ -95,7 +95,7 @@ export function StudioPanel({ seed }: { seed?: { title: string; angle: string } 
       if (!res.ok) throw new Error(json.error)
       await refresh()
       setSelectedId(json.id)
-      toast({ title: "七步流水线已启动", description: "brief → claims → 初稿 → 审稿 → 配图 → 封面 → 排版" })
+      toast({ title: "九步流水线已启动", description: "brief → claims → 大纲 → 分节初稿 → 审稿 → 断言 → 配图 → 封面 → 排版" })
     } catch (e) {
       toast({ title: "启动失败", description: (e as Error).message, variant: "destructive" })
     } finally {
@@ -145,8 +145,8 @@ export function StudioPanel({ seed }: { seed?: { title: string; angle: string } 
       {/* 新建运行 */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base"><PenLine className="h-4 w-4 text-amber-500" />图文线 · 七步流水线</CardTitle>
-          <p className="text-[11px] text-muted-foreground">brief 任务书 → claims 联网取证（关键词重合度）→ 人格初稿 → 五维审稿 → 正文配图 → 封面 → 微信排版（18 主题）</p>
+          <CardTitle className="flex items-center gap-2 text-base"><PenLine className="h-4 w-4 text-amber-500" />图文线 · 九步流水线</CardTitle>
+          <p className="text-[11px] text-muted-foreground">brief → claims 取证 → 大纲先行 → 分节初稿 → 跨家族审稿（成对比较）→ 原子断言核验 → 正文配图 → 封面 → 微信排版</p>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-[1fr_170px_130px_auto] gap-2">

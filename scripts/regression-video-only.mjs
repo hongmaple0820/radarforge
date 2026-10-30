@@ -2,6 +2,8 @@
 // 用 scripts/last-storyboard.json 的现成分镜直出成片，验证 render-video 链路
 // 背景：part2 依赖前一段创建的 runId；跨调用 DB 落盘时机问题导致复用失败，
 // 此版本自建 run 行（不等待文章），直接渲染 art 风格成片。
+// 注意：直接用 Prisma 建 run 行（不走 POST /api/runs）——后者会触发九步图文管线
+// 后台连跑，与视频渲染抢 LLM 配额（分节生成 14+ 次调用会撞用户级限流窗口）。
 const BASE = "http://localhost:3000"
 const fs = await import("fs")
 
@@ -20,12 +22,26 @@ async function call(method, path, body, timeoutMs = 300000) {
   return { res, json }
 }
 
-console.log("━━━ 视频段独立回归（last-storyboard → art 成片） ━━━")
+console.log("━━━ 视频段独立回归（last-storyboard → art/motion 成片） ━━━")
 
-// 1. 建 run 行（render-video 不依赖文章，只要 run 存在）
-const created = await call("POST", "/api/runs", { ideaTitle: "视频段回归：art 引擎直出", ideaAngle: "回归脚本", persona: "cold-analyst", theme: "tech-modern" })
-const runId = created.json.id
-ok("创建 run", created.res.ok && Boolean(runId), runId ?? "")
+// 1. 直接建 run 行（不启动图文管线，视频渲染只需要 run 存在）
+const { PrismaClient } = await import("@prisma/client")
+const db = new PrismaClient()
+const runRow = await db.agentRun.create({
+  data: {
+    kind: "article",
+    ideaTitle: "视频段回归：引擎直出（无管线）",
+    ideaAngle: "回归脚本",
+    persona: "cold-analyst",
+    theme: "tech-modern",
+    input: "视频段回归",
+    status: "done",
+    steps: JSON.stringify([]),
+  },
+})
+const runId = runRow.id
+await db.$disconnect()
+ok("创建 run 行（直插 DB，无管线）", Boolean(runId), runId)
 
 // 2. 现成分镜
 const storyboard = JSON.parse(fs.readFileSync("scripts/last-storyboard.json", "utf-8"))

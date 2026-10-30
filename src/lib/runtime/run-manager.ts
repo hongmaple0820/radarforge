@@ -1,20 +1,24 @@
 // ============================================================
-// run-manager（runtime）—— 图文线七步流水线 + 纯图线两步流水线
-// 图文线：brief 任务书 → claims 取证 → 初稿 → 五维审稿
-//         → 正文配图（插图规划+生成+回插）→ 封面 → 排版
+// run-manager（runtime）—— 图文线九步流水线 + 纯图线两步流水线
+// 图文线（P0 质量金字塔 L1-L3）：brief → claims → 大纲先行 →
+//   分节初稿 → 跨家族审稿（≤2轮+成对比较）→ 原子断言核验 →
+//   正文配图 → 封面 → 排版
 // 纯图线：构图方案（LLM）→ 批量生图 → 画廊 markdown
 // 后台执行 + 前端轮询；每步产物落库留痕，可回答「为什么这样写/这样画」
 // ============================================================
 
 import { db } from "@/lib/db"
-import { chatRetry, searchWithFallback } from "@/lib/gateway"
+import { chatRetry, chatVia, pickCrossFamilyReviewer, resolveDraftLlmName, searchWithFallback } from "@/lib/gateway"
 import { generateCoverImage, generateImage } from "@/lib/gateway/providers/zai-image"
 import { getSettings, styleProfilePrompt } from "@/lib/settings"
 import { exemplarPrompt, type StyleExemplar } from "./skills/radar-learn"
 import { extractJson, clampNum } from "./json"
 import { renderWechatHtml, resolveThemeId, type RenderClaim } from "./render"
 import { briefMessages, draftMessages, getPersona, type Brief, type BriefClaim } from "./skills/radar-write"
-import { parseReview, reviewMessages, reviseMessages } from "./skills/radar-review"
+import { parseReview, reviewMessages, reviseMessages, pairwiseMessages, parsePairwise, reviewSummary, type Review } from "./skills/radar-review"
+import { outlineMessages, parseOutline, sectionMessages, assembleDraft, type Outline } from "./skills/radar-outline"
+import { atomicAssertionsMessages, parseAssertions, assertionStats } from "./skills/radar-verify"
+import { bestMatch, MIN_HITS } from "./matching"
 import {
   getImageStyle,
   getImageUsage,
@@ -37,8 +41,10 @@ export interface RunStep {
 const STEP_DEFS: { name: string; label: string }[] = [
   { name: "brief", label: "任务书" },
   { name: "claims", label: "主张取证" },
-  { name: "draft", label: "初稿" },
-  { name: "review", label: "五维审稿" },
+  { name: "outline", label: "大纲先行" },
+  { name: "draft", label: "分节初稿" },
+  { name: "review", label: "跨家族审稿" },
+  { name: "verify", label: "原子断言" },
   { name: "illustrate", label: "正文配图" },
   { name: "cover", label: "封面" },
   { name: "layout", label: "微信排版" },
@@ -129,15 +135,16 @@ async function executeArticleRun(runId: string): Promise<void> {
     // ========== Step 1: brief 任务书 ==========
     let brief: Brief | null = null
     await step(0, async () => {
-      // 降温重试：0.4 偶发非 JSON / 缺字段 → 0.2 保守档重试一次（同 ideas/refresh 已验证模式）
+      // 降温重试：0.4 偶发非 JSON / 缺字段 / 空返回 → 0.2 保守档 → 0.3 第三档（同 ideas/refresh 已验证模式）
       let parsed: Brief | null = null
-      for (const temp of [0.4, 0.2]) {
+      for (const temp of [0.4, 0.2, 0.3]) {
         const raw = await chatRetry(briefMessages(run.ideaTitle, run.ideaAngle, stylePrompt), { temperature: temp })
+        if (!raw || raw.replace(/\s/g, "").length < 20) continue // 空返回按失败重试
         parsed = extractJson<Brief>(raw)
         if (parsed?.coreJudgment) break
       }
       brief = parsed
-      if (!brief?.coreJudgment) throw new Error("任务书解析失败（两档温度重试后仍不合格式，请重试）")
+      if (!brief?.coreJudgment) throw new Error("任务书解析失败（三档温度重试后仍不合格式，请重试）")
       artifacts.brief = brief
       const claimsCount = Array.isArray(brief.claims) ? brief.claims.length : 0
       return `读者：${brief.targetReader?.slice(0, 24) ?? "?"}｜核心判断：${brief.coreJudgment?.slice(0, 40) ?? "?"}｜待核主张 ${claimsCount} 条${stylePrompt ? "｜风格定位已注入" : ""}`
@@ -159,25 +166,9 @@ async function executeArticleRun(runId: string): Promise<void> {
         })
         if (resp.mode === "REAL") mode = "REAL"
         // 关键词重合度匹配（修复旧「假命中」：取第一条长结果就算核实）
-        // 分词：拉丁/数字词 + CJK 二元组（中文无空格，单词级 token 会整句成一个词导致重合度恒 0）
-        const tokenize = (s: string): string[] => {
-          const out: string[] = []
-          for (const m of s.match(/[A-Za-z0-9][A-Za-z0-9_.-]*/g) ?? []) out.push(m.toLowerCase())
-          const cjk = (s.match(/[\u4e00-\u9fff]+/g) ?? []).join("")
-          for (let i = 0; i < cjk.length - 1; i++) out.push(cjk.slice(i, i + 2))
-          return out
-        }
-        const claimTokens = new Set(tokenize(c.text))
-        const overlap = (r: { title: string; passage: string }) => {
-          const hay = new Set(tokenize(`${r.title} ${r.passage.slice(0, 400)}`))
-          let hits = 0
-          for (const t of claimTokens) if (hay.has(t)) hits++
-          return hits
-        }
-        const ranked = [...resp.results].sort((a, b) => overlap(b) - overlap(a))
-        const best = ranked[0]
-        const bestHits = best ? overlap(best) : 0
-        if (best && resp.mode === "REAL" && bestHits >= 2) {
+        // 分词与阈值在 runtime/matching.ts（与原子断言核验共用，离线用例验证）
+        const { best, hits } = bestMatch(c.text, resp.results)
+        if (best && resp.mode === "REAL" && hits >= MIN_HITS) {
           found++
           verifiedClaims.push({
             type: c.type,
@@ -235,104 +226,309 @@ async function executeArticleRun(runId: string): Promise<void> {
           data: { runId, idx: 0, claimType: c.type, text: c.text.slice(0, 500), kind: "REF", verified: null },
         })
       }
-      return `${facts.length} 条 fact 主张取证：${found} 条找到来源（关键词重合度≥2 命中）`
+      return `${facts.length} 条 fact 主张取证：${found} 条找到来源（关键词重合度≥${MIN_HITS} 命中）`
     })
 
-    // ========== Step 3: 初稿 ==========
+    // ========== Step 3: 大纲先行（P0 L2 结构层；失败降级回单遍写作） ==========
+    let outline: Outline | null = null
+    await step(
+      2,
+      async () => {
+        for (const temp of [0.4, 0.2]) {
+          const raw = await chatRetry(
+            outlineMessages({
+              brief: brief!,
+              ideaTitle: run.ideaTitle,
+              ideaAngle: run.ideaAngle,
+              claims: verifiedClaims.map((c) => ({ idx: c.idx, text: c.text, verified: c.verified })),
+              stylePrompt,
+            }),
+            { temperature: temp },
+          )
+          outline = parseOutline(extractJson(raw))
+          if (outline) break
+        }
+        if (!outline) return "大纲解析失败（两档温度重试）→ 初稿回退单遍生成（老管线，不阻断）"
+        artifacts.outline = outline
+        const withIllus = outline.sections.filter((s) => s.illustration).length
+        const totalWords = outline.sections.reduce((s2, x) => s2 + x.words, 0)
+        return `${outline.sections.length} 节大纲｜预算 ${totalWords} 字｜配图位 ${withIllus} 节｜标题「${outline.title.slice(0, 20)}」`
+      },
+      { optional: true },
+    )
+
+    // ========== Step 4: 分节初稿（逐节聚焦写作；无大纲则单遍） ==========
     let draft = ""
-    await step(2, async () => {
+    await step(3, async () => {
       const persona = getPersona(run.persona)
       const rules = await db.learningRule.findMany({ where: { status: "active" }, orderBy: { hits: "desc" }, take: 8 })
-      const raw = await chatRetry(
-        draftMessages({
-          brief: brief!,
-          persona,
-          claims: verifiedClaims.map((c) => ({
-            idx: c.idx,
-            text: c.text,
-            claimType: c.claimType,
-            verified: c.verified,
-            sourceTitle: c.sourceTitle,
-            sourceSite: c.sourceSite,
-            sourceDate: c.sourceDate,
-            sourceUrl: c.sourceUrl,
-          })),
-          rules: rules.map((r) => r.rule),
-          ideaTitle: run.ideaTitle,
-          ideaAngle: run.ideaAngle,
-          stylePrompt,
-          exemplarPrompt: exPrompt,
-        }),
-        { temperature: 0.75 },
-      )
-      if (!raw) throw new Error("初稿生成失败（LLM 空返回）")
-      draft = raw
+      const claimsInput = verifiedClaims.map((c) => ({
+        idx: c.idx,
+        text: c.text,
+        claimType: c.claimType,
+        verified: c.verified,
+        sourceTitle: c.sourceTitle,
+        sourceSite: c.sourceSite,
+        sourceDate: c.sourceDate,
+        sourceUrl: c.sourceUrl,
+      }))
+      if (outline) {
+        // 分节生成：每节只带着自己的论点与证据写作，上下文聚焦（STORM 分节写入）
+        const bodies: string[] = []
+        for (let i = 0; i < outline.sections.length; i++) {
+          const raw = await chatRetry(
+            sectionMessages({
+              outline,
+              sectionIndex: i,
+              brief: brief!,
+              persona,
+              claims: claimsInput,
+              rules: rules.map((r) => r.rule),
+              ideaTitle: run.ideaTitle,
+              ideaAngle: run.ideaAngle,
+              stylePrompt,
+              exemplarPrompt: exPrompt,
+              writtenSoFar: bodies,
+            }),
+            { temperature: 0.75 },
+          )
+          if (!raw || raw.replace(/\s/g, "").length < 50) {
+            throw new Error(`第 ${i + 1} 节生成过短或为空（${raw?.length ?? 0} 字符）`)
+          }
+          bodies.push(raw)
+        }
+        draft = assembleDraft(outline, bodies)
+      } else {
+        // 降级：老管线单遍生成
+        const raw = await chatRetry(
+          draftMessages({
+            brief: brief!,
+            persona,
+            claims: claimsInput,
+            rules: rules.map((r) => r.rule),
+            ideaTitle: run.ideaTitle,
+            ideaAngle: run.ideaAngle,
+            stylePrompt,
+            exemplarPrompt: exPrompt,
+          }),
+          { temperature: 0.75 },
+        )
+        if (!raw) throw new Error("初稿生成失败（LLM 空返回）")
+        draft = raw
+      }
       if (rules.length > 0) {
         await db.$transaction(rules.map((r) => db.learningRule.update({ where: { id: r.id }, data: { hits: { increment: 1 } } })))
       }
-      const wordCount = raw.replace(/\s/g, "").length
-      const title = raw.match(/^#\s+(.+)$/m)?.[1] ?? run.ideaTitle
+      const wordCount = draft.replace(/\s/g, "").length
+      const title = draft.match(/^#\s+(.+)$/m)?.[1] ?? run.ideaTitle
       await db.article.create({
-        data: { runId, version: 0, title: title.slice(0, 120), markdown: raw, wordCount },
+        data: { runId, version: 0, title: title.slice(0, 120), markdown: draft, wordCount },
       })
-      return `${persona.label}｜${wordCount} 字｜注入飞轮规则 ${rules.length} 条`
+      return outline
+        ? `${persona.label}｜分节 ${outline.sections.length}/${outline.sections.length}｜${wordCount} 字｜注入飞轮规则 ${rules.length} 条`
+        : `${persona.label}｜单遍降级｜${wordCount} 字｜注入飞轮规则 ${rules.length} 条`
     })
 
-    // ========== Step 4: 五维审稿（不过关 revise 一轮） ==========
+    // ========== Step 5: 跨家族审稿（≤2 轮修订 + 成对比较裁决） ==========
+    // LLM-as-a-Judge 三对策（2411.15594）：裁判换家族（自我偏好）；
+    // 成对比较交换位置（位置偏差）；修订上限 2 轮（过度修改漂移）。
+    // 成对比较只在接受「修订稿确实更优」时通过——防越改越差。
     let finalDraft = draft
-    await step(3, async () => {
+    await step(4, async () => {
       const persona = getPersona(run.persona)
-      // 降温重试：审稿 JSON 偶发不合格式 → 0.1 保守档重试
-      let review: ReturnType<typeof parseReview> = null
-      for (const temp of [0.2, 0.1]) {
-        const reviewRaw = await chatRetry(reviewMessages(draft, persona.label), { temperature: temp })
-        review = parseReview(extractJson(reviewRaw))
-        if (review) break
+      const draftLlm = resolveDraftLlmName()
+      const reviewer = pickCrossFamilyReviewer(draftLlm)
+      // 裁判实际生效者（跨家族故障回退后如实改标，绝不冒充跨家族）
+      let judgeUsed = reviewer.provider
+      let judgeCross = reviewer.crossFamily
+      let judgeNote = reviewer.note
+      // 裁判调用：跨家族走 chatVia（失败回退主链路）；同家族走 chatRetry
+      const judge = async (msgs: Parameters<typeof chatRetry>[0], temperature: number) => {
+        if (reviewer.crossFamily) {
+          try {
+            return await chatVia(reviewer.provider, msgs, { temperature })
+          } catch {
+            /* 裁判家族故障 → 回退主链路（不炸流水线），并如实改标 */
+            judgeUsed = draftLlm
+            judgeCross = false
+            judgeNote = `裁判 ${reviewer.provider} 调用失败 → 回退 ${draftLlm}（同家族审稿）`
+          }
+        }
+        return chatRetry(msgs, { temperature })
       }
-      if (!review) return "审稿解析失败，跳过（初稿直接进入排版）"
-      artifacts.review = review
-      const avg = review.average
-      let revised = false
-      if (avg < 7.5) {
+      const reviewOnce = async (md: string): Promise<Review | null> => {
+        for (const temp of [0.2, 0.1]) {
+          const raw = await judge(reviewMessages(md, persona.label), temp)
+          const r = parseReview(extractJson(raw))
+          if (r) return r
+        }
+        return null
+      }
+      const first = await reviewOnce(draft)
+      if (!first) return `审稿解析失败，跳过｜${judgeNote}`
+
+      artifacts.review = { family: judgeNote, rounds: [], pairwise: [] }
+      const roundLog: { round: number; average: number; revised: boolean }[] = []
+      const pairwiseLog: { round: number; accepted: boolean; reason: string }[] = []
+      let current = draft
+      let lastReview = first
+
+      // ≤2 轮：每轮 = 裁判评分 →（未达标时）作者修订 + 成对比较裁决
+      for (let round = 1; round <= 2; round++) {
+        const review = round === 1 ? first : await reviewOnce(current)
+        if (!review) break // 第二轮评分解析失败 → 保留现有结论
+        lastReview = review
+        if (review.average >= 7.5) {
+          roundLog.push({ round, average: review.average, revised: false })
+          await db.reviewRecord.create({
+            data: {
+              runId, round,
+              scoresJson: JSON.stringify(review.scores),
+              commentsJson: JSON.stringify(review.comments),
+              average: review.average,
+              revised: false,
+            },
+          })
+          break
+        }
+        // 未达标 → 修订（写作家族自己改，裁判只评不改）
+        let revisedDraft = ""
         try {
-          const revisedDraft = await chatRetry(reviseMessages(draft, review), { temperature: 0.5 })
-          if (revisedDraft && revisedDraft.length > 400) {
-            finalDraft = revisedDraft
-            revised = true
-            const wordCount = revisedDraft.replace(/\s/g, "").length
-            const title = revisedDraft.match(/^#\s+(.+)$/m)?.[1] ?? run.ideaTitle
-            const v0 = await db.article.findFirst({ where: { runId }, orderBy: { version: "asc" } })
-            await db.article.create({
-              data: { runId, version: (v0?.version ?? 0) + 1, title: title.slice(0, 120), markdown: revisedDraft, wordCount },
-            })
+          revisedDraft = await chatRetry(reviseMessages(current, review), { temperature: 0.5 })
+        } catch {
+          revisedDraft = ""
+        }
+        if (!revisedDraft || revisedDraft.length < 400) {
+          roundLog.push({ round, average: review.average, revised: false })
+          await db.reviewRecord.create({
+            data: {
+              runId, round,
+              scoresJson: JSON.stringify(review.scores),
+              commentsJson: JSON.stringify(review.comments),
+              average: review.average,
+              revised: false,
+            },
+          })
+          break
+        }
+        // 成对比较裁决（两个方向各评一次，交换位置防位置偏差）
+        const summary = reviewSummary(review)
+        let accepted = false
+        let reason = ""
+        try {
+          const v1 = parsePairwise(extractJson(await judge(pairwiseMessages({ original: current, revised: revisedDraft, reviewSummary: summary }, false), 0.2)))
+          const v2 = parsePairwise(extractJson(await judge(pairwiseMessages({ original: current, revised: revisedDraft, reviewSummary: summary }, true), 0.2)))
+          if (v1 && v2) {
+            // 归一化：修订稿在两个方向下的胜场
+            const revisedWins = (v1.winner === "B" ? 1 : 0) + (v2.winner === "A" ? 1 : 0)
+            const originalWins = (v1.winner === "A" ? 1 : 0) + (v2.winner === "B" ? 1 : 0)
+            accepted = revisedWins > originalWins || (revisedWins === originalWins && revisedWins === 0)
+            reason = v1.reason || v2.reason
+          } else {
+            accepted = true // 裁决不可用 → 相信修订（有明确的审稿意见兜底）
+            reason = "成对裁决解析失败，按审稿意见采纳修订"
           }
         } catch {
-          /* 修订失败保留初稿 */
+          accepted = true
+          reason = "成对裁决调用失败，按审稿意见采纳修订"
+        }
+        pairwiseLog.push({ round, accepted, reason })
+        await db.reviewRecord.create({
+          data: {
+            runId, round,
+            scoresJson: JSON.stringify(review.scores),
+            commentsJson: JSON.stringify(review.comments),
+            average: review.average,
+            revised: accepted,
+          },
+        })
+        roundLog.push({ round, average: review.average, revised: accepted })
+        if (accepted) {
+          current = revisedDraft
+          finalDraft = revisedDraft
+          const wordCount = revisedDraft.replace(/\s/g, "").length
+          const title = revisedDraft.match(/^#\s+(.+)$/m)?.[1] ?? run.ideaTitle
+          const vMax = await db.article.findFirst({ where: { runId }, orderBy: { version: "desc" } })
+          await db.article.create({
+            data: { runId, version: (vMax?.version ?? 0) + 1, title: title.slice(0, 120), markdown: revisedDraft, wordCount },
+          })
+        } else {
+          break // 修订被否决（越改越差）→ 保留原稿，停止轮次
         }
       }
-      await db.reviewRecord.create({
-        data: {
-          runId,
-          round: 1,
-          scoresJson: JSON.stringify(review.scores),
-          commentsJson: JSON.stringify(review.comments),
-          average: avg,
-          revised,
-        },
-      })
-      const dims = Object.entries(review.scores).map(([k, v]) => `${k} ${clampNum(v, 0, 10, 0)}`).join(" / ")
-      return `均分 ${avg}${revised ? "（已修订一轮）" : "（通过）"}｜${dims}`
+      ;(artifacts.review as { family: string; rounds: unknown[]; pairwise: unknown[] }).rounds = roundLog
+      ;(artifacts.review as { family: string; rounds: unknown[]; pairwise: unknown[] }).pairwise = pairwiseLog
+      const dims = Object.entries(lastReview.scores).map(([k, v]) => `${k} ${clampNum(v, 0, 10, 0)}`).join(" / ")
+      const revisions = roundLog.filter((r) => r.revised).length
+      return `均分 ${lastReview.average}｜${judgeCross ? `跨家族裁判 ${judgeUsed}` : `同家族裁判 ${judgeUsed}`}｜${revisions} 轮修订${revisions > 0 ? `（成对比较裁决 ${pairwiseLog.filter((p) => p.accepted).length}/${pairwiseLog.length} 采纳）` : "（一轮通过）"}｜${dims}`
     })
 
-    // ========== Step 5: 正文配图（可选：插图规划 → zai-image 生成 → 回插 markdown） ==========
-    // 修复「文章里没有图」：从成稿提炼 2~3 个插图位（锚定小节标题），
+    // ========== Step 6: 原子断言核验（P0 L1 事实层；FActScore 式） ==========
+    // 成稿拆 10~20 条原子事实断言 → 逐条检索核验（关键词重合度）→
+    // 无据率超阈值（30%）→ 发布门禁拦截（publish 需 force 或改稿）。
+    // 搜索 DEMO 模式时诚实跳过（降级数据不可作核验依据）。
+    await step(
+      5,
+      async () => {
+        if (mode !== "REAL") {
+          return "搜索为 DEMO 模式，断言核验跳过（演示数据不可作核验依据；配置搜索密钥后自动启用）"
+        }
+        let assertions: { text: string }[] = []
+        for (const temp of [0.3, 0.1]) {
+          const raw = await chatRetry(atomicAssertionsMessages(finalDraft), { temperature: temp })
+          assertions = parseAssertions(extractJson(raw))
+          if (assertions.length > 0) break
+        }
+        if (assertions.length === 0) return "断言抽取失败，跳过（不阻断）"
+        const items: { text: string; verified: boolean; sourceUrl: string; sourceSite: string }[] = []
+        let verifiedCount = 0
+        for (let i = 0; i < assertions.length; i++) {
+          const a = assertions[i]
+          const resp = await searchWithFallback({ query: a.text.slice(0, 40), count: 8, industry: "news" })
+          const { best, hits } = bestMatch(a.text, resp.results)
+          const ok = Boolean(best && resp.mode === "REAL" && hits >= MIN_HITS)
+          if (ok) verifiedCount++
+          items.push({ text: a.text, verified: ok, sourceUrl: ok ? best!.url : "", sourceSite: ok ? best!.site : "" })
+          // 落账本（kind=ASSERT，idx=0 不进脚注渲染；UI 从 artifacts 断言卡展示）
+          await db.claim.create({
+            data: {
+              runId,
+              idx: 0,
+              claimType: "fact",
+              text: a.text.slice(0, 500),
+              quote: ok ? (best!.passage ?? "").slice(0, 200) : "",
+              sourceTitle: ok ? best!.title : "",
+              sourceUrl: ok ? best!.url : "",
+              sourceSite: ok ? best!.site : "",
+              sourceDate: ok ? best!.date : "",
+              kind: "ASSERT",
+              verified: ok,
+            },
+          })
+        }
+        const stats = assertionStats(verifiedCount, items.length)
+        artifacts.assertions = { ...stats, items: items.map((x) => ({ text: x.text.slice(0, 100), verified: x.verified, sourceUrl: x.sourceUrl, sourceSite: x.sourceSite })) }
+        const pct = (stats.unsupportedRate * 100).toFixed(0)
+        return stats.gateBlocked
+          ? `⚠️ ${stats.total} 条断言：${stats.verified} 有据 / ${stats.unsupported} 无据（无据率 ${pct}% > ${(stats.threshold * 100).toFixed(0)}% 阈值）→ 发布门禁拦截`
+          : `${stats.total} 条断言：${stats.verified} 有据 / ${stats.unsupported} 无据（${pct}% ≤ ${(stats.threshold * 100).toFixed(0)}% 阈值，门禁通过）`
+      },
+      { optional: true },
+    )
+
+    // ========== Step 7: 正文配图（可选：插图规划 → zai-image 生成 → 回插 markdown） ==========
+    // 修复「文章里没有图」：优先采纳大纲期配图位（P0 大纲 JSON 的
+    // illustration/imageCaption 字段），从成稿提炼 2~3 个插图位（锚定小节标题），
     // 生成与文风一致的扁平插画并回插 markdown；生图降级不阻断（跳过该图留痕）
     await step(
-      4,
+      6,
       async () => {
         let plan: IllustrationPlanItem[] | null = null
+        const outlineHints = outline
+          ? outline.sections.map((s) => ({ heading: s.heading, illustration: s.illustration, imageCaption: s.imageCaption }))
+          : undefined
         for (const temp of [0.3, 0.1]) {
-          const raw = await chatRetry(illustrationPlanMessages(finalDraft), { temperature: temp })
+          const raw = await chatRetry(illustrationPlanMessages(finalDraft, outlineHints), { temperature: temp })
           plan = extractJson<IllustrationPlanItem[]>(raw)
           if (Array.isArray(plan) && plan.length > 0) break
         }
@@ -392,9 +588,9 @@ async function executeArticleRun(runId: string): Promise<void> {
       { optional: true },
     )
 
-    // ========== Step 6: 封面（可选，失败降级留痕） ==========
+    // ========== Step 8: 封面（可选，失败降级留痕） ==========
     await step(
-      5,
+      7,
       async () => {
         const title = finalDraft.match(/^#\s+(.+)$/m)?.[1] ?? run.ideaTitle
         const img = await generateCoverImage(
@@ -418,8 +614,8 @@ async function executeArticleRun(runId: string): Promise<void> {
       { optional: true },
     )
 
-    // ========== Step 7: 微信排版 ==========
-    await step(6, async () => {
+    // ========== Step 9: 微信排版 ==========
+    await step(8, async () => {
       const theme = resolveThemeId(run.theme)
       const renderClaims: RenderClaim[] = verifiedClaims
         .filter((c) => c.verified)

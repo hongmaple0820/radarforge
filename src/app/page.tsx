@@ -38,7 +38,7 @@ export default function Home() {
           </div>
           <div className="hidden md:flex items-center gap-1.5 shrink-0">
             <span className="text-[10px] font-mono text-amber-600 dark:text-amber-400 border border-amber-300 dark:border-amber-800 rounded-full px-2 py-0.5 bg-amber-50 dark:bg-amber-950/40">
-              三生产线 · 图文七步 + 视频三通道 + 纯图线
+              三生产线 · 图文九步（大纲先行+断言核验）· 视频选题直出 · 纯图线
             </span>
             <span className="text-[10px] font-mono text-muted-foreground border rounded-full px-2 py-0.5">
               18 主题 · wewrite · art-motion · Agnes
@@ -85,7 +85,7 @@ export default function Home() {
                   </TabsTrigger>
                 </TabsList>
                 <span className="text-[10px] text-muted-foreground hidden sm:inline">
-                  图文：brief → claims → 初稿 → 审稿 → 配图 → 封面 → 排版｜视频：分镜 → 三通道渲染｜纯图：构图方案 → 批量生图
+                  图文：brief → claims → 大纲 → 分节 → 审稿 → 断言 → 配图 → 封面 → 排版｜视频：选题直出/从文章 → 三通道渲染｜纯图：构图 → 批量生图
                 </span>
               </div>
               <TabsContent value="article" className="mt-0">
@@ -113,8 +113,8 @@ export default function Home() {
       {/* Footer（sticky bottom） */}
       <footer className="mt-auto border-t bg-background">
         <div className="max-w-[1440px] mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
-          <span>AI 资讯雷达 2.0 · 图文七步流水线（含正文配图）· 视频三通道 · 纯图线 · 18 主题排版（wewrite）· 5 平台导出 · Agnes 多账号 · Skills/MCP 插件体系</span>
-          <span className="font-mono">数据可溯源：brief · claims 账本 · [n] 引用</span>
+          <span>AI 资讯雷达 2.0 · 图文九步流水线（大纲先行/跨家族审稿/原子断言/正文配图）· 视频选题直出 · 纯图线 · 18 主题排版 · 5 平台导出 · 固定评测集 + 发布门禁</span>
+          <span className="font-mono">数据可溯源：brief · claims 账本 · 断言核验 · [n] 引用</span>
         </div>
       </footer>
     </div>

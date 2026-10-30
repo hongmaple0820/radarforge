@@ -139,7 +139,17 @@ export interface IllustrationPlanItem {
 export const ILLUSTRATION_STYLE_TOKEN =
   "现代扁平插画风，几何构图，蓝灰科技配色，与文章气质一致的克制配色，干净留白，无文字无水印"
 
-export function illustrationPlanMessages(draft: string): ChatMessage[] {
+export function illustrationPlanMessages(draft: string, outlineHints?: { heading: string; illustration: string; imageCaption: string }[]): ChatMessage[] {
+  const hintBlock =
+    outlineHints && outlineHints.length > 0
+      ? [
+          "",
+          "【大纲期插图位参考（编辑已在大纲规划了这些配图位，优先采纳或改进，不要无视）】",
+          ...outlineHints
+            .filter((h) => h.illustration)
+            .map((h) => `- 「${h.heading}」：${h.illustration}${h.imageCaption ? `（图说方向：${h.imageCaption}）` : ""}`),
+        ].join("\n")
+      : ""
   return [
     {
       role: "system",
@@ -152,7 +162,7 @@ export function illustrationPlanMessages(draft: string): ChatMessage[] {
         "4. caption 是中文图注（≤16 字），是对图的说明，不是小节标题的重复。",
         "严格输出 JSON 数组（不要 markdown 代码块、不要多余文字）：",
         `[{"anchor":"## 后的小节标题原文","concept":"画面描述","caption":"图注"}]`,
-      ].join("\n"),
+      ].join("\n") + hintBlock,
     },
     { role: "user", content: draft.slice(0, 6000) },
   ]
