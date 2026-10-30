@@ -394,3 +394,12 @@ wewrite 集成（MIT，纯增量吸收）：
 1. 首推遇 TLS 中断（GnuTLS -110，43.7 MiB 大包上传典型问题）——`http.version=HTTP/1.1` + 524 MB postBuffer 解决
 2. **再推被 GitHub secret scanning 拦截**：清洗脚本第 59 行硬编码了真实密钥前缀 `sk-9aae***（17 位前缀，已从代码与日志抹除）` 作为定点校验目标——"检测密钥的代码自己成了密钥"。讽刺的是本地终检正则 `sk-[a-zA-Z0-9]{20}`（要求 20 位）门槛高于 GitHub 的 16 位判定，漏过了它。修复：改通用密钥特征正则（sk-/ghp_/github_pat_/AKIA/xox/AIza 全家桶），并移除"排除脚本自身"的侥幸过滤
 3. worklog 中 `sk-9aae...`（4 字符缩写）低于检测阈值，保留作事实记录
+
+## 2026-10-30 · GitHub 推送落地（密钥拦截 ×2 + 网络重试）
+
+**推送三波折（如实留痕，作为"清洗不彻底"的活教材）**：
+1. **第一次拦截（OpenAI 密钥）**：清洗脚本硬编码真实密钥前缀做定点校验——已修复（详见上节）
+2. **第二次拦截（腾讯云 SecretId）**：早期 worklog 记录过用户提供的完整 SecretId（`AKIDBg7M` 前缀，现存于 327ce5d~1890428 四个历史提交的 worklog.md:34；当前版本早已改写掉，仅历史残留）。首次报错被管道 grep 过滤截断只看到尾部，误以为只有一个密钥——教训：**推送被拒必须看全量报错**。修复：提取完整密钥至规则文件（不回显）→ `git filter-repo --replace-text` 内容级替换为 `***REDACTED-TENCENT-SECRETID***` → 同提交无 32 位 SecretKey 伴生（已验证）
+3. **网络**：HTTP/2 大包上传遇 GnuTLS TLS 中断；`http.version=HTTP/1.1` + 524MB postBuffer 稳定穿透；后台分离进程（setsid）推送规避工具超时
+
+**终极验证**：全历史 × 全密钥家族超级扫描（AKID/sk-/sk_live/ghp_/github_pat_/AKIA/xox/AIza/PRIVATE KEY）零残留；两枚历史密钥（OpenAI sk-、腾讯云 AKID）均已从全部 16 个提交中物理清除，且当事密钥本身应视为已泄露作废
