@@ -359,3 +359,38 @@ wewrite 集成（MIT，纯增量吸收）：
 - 浏览器端到端复现用户场景（agent-browser）：添加账号→填密钥→「全池探活」→ 自动落库（DB: hasKey=true）→ 真实探测 401 反馈；enabled 保持 false（探活不替用户做启用决定）；截图 download/agnes-probe-fix.png / agnes-probe-e2e.png
 - 回归：Agnes/视频/设置/pi-ai/搜索断言全绿；LLM 相关项因当日配额耗尽（前序会话 ~100 调用 + 本次连跑 3 遍全量回归）报 429——上游配额问题非代码缺陷，配额窗口恢复后 `bun scripts/full-regression.mjs` 可复跑
 - tsc 0 错误 / eslint src/ 0 问题
+
+## 2026-10-30 · GitHub 发布准备：密钥全历史清洗（含 db 误删事故与恢复）
+
+**背景**：用户要求推送 GitHub。推送前安全体检发现三类风险，全部处置完毕。
+
+**识别的泄露风险（推送即泄露，幸而仓库从未有 remote）**：
+1. `.env` 被 git 跟踪——历史两个提交含真实密钥 `sk-9aae...`（`.gitignore` 的 `.env*` 规则只对未跟踪文件生效，历史跟踪绕过了它）
+2. `db/custom.db` 被跟踪——`SettingKV` 表存 4 个供应商密钥配置，历史 blob 含 `ey...` 密钥串
+3. `skill-pool/`（910 文件第三方工作区，grep 确认无运行时引用）与 `tool-results/`（临时产物）令仓库臃肿
+
+**清洗（scripts/github-secret-cleanup.sh 落盘可复用）**：
+- `git filter-repo --invert-paths` 全历史移除四路径 + `reflog expire` + `gc --prune=now --aggressive` 物理回收旧 blob
+- 15 commits 全部重写（旧 hash 全部失效，映射见 `.git/filter-repo/commit-map`；此前 worklog 中的 53f0dcb 等旧 hash 引用即对应新历史）
+- 仓库从 1100+ 跟踪文件瘦身至 402 个（43.71 MiB）
+- 双重验证全绿：`git log --all -- .env db/custom.db skill-pool tool-results` 零输出；全历史 `git grep sk-9aae` 零残留
+- `.gitignore` 增补：`!.env.example` 白名单、`/db/*.db`、`/db/*.db-journal`、`*.pid`、`/skill-pool/`、`/tool-results/`
+
+**⚠️ 事故：db 误删与恢复（如实留痕）**：
+- 经过：filter-repo checkout 将 db/ 目录一并移除；脚本恢复步骤的 `cp ... || true` 因目录不存在静默失败，末尾又删除备份——`db/custom.db` 文件层面丢失
+- 损失评估：真实 Agnes 密钥从未入库（用户尚未填写）；z-ai 系密钥为沙箱注入；业务数据均为测试期 AI 生成——**无不可再生的用户数据**
+- 恢复：`prisma db push` 重建 14 张表；dev server 冷启动验证首页 200（42ms）、`/api/settings` 自动回落代码 DEFAULTS（builtin 模式 + 沙箱密钥）——平台功能零损失
+- 脚本 bug 已修：恢复步骤前补 `mkdir -p` + 恢复失败显式报警（防后人复用踩坑）
+- 待用户重配两处：风格写作范文（`style:exemplars` 空数组，设置中心 UI 重贴）；Agnes 真实密钥（本就待填）
+
+**项目命名（占用核查后定稿）**：
+- 排除 `ai-news-radar`：LearnPrompt 同名仓库 1.7K stars 且定位重叠（24h AI 资讯雷达），必被淹没
+- 排除 `trendforge` 系（TrendForge-AI- / trend-forge / TrendForge Labs 全被占）与 `newsmith`（Roblox 同名游戏 27 万评分 + 英国公司商标噪音）
+- **定稿 `radarforge`**：radar（元宝 SearchPro 情报雷达）+ forge（图文/视频双生产线锻造）；全网搜索无同名项目；仓库描述与 topics 见 README
+
+**本次交付**：README.md（GitHub 门面）+ LICENSE（MIT）+ db/.gitkeep + 清洗脚本修复入库
+
+**推送波折（如实留痕）**：
+1. 首推遇 TLS 中断（GnuTLS -110，43.7 MiB 大包上传典型问题）——`http.version=HTTP/1.1` + 524 MB postBuffer 解决
+2. **再推被 GitHub secret scanning 拦截**：清洗脚本第 59 行硬编码了真实密钥前缀 `sk-9aae***（17 位前缀，已从代码与日志抹除）` 作为定点校验目标——"检测密钥的代码自己成了密钥"。讽刺的是本地终检正则 `sk-[a-zA-Z0-9]{20}`（要求 20 位）门槛高于 GitHub 的 16 位判定，漏过了它。修复：改通用密钥特征正则（sk-/ghp_/github_pat_/AKIA/xox/AIza 全家桶），并移除"排除脚本自身"的侥幸过滤
+3. worklog 中 `sk-9aae...`（4 字符缩写）低于检测阈值，保留作事实记录

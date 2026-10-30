@@ -53,3 +53,17 @@ dev.out.log
 server.log
 # Skills directory
 /skills/
+
+# ===== 密钥与本地运行时（严禁入库）=====
+# SQLite 库内含设置中心密钥（SettingKV），.env 历史曾泄露真实密钥，已 filter-repo 全历史清洗
+.env*
+!.env.example
+/db/*.db
+/db/*.db-journal
+*.pid
+
+# 本地插件工作区与临时产物（本地保留，不入库）
+/skill-pool/
+/tool-results/
+.claude
+.z-ai-config
