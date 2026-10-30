@@ -4,6 +4,8 @@
 
 **AI 资讯雷达 · 自媒体内容生产线**
 
+[![中文](https://img.shields.io/badge/文档-中文-red)](README.md) | [![English](https://img.shields.io/badge/docs-English-blue)](README.en.md)
+
 *Radar for intelligence, forge for content — from a raw signal to a published story.*
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)
