@@ -403,3 +403,5 @@ wewrite 集成（MIT，纯增量吸收）：
 3. **网络**：HTTP/2 大包上传遇 GnuTLS TLS 中断；`http.version=HTTP/1.1` + 524MB postBuffer 稳定穿透；后台分离进程（setsid）推送规避工具超时
 
 **终极验证**：全历史 × 全密钥家族超级扫描（AKID/sk-/sk_live/ghp_/github_pat_/AKIA/xox/AIza/PRIVATE KEY）零残留；两枚历史密钥（OpenAI sk-、腾讯云 AKID）均已从全部 16 个提交中物理清除，且当事密钥本身应视为已泄露作废
+
+**推送最终落地（分块方案）**：后台分离进程在会话回收时被杀（沙箱特性：会话结束进程不保）。最终方案 `scripts/push-retry.sh`（幂等可重跑）：按提交前缀分 3 块（≈5 MiB / 33 MiB 引擎大块 / ≈13 MiB），每块独立连接 + 限时重试 + 奇偶交替 postBuffer（500MB 单 POST / 8MB 分块传输）。chunk1 第 2 次尝试成功、chunk2 与 final 一次通过——远端 main 与本地 HEAD 一致，全部 17 个提交落地。后续日常推送均为小增量，若再遇 TLS 中断可复用该脚本
