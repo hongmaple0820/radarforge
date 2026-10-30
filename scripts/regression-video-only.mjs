@@ -1,0 +1,76 @@
+// regression-video-only.mjs —— 视频段独立回归（省时版）
+// 用 scripts/last-storyboard.json 的现成分镜直出成片，验证 render-video 链路
+// 背景：part2 依赖前一段创建的 runId；跨调用 DB 落盘时机问题导致复用失败，
+// 此版本自建 run 行（不等待文章），直接渲染 art 风格成片。
+const BASE = "http://localhost:3000"
+const fs = await import("fs")
+
+function ok(name, cond, extra = "") {
+  console.log(`  ${cond ? "✅" : "❌"} ${name}${extra ? `  ${extra}` : ""}`)
+}
+
+async function call(method, path, body, timeoutMs = 300000) {
+  const res = await fetch(BASE + path, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+  const json = await res.json().catch(() => ({}))
+  return { res, json }
+}
+
+console.log("━━━ 视频段独立回归（last-storyboard → art 成片） ━━━")
+
+// 1. 建 run 行（render-video 不依赖文章，只要 run 存在）
+const created = await call("POST", "/api/runs", { ideaTitle: "视频段回归：art 引擎直出", ideaAngle: "回归脚本", persona: "cold-analyst", theme: "tech-modern" })
+const runId = created.json.id
+ok("创建 run", created.res.ok && Boolean(runId), runId ?? "")
+
+// 2. 现成分镜
+const storyboard = JSON.parse(fs.readFileSync("scripts/last-storyboard.json", "utf-8"))
+ok("分镜加载", Array.isArray(storyboard?.scenes) && storyboard.scenes.length >= 3, `${storyboard?.scenes?.length} 分镜 ${storyboard?.totalSeconds}s`)
+
+// 3. art 渲染
+const rv = await call("POST", `/api/runs/${runId}/actions`, {
+  action: "render-video", storyboard, voice: "xiaochen", aspect: "9:16", style: "art", channel: "local",
+})
+ok("art 渲染启动", rv.res.ok, rv.json.message?.slice(0, 60) ?? rv.json.error ?? "")
+
+let meta = null
+for (let i = 0; i < 100; i++) {
+  await new Promise((r) => setTimeout(r, 5000))
+  const rj = await fetch(`${BASE}/api/runs/${runId}`).then((r) => r.json())
+  const va = [...(rj.run?.assets ?? [])].reverse().find((a) => a.role === "video-final")
+  if (!va) continue
+  try { meta = JSON.parse(va.meta || "{}") } catch { continue }
+  if (i % 6 === 0) console.log(`  … stage=${meta.stage} ${meta.percent ?? 0}% (${meta.sceneDone ?? 0}/${meta.sceneTotal ?? 0})`)
+  if (["done", "error"].includes(meta.stage)) break
+}
+ok("art 成片终态", meta?.stage === "done", `stage=${meta?.stage} ${meta?.seconds ?? 0}s ${(meta?.sizeBytes ?? 0) ? (meta.sizeBytes / 1048576).toFixed(1) + "MB" : ""} ${meta?.aiNote ?? ""} ${meta?.error ?? ""}`)
+
+if (meta?.stage === "done") {
+  const head = await fetch(`${BASE}/assets/video-${runId}.mp4`, { method: "HEAD" })
+  ok("成片静态可访问", head.ok, `${head.headers.get("content-type")} ${(Number(head.headers.get("content-length") ?? 0) / 1048576).toFixed(1)}MB`)
+}
+
+// 4. motion 对照（快出片，值得跑）
+const rvM = await call("POST", `/api/runs/${runId}/actions`, {
+  action: "render-video", storyboard, voice: "kazi", aspect: "16:9", style: "motion", channel: "local",
+})
+ok("motion 渲染启动", rvM.res.ok, rvM.json.message?.slice(0, 60) ?? "")
+let mMeta = null
+for (let i = 0; i < 60; i++) {
+  await new Promise((r) => setTimeout(r, 5000))
+  const rj = await fetch(`${BASE}/api/runs/${runId}`).then((r) => r.json())
+  const vas = [...(rj.run?.assets ?? [])].filter((a) => a.role === "video-final")
+  const va = [...vas].reverse().find((a) => {
+    try { return JSON.parse(a.meta || "{}").style === "motion" } catch { return false }
+  })
+  if (!va) continue
+  try { mMeta = JSON.parse(va.meta || "{}") } catch { continue }
+  if (["done", "error"].includes(mMeta.stage)) break
+}
+ok("motion 成片终态", mMeta?.stage === "done", `stage=${mMeta?.stage} ${mMeta?.seconds ?? 0}s ${mMeta?.width}×${mMeta?.height}`)
+
+console.log("━━━ 完成 ━━━")

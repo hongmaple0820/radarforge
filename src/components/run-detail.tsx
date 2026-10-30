@@ -58,7 +58,7 @@ interface VideoMeta {
 
 const VIDEO_STAGE_LABELS: Record<string, string> = { queued: "排队中", tts: "TTS 口播合成", spec: "分镜转动画 spec（LLM）", frames: "逐帧渲染", submit: "提交 AI 模型", poll: "AI 生成中", download: "下载成片", encode: "分段编码", concat: "合成 MP4", done: "完成", error: "失败" }
 
-const STEP_LABELS: Record<string, string> = { brief: "任务书", claims: "主张取证", draft: "初稿", review: "五维审稿", cover: "封面", layout: "微信排版" }
+const STEP_LABELS: Record<string, string> = { brief: "任务书", claims: "主张取证", draft: "初稿", review: "五维审稿", illustrate: "正文配图", cover: "封面", layout: "微信排版" }
 const DIM_LABELS: Record<string, string> = { accuracy: "准确", viewpoint: "观点", usefulness: "有用", voice: "合声", readability: "好读" }
 
 export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () => void }) {
@@ -442,10 +442,10 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
         </div>
       </motion.div>
 
-      {/* 六步进度 */}
+      {/* 七步进度 */}
       <Card>
         <CardContent className="pt-4">
-          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2">
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-2">
             {steps.map((s, i) => (
               <div key={i} className={`rounded-lg border px-3 py-2 space-y-1 ${s.status === "done" ? "border-emerald-200 bg-emerald-50/50 dark:bg-emerald-950/20" : s.status === "running" ? "border-amber-300 bg-amber-50/50 dark:bg-amber-950/20" : s.status === "error" ? "border-red-200 bg-red-50/50 dark:bg-red-950/20" : s.status === "skipped" ? "border-muted bg-muted/30" : ""}`}>
                 <div className="flex items-center gap-1.5">

@@ -461,3 +461,25 @@ wewrite 集成（MIT，纯增量吸收）：
 **七、全量回归**（LLM 配额窗口恢复后补跑昨日欠账）：36+7 项全绿——六步流水线 REAL / art+motion 双成片 / 发布三级降级 / Agnes 池语义 / pi-ai 回退 / 18 主题 / 多平台导出；HTTP 面零 5xx。tsc/eslint 双零
 
 **本轮交付文件**：public/engine/art-motion/lib/frames/（11 帧引擎资产 6.4MB）+ platforms.ts + 8 个 scripts（帧库生成/处理/验证/导出回归）+ .gitignore 增补（y4 原始帧/运行时视频封面/download 不入库）
+
+---
+Task ID: product-deep-dive（产品深化方案 + P0 快赢落地）
+Agent: 主 Agent（Z.ai）
+Task: 用户六问（纯图线/图文质量根因/视频线解耦与双轨/交互优化/顶尖质量方法论/拓展空间）→ 调研 + 深化方案 + 全部落地（方案文档 + P0 快赢代码）
+
+Work Log:
+- 调研双线并行：开源工程（TrendPublish/GPT-Researcher/linyuebanzi/guizang/MoneyPrinterTurbo/Revideo/doocs-md/NewsNow/RSSHub/WeWe RSS 等，产出 Top 8 可抄清单）+ 论文方法（STORM 2402.14207/Co-STORM/Self-Refine/Reflexion/DOC/FActScore/SAFE/G-Eval/DSPy，产出 ROI Top 6）
+- 代码诊断三根因：①管线只生成封面且从未插入正文 + 三个渲染器均无图片块（render.ts/platforms.ts 块解析）②claims「假命中」（取第一条长结果就算核实，引用可信度塌方）③初稿单遍生成（无大纲/无分节/同模型自审）
+- P0-A 正文配图落地：zai-image 重构 generateImage(slug+尺寸白名单 1344x768/864x1152/1024x1024，修同 run 多图覆盖 bug) → radar-image skill（插图规划 prompt：锚定小节标题/图提供文字之外信息量/禁生成文字 + findHeadingIndex 先验锚点）→ 流水线六步→七步（illustrate 步骤：规划→先验→生成→回插 markdown→更新 article/output）→ render.ts figure+figcaption 渲染 → platforms.ts img 块（知乎/头条 figure、小红书图注占位、wechat/markdown 含图提示）
+- P0-A2 claims 真相关性匹配：CJK bigram + 拉丁词 tokenize（中文无空格，词级 token 整句一词导致重合度恒 0——首轮回归 4 个导出断言当场暴露），重合度≥2 才核实；离线用例相关 5~9/无关 0（scripts/test-claim-match.mjs）
+- P0-B 纯图线落地：run kind=image 两步流水线（plan 构图方案 LLM → gen 批量生图逐张降级留痕）/api/image-runs + image-panel.tsx（3 用途×5 风格×1~9 张、画廊下载/打开/复制 MD、3s 轮询）+ 创作台三 Tab
+- 上轮收尾核实：多平台导出前后端与 GET 路由 try-catch 均已在 1919212 提交完成（重扫归零）；y4 静帧 VLM 终检通过（房间+气泡「炸了三件事」/举手「跑分碾压」/反应汗滴/插入 383 行计数器，无渲染破损）
+- 回归：主段 40+ 项全绿（七步 done、illustrate 3/3 插图回插+figure 渲染、纯图线 E2E 画廊+静态可访问、5 平台导出、主题预览隔离、零 5xx）；视频段 regression-video-only.mjs（last-storyboard 直出）art 50s done + motion 59s done；tsc/eslint 双零
+- 环境坑（重要）：跨 Bash 调用后台 setsid 进程会存活（with-server EADDRINUSE 实锤）+ SQLite journal_mode=delete 下服务器被杀的落盘时机 → 运行时 DB 业务表被清空（integrity ok、可写、代码无关：回归期间断言均实时读库通过）。处置：回归拆段各自带 server（REG_SKIP_VIDEO 开关 + runId 落盘）、视频段改用 last-storyboard 直出；运行数据可再生，不影响提交
+- 交付 docs/product-deep-dive.md（~1.4 万字：六问逐项深答/五层质量金字塔/目标架构 Mermaid/三个月 P0-P1-P2 路线图/轻量战略小结/参考清单附录）
+
+Stage Summary:
+- 本轮代码：图文线七步（含正文配图）、纯图线全链路、claims 关键词重合度、5 渲染器图片块
+- 本轮文档：docs/product-deep-dive.md（产品深化方案，Markdown 入库随 git 走）
+- 质量证据：主段 40+ 断言 + 视频段 + VLM 终检 + tsc/eslint 双零
+- 待办（P0 起步项）：大纲先行管线、分节生成+跨家族审稿、原子断言核验、固定评测集、视频线选题直出（详见方案第 5 章路线图）

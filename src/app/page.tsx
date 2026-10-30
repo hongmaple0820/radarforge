@@ -5,9 +5,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { IntelPanel } from "@/components/intel-panel"
 import { StudioPanel } from "@/components/studio-panel"
 import { VideoPanel } from "@/components/video-panel"
+import { ImagePanel } from "@/components/image-panel"
 import { EcoPanel } from "@/components/eco-panel"
 import { SettingsPanel } from "@/components/settings-panel"
-import { Radar, PenLine, Clapperboard, Puzzle, Settings2, FileText } from "lucide-react"
+import { Radar, PenLine, Clapperboard, Puzzle, Settings2, FileText, ImageIcon } from "lucide-react"
 
 export default function Home() {
   // 情报中心「去创作」动线：选题种子 → 主 Tab 创作台 → 内层图文线自动填入
@@ -32,12 +33,12 @@ export default function Home() {
             </div>
             <div className="min-w-0">
               <h1 className="text-base font-bold leading-tight truncate">AI 资讯雷达 · 自媒体工作流平台</h1>
-              <p className="text-[11px] text-muted-foreground truncate">AI 搜索情报底座 → 图文/视频双生产线 → 发布 → 飞轮</p>
+              <p className="text-[11px] text-muted-foreground truncate">AI 搜索情报底座 → 图文/视频/纯图三生产线 → 多平台发布 → 飞轮</p>
             </div>
           </div>
           <div className="hidden md:flex items-center gap-1.5 shrink-0">
             <span className="text-[10px] font-mono text-amber-600 dark:text-amber-400 border border-amber-300 dark:border-amber-800 rounded-full px-2 py-0.5 bg-amber-50 dark:bg-amber-950/40">
-              双生产线 · 图文六步 + 视频三通道
+              三生产线 · 图文七步 + 视频三通道 + 纯图线
             </span>
             <span className="text-[10px] font-mono text-muted-foreground border rounded-full px-2 py-0.5">
               18 主题 · wewrite · art-motion · Agnes
@@ -69,19 +70,22 @@ export default function Home() {
           </TabsContent>
 
           <TabsContent value="studio" className="mt-0">
-            {/* 双生产线：图文线 / 视频线（交互拆分核心） */}
+            {/* 三生产线：图文线 / 视频线 / 纯图线（交互拆分核心） */}
             <Tabs value={lineTab} onValueChange={setLineTab} className="space-y-4">
               <div className="flex items-center gap-2 flex-wrap">
-                <TabsList className="grid grid-cols-2 w-full max-w-xs h-9">
+                <TabsList className="grid grid-cols-3 w-full max-w-md h-9">
                   <TabsTrigger value="article" className="gap-1.5 text-xs">
                     <FileText className="h-3.5 w-3.5" />图文线
                   </TabsTrigger>
                   <TabsTrigger value="video" className="gap-1.5 text-xs">
                     <Clapperboard className="h-3.5 w-3.5" />视频线
                   </TabsTrigger>
+                  <TabsTrigger value="image" className="gap-1.5 text-xs">
+                    <ImageIcon className="h-3.5 w-3.5" />纯图线
+                  </TabsTrigger>
                 </TabsList>
                 <span className="text-[10px] text-muted-foreground hidden sm:inline">
-                  图文：brief → claims → 初稿 → 审稿 → 封面 → 排版（18 主题）｜视频：分镜 → 三通道渲染 → 成片
+                  图文：brief → claims → 初稿 → 审稿 → 配图 → 封面 → 排版｜视频：分镜 → 三通道渲染｜纯图：构图方案 → 批量生图
                 </span>
               </div>
               <TabsContent value="article" className="mt-0">
@@ -89,6 +93,9 @@ export default function Home() {
               </TabsContent>
               <TabsContent value="video" className="mt-0">
                 <VideoPanel />
+              </TabsContent>
+              <TabsContent value="image" className="mt-0">
+                <ImagePanel />
               </TabsContent>
             </Tabs>
           </TabsContent>
@@ -106,7 +113,7 @@ export default function Home() {
       {/* Footer（sticky bottom） */}
       <footer className="mt-auto border-t bg-background">
         <div className="max-w-[1440px] mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
-          <span>AI 资讯雷达 2.0 · 图文六步流水线 · 视频三通道 · 18 主题排版（wewrite）· Agnes 多账号供应商 · Skills/MCP 插件体系</span>
+          <span>AI 资讯雷达 2.0 · 图文七步流水线（含正文配图）· 视频三通道 · 纯图线 · 18 主题排版（wewrite）· 5 平台导出 · Agnes 多账号 · Skills/MCP 插件体系</span>
           <span className="font-mono">数据可溯源：brief · claims 账本 · [n] 引用</span>
         </div>
       </footer>

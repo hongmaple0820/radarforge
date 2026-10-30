@@ -315,6 +315,26 @@ export function renderWechatHtml(markdown: string, claims: RenderClaim[], opts: 
       continue
     }
 
+    // 正文配图：![图注](url) → figure + img + figcaption（微信需上传素材库，导出说明里提示替换）
+    const img = line.trim().match(/^!\[([^\]]*)\]\(([^)\s]+)\)$/)
+    if (img) {
+      flushQuote()
+      flushList()
+      flushTable()
+      const alt = img[1].trim()
+      const url = img[2]
+      const cap = alt
+        ? `<figcaption style="font-size:12px;color:${textLight};text-align:center;margin:8px 0 0;line-height:1.6;">${esc(alt)}</figcaption>`
+        : ""
+      bodyBlocks.push(
+        `<figure style="margin:18px 0;">` +
+          `<img src="${esc(url)}" alt="${esc(alt)}" style="display:block;width:100%;height:auto;border-radius:8px;"/>` +
+          cap +
+          `</figure>`,
+      )
+      continue
+    }
+
     // 引用块
     if (/^&gt;|^>/.test(line.trim())) {
       flushList()

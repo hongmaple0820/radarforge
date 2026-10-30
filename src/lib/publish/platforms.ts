@@ -23,6 +23,7 @@ type Block =
   | { t: "ol"; items: string[] }
   | { t: "fence"; lang: string; code: string }
   | { t: "table"; rows: string[][] }
+  | { t: "img"; alt: string; url: string }
   | { t: "hr" }
 
 /** 行内 markdown 文本（不含 HTML 转义——由各平台 Formatter 决定） */
@@ -122,6 +123,13 @@ function parseBlocks(markdown: string): Block[] {
       continue
     }
 
+    // 正文配图：![图注](url)
+    const im = trimmed.match(/^!\[([^\]]*)\]\(([^)\s]+)\)$/) ?? trimmed.match(/^!\[([^\]]*)\]\(([^)\s]+)\)/)
+    if (im) {
+      out.push({ t: "img", alt: im[1].trim(), url: im[2] })
+      continue
+    }
+
     out.push({ t: "p", text: line })
   }
   flushQuote(); flushList(); flushTable()
@@ -213,6 +221,12 @@ function fmtZhihu(markdown: string, claims: RenderClaim[], title: string): strin
       const th = head.map((c) => `<th style="border:1px solid #e0e0e0;padding:8px 12px;background:#f6f6f6;font-size:14px;text-align:left;">${inlineHtml(c)}</th>`).join("")
       const trs = rows.map((r) => `<tr>${r.map((c) => `<td style="border:1px solid #e0e0e0;padding:8px 12px;font-size:14px;line-height:1.7;">${inlineHtml(c)}</td>`).join("")}</tr>`).join("")
       body.push(`<table style="border-collapse:collapse;margin:18px 0;max-width:100%;">${th ? `<tr>${th}</tr>` : ""}${trs}</table>`)
+    } else if (b.t === "img") {
+      body.push(
+        `<figure style="margin:18px 0;"><img src="${esc(b.url)}" alt="${esc(b.alt)}" style="display:block;width:100%;height:auto;border-radius:8px;"/>` +
+          (b.alt ? `<figcaption style="font-size:13px;color:#999;margin-top:6px;text-align:center;">${esc(b.alt)}</figcaption>` : "") +
+          `</figure>`,
+      )
     } else if (b.t === "hr") {
       body.push(`<hr style="border:none;border-top:1px solid #e5e7eb;margin:28px 0;"/>`)
     }
@@ -249,6 +263,12 @@ function fmtToutiao(markdown: string, claims: RenderClaim[], title: string): str
       const th = head.map((c) => `<th style="border:1px solid #dcdcdc;padding:9px 13px;background:#f2f2f2;font-size:15px;text-align:left;">${inlineHtml(c)}</th>`).join("")
       const trs = rows.map((r) => `<tr>${r.map((c) => `<td style="border:1px solid #dcdcdc;padding:9px 13px;font-size:15px;line-height:1.75;">${inlineHtml(c)}</td>`).join("")}</tr>`).join("")
       body.push(`<table style="border-collapse:collapse;margin:20px 0;max-width:100%;">${th ? `<tr>${th}</tr>` : ""}${trs}</table>`)
+    } else if (b.t === "img") {
+      body.push(
+        `<figure style="margin:20px 0;"><img src="${esc(b.url)}" alt="${esc(b.alt)}" style="display:block;width:100%;height:auto;border-radius:10px;"/>` +
+          (b.alt ? `<figcaption style="font-size:14px;color:#888;margin-top:8px;text-align:center;">${esc(b.alt)}</figcaption>` : "") +
+          `</figure>`,
+      )
     } else if (b.t === "hr") {
       body.push(`<hr style="border:none;border-top:1px solid #dcdcdc;margin:30px 0;"/>`)
     }
@@ -286,6 +306,9 @@ function fmtXiaohongshu(markdown: string, claims: RenderClaim[], title: string):
       body.push(`⌨️ 代码（超长已截断，完整版见公众号/知乎）\n${code}`)
     } else if (b.t === "table") {
       body.push(b.rows.map((r) => r.map(plain).join("｜")).join("\n"))
+    } else if (b.t === "img") {
+      // 小红书：图片需手动上传，正文里留图注占位提醒发布者
+      body.push(b.alt ? `📷 ${plain(b.alt)}` : "📷 配图")
     } else if (b.t === "hr") {
       body.push("· · · · · · · · · ·")
     }
@@ -332,6 +355,8 @@ export function buildPlatformExport(
   const def = PLATFORMS.find((p) => p.id === platform)
   if (!def) throw new Error(`未知导出平台：${platform}（可选：${PLATFORMS.map((p) => p.id).join(" / ")}）`)
   const title = extractTitle(markdown, opts.title)
+  // 含正文配图时的平台提醒（图片是本站 /assets 路径，粘贴到外部平台需重新上传）
+  const imgCount = (markdown.match(/!\[[^\]]*\]\(/g) ?? []).length
 
   let content: string
   let instruction: string
@@ -341,10 +366,12 @@ export function buildPlatformExport(
     case "wechat":
       content = fmtWechat(markdown, claims, title, opts.theme)
       instruction = "已复制富文本，直接粘贴进公众号编辑器，样式保留（含暗黑模式适配）"
+      if (imgCount > 0) note = `文中含 ${imgCount} 张配图（本站路径），粘贴后请在公众号编辑器中逐张上传替换`
       break
     case "markdown":
       content = fmtMarkdown(markdown, claims)
       instruction = "已复制 Markdown，粘贴到 CSDN / 掘金 / Notion / Obsidian 等编辑器"
+      if (imgCount > 0) note = `文中含 ${imgCount} 张配图（/assets/ 本站路径），发布到外部平台时请先上传图片并替换链接`
       break
     case "zhihu":
       content = fmtZhihu(markdown, claims, title)

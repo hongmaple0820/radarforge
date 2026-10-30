@@ -54,7 +54,7 @@ model Claim {
 
 model AgentRun {
   id          String   @id @default(cuid())
-  kind        String   @default("skill") // skill（社区技能） | article（图文流水线）
+  kind        String   @default("skill") // skill（社区技能） | article（图文流水线） | image（纯图线）
   skillId     String   @default("") // skill 目录名（kind=skill）
   skillName   String   @default("")
   ideaTitle   String   @default("") // 选题标题（kind=article）

@@ -10,6 +10,14 @@ import type { HealthReport, ImageProvider } from "../types"
 
 const ASSET_DIR = "/home/z/my-project/public/assets"
 
+/** 生图尺寸白名单（cover 1344×768 / 竖版 864×1152 / 方图 1024×1024） */
+export const IMAGE_SIZES = ["1344x768", "864x1152", "1024x1024"] as const
+export type ImageSize = (typeof IMAGE_SIZES)[number]
+
+function safeSize(size?: string): ImageSize {
+  return (IMAGE_SIZES as readonly string[]).includes(size ?? "") ? (size as ImageSize) : "1344x768"
+}
+
 export interface GeneratedImage {
   ok: boolean
   filePath: string // /assets/xxx.png（静态可访问）
@@ -19,7 +27,14 @@ export interface GeneratedImage {
 }
 
 /** 自定义 OpenAI 兼容生图端点（设置中心配置后启用） */
-async function generateViaCustom(prompt: string, runId: string, baseUrl: string, apiKey: string, model: string): Promise<GeneratedImage> {
+async function generateViaCustom(
+  prompt: string,
+  fileName: string,
+  size: ImageSize,
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+): Promise<GeneratedImage> {
   const url = `${baseUrl.replace(/\/+$/, "").replace(/\/images\/generations$/, "")}/images/generations`
   const res = await fetch(url, {
     method: "POST",
@@ -27,7 +42,7 @@ async function generateViaCustom(prompt: string, runId: string, baseUrl: string,
     body: JSON.stringify({
       model: model || "doubao-seedream-3-0-t2i-250415",
       prompt: prompt.slice(0, 500),
-      size: "1344x768",
+      size,
       response_format: "b64_json",
     }),
     signal: AbortSignal.timeout(90000),
@@ -47,7 +62,6 @@ async function generateViaCustom(prompt: string, runId: string, baseUrl: string,
   }
   if (!b64) throw new Error("生图返回空数据")
   await mkdir(ASSET_DIR, { recursive: true })
-  const fileName = `cover-${runId}.png`
   const absPath = path.join(ASSET_DIR, fileName)
   const buf = Buffer.from(b64, "base64")
   await writeFile(absPath, buf)
@@ -55,7 +69,7 @@ async function generateViaCustom(prompt: string, runId: string, baseUrl: string,
 }
 
 /** 内置 SDK 生图（沙箱网关可能 405 拦截 → 降级留痕不阻断） */
-async function generateViaSdk(prompt: string, runId: string): Promise<GeneratedImage> {
+async function generateViaSdk(prompt: string, fileName: string, size: ImageSize): Promise<GeneratedImage> {
   const { default: ZAI } = await import("z-ai-web-dev-sdk")
   const zai = await ZAI.create()
   // 沙箱出口 WAF 偶发拦截生图端点（405 HTML）——间隔重试 2 次提高穿透率
@@ -64,12 +78,11 @@ async function generateViaSdk(prompt: string, runId: string): Promise<GeneratedI
     try {
       const res = await zai.images.generations.create({
         prompt: prompt.slice(0, 500),
-        size: "1344x768",
+        size,
       })
       const b64 = res?.data?.[0]?.base64
       if (!b64) throw new Error("生图返回空数据")
       await mkdir(ASSET_DIR, { recursive: true })
-      const fileName = `cover-${runId}.png`
       const absPath = path.join(ASSET_DIR, fileName)
       const buf = Buffer.from(b64, "base64")
       await writeFile(absPath, buf)
@@ -87,24 +100,36 @@ async function generateViaSdk(prompt: string, runId: string): Promise<GeneratedI
   throw new Error("生图重试后仍失败")
 }
 
-export async function generateCoverImage(prompt: string, runId: string): Promise<GeneratedImage> {
+/**
+ * 通用生图（slug 区分文件名，避免同 run 多图互相覆盖；size 走白名单）
+ * 失败自动降级（GeneratedImage.ok=false + error 留痕），绝不阻断流水线
+ */
+export async function generateImage(prompt: string, runId: string, slug: string, size?: string): Promise<GeneratedImage> {
+  const safeSlug = (slug || "img").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 24) || "img"
+  const fileName = `${safeSlug}-${runId}.png`
+  const finalSize = safeSize(size)
   try {
     const s = await getSettings()
     if (s.image.mode === "custom" && s.image.baseUrl && s.image.apiKey) {
-      return await generateViaCustom(prompt, runId, s.image.baseUrl, s.image.apiKey, s.image.model)
+      return await generateViaCustom(prompt, fileName, finalSize, s.image.baseUrl, s.image.apiKey, s.image.model)
     }
-    return await generateViaSdk(prompt, runId)
+    return await generateViaSdk(prompt, fileName, finalSize)
   } catch (e) {
     // 沙箱网关可能拦截生图端点 —— 降级留痕，不阻断
     return { ok: false, filePath: "", absPath: "", error: (e as Error).message, sizeBytes: 0 }
   }
 }
 
+/** 兼容旧签名：封面生成（等价 generateImage(prompt, runId, "cover")） */
+export async function generateCoverImage(prompt: string, runId: string): Promise<GeneratedImage> {
+  return generateImage(prompt, runId, "cover", "1344x768")
+}
+
 export const zaiImage: ImageProvider = {
   kind: "IMAGE",
   name: "zai-image",
   label: "Z.ai 生图（SDK）",
-  notes: "封面/内文图生成；可在设置中心切换为自定义 OpenAI 兼容生图端点；内置端点失败自动降级为无封面并留痕",
+  notes: "封面/内文配图/纯图线生图；可在设置中心切换为自定义 OpenAI 兼容生图端点；内置端点失败自动降级留痕不阻断",
   isConfigured: () => true,
   async health(): Promise<HealthReport> {
     const t0 = Date.now()

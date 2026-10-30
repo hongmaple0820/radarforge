@@ -75,3 +75,5 @@ server.log
 /public/assets/video-segs/
 # 用户交付物目录
 /download/
+/public/assets/ill-*.png
+/public/assets/card-*.png
