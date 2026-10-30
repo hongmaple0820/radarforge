@@ -21,7 +21,7 @@ import path from "path"
 import sharp from "sharp"
 import type { Storyboard, StoryboardScene, ArtSpecItem, DirectionBrief } from "./skills/radar-rewrite"
 import { artSpecMessages, parseArtSpecs, sceneReviseMessages, parseSceneRevision } from "./skills/radar-rewrite"
-import { renderArtClip, type ArtClipSpec } from "./art-engine"
+import { renderArtClip, Y4_CHARACTER_FRAMES, type ArtClipSpec } from "./art-engine"
 import { chatRetry } from "@/lib/gateway"
 import { registry } from "@/lib/gateway/registry"
 import { getSettings } from "@/lib/settings"
@@ -326,9 +326,12 @@ async function mixBgm(videoIn: string, preset: Exclude<BgmPreset, "none">, hasVo
 
 // ---------- 版本树（指着改的版本命名） ----------
 
-/** 该 run 现有 video-final 的最大版本号（无版本字段按 v1 计） */
-async function latestVideoVersion(runId: string): Promise<number> {
-  const priors = await db.asset.findMany({ where: { runId, role: "video-final" }, select: { meta: true } })
+/** 该 run 现有 video-final 的最大版本号（无版本字段按 v1 计；须排除自身——action 路由先建 Asset 后启动渲染，自数会令首渲恒为 v2） */
+async function latestVideoVersion(runId: string, excludeAssetId?: string): Promise<number> {
+  const priors = await db.asset.findMany({
+    where: { runId, role: "video-final", ...(excludeAssetId ? { id: { not: excludeAssetId } } : {}) },
+    select: { meta: true },
+  })
   let max = 0
   for (const a of priors) {
     try {
@@ -453,8 +456,8 @@ async function renderVideo(
   const style: VideoStyle = opts.style ?? "motion"
   const bgm: BgmPreset = opts.bgm ?? "none"
   const tmp = path.join(TMP_ROOT, `${runId.slice(-8)}-${assetId.slice(-8)}`)
-  // 版本树：本片版本号（v1 基线 / 后续指着改逐次 +1）
-  const version = (await latestVideoVersion(runId)) + 1
+  // 版本树：本片版本号（v1 基线 / 后续指着改逐次 +1；排除自身 Asset，防自数）
+  const version = (await latestVideoVersion(runId, assetId)) + 1
   const finalPath = videoPathFor(runId, version)
 
   // ---- 通道解析（settings 默认 + 请求覆盖；auto = agnes 可用则 agnes）----
@@ -576,15 +579,19 @@ async function renderVideo(
         const specItem = specs.find((s) => s.sceneId === scenes[i].id) ?? specs[i]
         const clipPath = path.join(tmp, `c${i}.mp4`)
         const seg = path.join(tmp, `s${i}.mp4`)
+        // y4_storytime：管线自动注入内置角色帧库（zai-image 生成，引擎按图片中心锚定脚部）
+        const grammar = specItem?.grammar ?? "t2_keynote_ui"
         const spec: ArtClipSpec = {
-          // 双保险：y4_storytime 需 AI 生角色帧（本管线不提供），即使上游漏过也强制回落安全语法
-          grammar: specItem?.grammar === "y4_storytime" ? "t2_keynote_ui" : specItem?.grammar ?? "t2_keynote_ui",
+          grammar,
           duration: Math.min(8, Math.max(2, durations[i])),
           fps: 30,
           width: L.w,
           height: L.h,
           theme: specItem?.theme ?? "paper",
-          data: specItem?.data ?? {},
+          data:
+            grammar === "y4_storytime"
+              ? { ...(specItem?.data ?? {}), character: { frames: Y4_CHARACTER_FRAMES } }
+              : specItem?.data ?? {},
           cues: (specItem?.cues ?? [{ at: 0.3, kind: "title" }]).map((c) => ({
             at: c.at,
             kind: c.kind,
@@ -594,9 +601,28 @@ async function renderVideo(
           })),
         }
         saveProgress({ stage: "frames", sceneDone: i, aiNote: `分镜 ${i + 1}/${n}：${spec.grammar} · ${spec.theme ?? "paper"} 色板渲染中` })
-        await renderArtClip(spec, clipPath, (p) => {
-          saveProgress({ percent: Math.round(30 + (45 * (i + p.frameDone / Math.max(1, p.frameTotal))) / n) })
-        })
+        try {
+          await renderArtClip(spec, clipPath, (p) => {
+            saveProgress({ percent: Math.round(30 + (45 * (i + p.frameDone / Math.max(1, p.frameTotal))) / n) })
+          })
+        } catch (e) {
+          // 单分镜引擎失败（如 y4 帧库资产缺失）→ 该分镜回落 t2_keynote_ui 文字卡，其余分镜不受影响
+          console.warn(`[video] art 分镜 ${i + 1}（${grammar}）渲染失败，回落 t2_keynote_ui：${(e as Error).message.slice(0, 120)}`)
+          const fallbackSpec: ArtClipSpec = {
+            grammar: "t2_keynote_ui",
+            duration: spec.duration,
+            fps: 30,
+            width: L.w,
+            height: L.h,
+            theme: spec.theme ?? "paper",
+            data: { title: storyboard.title, subtitle: scenes[i].subtitle },
+            cues: [{ at: 0.3, kind: "title" }],
+          }
+          await renderArtClip(fallbackSpec, clipPath, (p) => {
+            saveProgress({ percent: Math.round(30 + (45 * (i + p.frameDone / Math.max(1, p.frameTotal))) / n) })
+          })
+          saveProgress({ aiNote: `分镜 ${i + 1}（${grammar}）已回落 t2_keynote_ui：${(e as Error).message.slice(0, 60)}` })
+        }
         await muxSegment(clipPath, audioFiles[i] || null, spec.duration, seg)
         segs.push(seg)
         saveProgress({ sceneDone: i + 1, percent: Math.round(30 + (50 * (i + 1)) / n) })
@@ -719,7 +745,7 @@ async function reviseSceneVideo(runId: string, assetId: string, storyboard: Stor
   const L = LAYOUTS[opts.aspect]
   const idx = storyboard.scenes.findIndex((s) => s.id === opts.sceneId)
   const tmp = path.join(TMP_ROOT, `rev-${runId.slice(-8)}-${assetId.slice(-8)}`)
-  const version = (await latestVideoVersion(runId)) + 1
+  const version = (await latestVideoVersion(runId, assetId)) + 1
   const finalPath = videoPathFor(runId, version)
   const segDir = segDirFor(runId)
   const sceneTotal = storyboard.scenes.length
@@ -782,12 +808,16 @@ async function reviseSceneVideo(runId: string, assetId: string, storyboard: Stor
       const specs = await convertToArtSpecs(newStoryboard, opts.aspect)
       const specItem = specs.find((s) => s.sceneId === revised.scene.id) ?? specs[idx]
       const clipPath = path.join(tmp, "c.mp4")
+      const reviseGrammar = specItem?.grammar ?? "t2_keynote_ui"
       const spec: ArtClipSpec = {
-        grammar: specItem?.grammar ?? "t2_keynote_ui",
+        grammar: reviseGrammar,
         duration: Math.min(8, Math.max(2, dur)),
         fps: 30, width: L.w, height: L.h,
         theme: specItem?.theme ?? "paper",
-        data: specItem?.data ?? {},
+        data:
+          reviseGrammar === "y4_storytime"
+            ? { ...(specItem?.data ?? {}), character: { frames: Y4_CHARACTER_FRAMES } }
+            : specItem?.data ?? {},
         cues: (specItem?.cues ?? [{ at: 0.3, kind: "title" }]).map((c) => ({
           at: c.at, kind: c.kind,
           ...(c.text ? { text: c.text } : {}),

@@ -55,6 +55,27 @@ export const ART_GRAMMARS: Record<string, { label: string; desc: string }> = {
 export const ART_THEMES = ["paper", "poster", "ink", "navy", "bauhaus", "snow", "wood", "chalk"] as const
 export type ArtThemeName = (typeof ART_THEMES)[number]
 
+/**
+ * y4 故事帧库 —— zai-image 生成的角色（浅蓝紫小机器人，rest/talk/point/shrug/type/stiff/react/back
+ * + 张嘴 _open 变体共 11 帧），已抠透明底、脚贴底居中（引擎契约）。
+ * 图 Asset：public/engine/art-motion/lib/frames/（引擎静态服务根 = ENGINE_DIR，故相对路径 lib/frames/…）。
+ * 生成与处理脚本：scripts/gen-y4-frames.mjs + scripts/process-y4-frames.py。
+ * 管线在 grammar=y4_storytime 时自动注入 data.character.frames，LLM 无需（也不应）自己写。
+ */
+export const Y4_CHARACTER_FRAMES: Record<string, string> = {
+  rest: "lib/frames/rest.png",
+  rest_open: "lib/frames/rest_open.png",
+  talk: "lib/frames/talk.png",
+  talk_open: "lib/frames/talk_open.png",
+  point: "lib/frames/point.png",
+  point_open: "lib/frames/point_open.png",
+  shrug: "lib/frames/shrug.png",
+  type: "lib/frames/type.png",
+  stiff: "lib/frames/stiff.png",
+  react: "lib/frames/react.png",
+  back: "lib/frames/back.png",
+}
+
 // ---------- 本地静态服务（引擎目录，随机端口） ----------
 
 async function startEngineServer(): Promise<{ server: ReturnType<typeof createServer>; port: number; close: () => Promise<void> }> {

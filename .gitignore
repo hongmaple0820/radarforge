@@ -67,3 +67,11 @@ server.log
 /tool-results/
 .claude
 .z-ai-config
+# y4 帧库原始图（可由 scripts/gen-y4-frames.mjs 再生）
+/scripts/y4-frames-raw/
+# 运行时产物：新视频/封面不入库（历史已跟踪的不受影响）
+/public/assets/*.mp4
+/public/assets/cover-*.png
+/public/assets/video-segs/
+# 用户交付物目录
+/download/

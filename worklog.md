@@ -423,3 +423,41 @@ wewrite 集成（MIT，纯增量吸收）：
 4. **硬化：搜索 query 钳制 200 字符**（超长串会被真实供应商拒绝）
 
 **验证补齐（手动接力）**：retheme sspai/radar 兼容映射、storyboard 8 分镜、cover 生成（90KB）、art 线 v3 成片（HEAD 200 video/mp4）、motion 线 v4 成片、publish 三级降级（level 2 粘贴加固）、DEMO 横幅浏览器实测渲染 ✅
+
+## 2026-10-30 · y4 帧库全量启用 + 多平台导出中心 + 视频版本号修复
+
+**任务**：① y4 故事帧库用 zai-image 生帧后真正启用（8 语法全量可用）② GET 路由补 try-catch ③ 搜索密钥 maple 落库 ④ 图文生成后可切换模板预览 + 复制 MD + 复制公众号格式 + 扩展更多平台格式。
+
+**一、y4 角色帧库（11 帧，zai-image 生成）**：
+- 基础帧 rest 文生图（浅蓝紫小机器人·橙色围巾·深藏青描边·扁平矢量风）→ VLM 查出脚下投影 → 图生图去投影复验
+- 10 张衍生帧全部从 rest 图生图编辑（保证角色一致）：rest_open/talk/talk_open/point/point_open/shrug/type/stiff/react/back；VLM 逐帧质检（纯白底/无投影/全身完整/姿势正确）+ back 帧单独确认是背面视图
+- 后处理管线 scripts/process-y4-frames.py：边缘泛洪去白底（哨兵色法）→ numpy 建 alpha（**坑：PixelAccess 赋整数 255 会被按字节打包成错误 RGB，曾致 alpha 全错**）→ MinFilter 收缩 1px 去白边 → **脚锚居中**（自底向上找首个 ≥20px 跨度接触行取中点——bbox 中心会被举臂姿势带偏，8 行均值会被大腿污染）→ 高度统一 1024
+- 程序化终检 11/11：四角透明 / 脚贴底行 / 脚中心偏差 <0.8%
+
+**二、y4 管线接入（解除上棒的三层封禁）**：
+- L1 速查表恢复 y4 条目（含 insert/react/highlight cue 用法说明）+ 规则改为「勿写 data.character（管线自动注入）」
+- L2 VALID_GRAMMARS 白名单恢复 y4_storytime
+- L3 video.ts 双保险移除，改为 grammar===y4 时注入 `character: { frames: Y4_CHARACTER_FRAMES }`（art-engine.ts 导出注册表）；整片渲染线与指着改线两处都注入
+- 新增单分镜兜底：引擎失败（如帧库资产缺失）→ 该分镜回落 t2_keynote_ui 文字卡，不整片报废
+- **E2E 三级验证**：① renderArtClip 7s MP4（5 种 cue 全覆盖）+ 4 静帧 VLM 验证（房间+气泡/举指/反应特写+汗滴+问号/插入镜头+代码墙+计数器+后脑勺前景）② 管线级：叙事型分镜 art 渲整片 24s，LLM 自主选 y4（分镜 3/6、6/6 均为 y4_storytime），成片抽 3 帧 VLM 确认机器人在画面且无破损 ③ HEAD 200 video/mp4
+
+**三、多平台发布中心（用户核心诉求）**：
+- 新引擎 `src/lib/publish/platforms.ts`：块级解析一次 → 5 平台 Formatter——wechat（复用 18 主题管线）/ markdown（原文+脚注）/ zhihu（标准标签+文末外链参考）/ xiaohongshu（纯文本+◆小标题+话题标签，超 1000 字警告）/ toutiao（大字号版式）；[n] claims 标记各平台差异化处理（上标/脚注/剥离）
+- 后端 action `export`：theme 参数仅预览不落库（与 retheme 持久化分离）；Asset 留痕 export-{platform}
+- 前端 run-detail 重构：旧主题画廊移出动作栏 → 新「多平台发布中心」卡（5 平台 tab + 18 主题 chip 选中即预览 + html→iframe / text→等宽 pre + 一键复制 + 平台提示）
+- 浏览器 E2E：5 tab 切换 / bauhaus chip 即时预览（iframe 更新+应用按钮出现）/ 小红书文本预览+话题标签 / 零 console error；VLM 确认布局无重叠溢出
+- 回归断言 7/7：5 平台导出格式探针 + 主题预览不落库 + 非法平台 400
+
+**四、GET 路由 try-catch 加固**：runs/[id] / agent/runs/[id] / agent/skills / gateway/providers / mcp 共 5 个（用户估 6，实测 5，全量复扫归零）
+
+**五、搜索密钥 maple 落库**（scripts/set-search-key.mjs，密钥走环境变量不落盘）：落库后立即探活报 UnauthorizedOperation（腾讯云新密钥分片传播延迟，与上棒结论一致）——**数分钟后自然恢复**：全量回归「搜索 REAL 且有结果 mode=REAL n=10」✅。教训：新密钥 Unauthorized ≠ 密钥无效，等传播即可
+
+**六、连带发现的视频版本号 bug（Phase 6 潜伏）**：
+- 症状：全新 run 首次渲染恒为 v2（video-<runId>-v2.mp4），回归「art 成片可访问」断言（HEAD 无后缀路径）挂
+- 根因：action 路由先创建 video-final Asset（meta 无 version 字段→按 v1 计）→ renderVideo 再查 latestVideoVersion 把自己数进去 → +1 = 2
+- 修复：latestVideoVersion(runId, excludeAssetId) 排除自身；渲染线与指着改线两处调用点都传入 assetId
+- 验证：全新 run 首渲 version=1（无后缀路径），回归「art 成片可访问 video/mp4 1.8MB」✅
+
+**七、全量回归**（LLM 配额窗口恢复后补跑昨日欠账）：36+7 项全绿——六步流水线 REAL / art+motion 双成片 / 发布三级降级 / Agnes 池语义 / pi-ai 回退 / 18 主题 / 多平台导出；HTTP 面零 5xx。tsc/eslint 双零
+
+**本轮交付文件**：public/engine/art-motion/lib/frames/（11 帧引擎资产 6.4MB）+ platforms.ts + 8 个 scripts（帧库生成/处理/验证/导出回归）+ .gitignore 增补（y4 原始帧/运行时视频封面/download 不入库）

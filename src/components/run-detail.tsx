@@ -71,8 +71,6 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
   const [publishOut, setPublishOut] = useState<{ level: number; levelName: string; reason: string; instruction: string; html: string } | null>(null)
   const [rules, setRules] = useState<{ id: string; rule: string; rationale: string; status: string; hits: number }[]>([])
   const [storyboard, setStoryboard] = useState<StoryboardData | null>(null)
-  const [themeChoice, setThemeChoice] = useState("")
-  const [showThemes, setShowThemes] = useState(false)
   const [themes, setThemes] = useState<{ id: string; label: string; category: string; description: string }[]>([])
   const [voiceChoice, setVoiceChoice] = useState("xiaochen")
   const [aspectChoice, setAspectChoice] = useState<"9:16" | "16:9">("9:16")
@@ -93,7 +91,9 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
     setPublishOut(null)
     setStoryboard(null)
     setEditing(false)
-    setShowThemes(false)
+    setExportData(null)
+    setExportTab("wechat")
+    setExportTheme("")
     void refresh()
     // 主题画廊数据（18 主题注册表，/api/runs 顺带返回）
     void fetch("/api/runs")
@@ -130,6 +130,65 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
     const t = setInterval(() => void refresh(), 2000)
     return () => clearInterval(t)
   }, [activeVideoStage, refresh])
+
+  // ---------- 多平台发布中心：导出预览（切换平台/主题即时预览，不落库） ----------
+  const [exportTab, setExportTab] = useState("wechat")
+  const [exportData, setExportData] = useState<{ platform: string; label: string; kind: "html" | "markdown" | "text"; content: string; instruction: string; note?: string } | null>(null)
+  const [exportTheme, setExportTheme] = useState("")
+  const [exportBusy, setExportBusy] = useState(false)
+
+  const doExport = async (platform: string, theme?: string) => {
+    if (!runId) return
+    setExportBusy(true)
+    try {
+      const res = await fetch(`/api/runs/${runId}/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "export", platform, ...(theme ? { theme } : {}) }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      setExportData(json.export)
+      if (theme) setExportTheme(theme)
+    } catch (e) {
+      toast({ title: "导出失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setExportBusy(false)
+    }
+  }
+
+  const copyExport = async () => {
+    if (!exportData?.content) return
+    if (exportData.kind === "html") {
+      // 富文本复制（粘贴进平台编辑器保留样式）
+      const tmp = document.createElement("div")
+      tmp.innerHTML = exportData.content
+      tmp.style.position = "fixed"
+      tmp.style.left = "-9999px"
+      document.body.appendChild(tmp)
+      const range = document.createRange()
+      range.selectNodeContents(tmp)
+      const sel = window.getSelection()
+      sel?.removeAllRanges()
+      sel?.addRange(range)
+      document.execCommand("copy")
+      document.body.removeChild(tmp)
+    } else {
+      await navigator.clipboard.writeText(exportData.content)
+    }
+    toast({
+      title: `${exportData.label}格式已复制`,
+      description: exportData.instruction,
+    })
+  }
+
+  // 首次进入自动预览（公众号 · 当前主题）
+  useEffect(() => {
+    if (runId && run && run.articles.length > 0 && !exportData && !exportBusy) {
+      setExportTheme(run.theme)
+      void doExport("wechat", run.theme)
+    }
+  }, [runId, run?.status])
 
   if (!runId || !run) {
     return (
@@ -295,13 +354,13 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
   }
 
   const doRetheme = async () => {
-    if (!themeChoice || themeChoice === run.theme) return
+    if (!exportTheme || exportTheme === run.theme) return
     setBusy("retheme")
     try {
       const res = await fetch(`/api/runs/${run.id}/actions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "retheme", theme: themeChoice }),
+        body: JSON.stringify({ action: "retheme", theme: exportTheme }),
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error)
@@ -580,54 +639,7 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
                     {busy === "publish" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Send className="h-3.5 w-3.5 mr-1" />}发布（三级降级）
                   </Button>
                 </div>
-                {/* 主题画廊（18 主题 wewrite 体系，不重跑流水线，秒级重排） */}
-                <div className="space-y-2">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <Palette className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span className="text-[10px] text-muted-foreground">排版主题：</span>
-                    <button
-                      onClick={() => setShowThemes(!showThemes)}
-                      className="text-[10px] border rounded-full px-2 py-0.5 hover:border-amber-400 hover:text-amber-600 transition-colors"
-                    >
-                      {themeChoice ? `${themeChoice}` : `${run.theme}（当前）`} ▾
-                    </button>
-                    {themeChoice && themeChoice !== run.theme && (
-                      <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={doRetheme} disabled={busy === "retheme"}>
-                        {busy === "retheme" ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}应用并重排
-                      </Button>
-                    )}
-                  </div>
-                  {showThemes && (
-                    <div className="rounded-lg border bg-muted/30 p-2 max-h-56 overflow-y-auto">
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-                        {Object.entries(
-                          themes.reduce<Record<string, { id: string; label: string; category: string; description: string }[]>>((acc, t) => {
-                            ;(acc[t.category] ??= []).push(t)
-                            return acc
-                          }, {}),
-                        ).map(([cat, list]) => (
-                          <div key={cat} className="contents">
-                            {list.map((t) => (
-                              <button
-                                key={t.id}
-                                title={t.description}
-                                onClick={() => {
-                                  setThemeChoice(t.id)
-                                  setShowThemes(false)
-                                }}
-                                className={`text-left text-[10px] border rounded-md px-2 py-1.5 transition-colors truncate ${themeChoice === t.id ? "border-amber-400 bg-amber-50 dark:bg-amber-950/30 text-amber-600 font-semibold" : run.theme === t.id && !themeChoice ? "border-emerald-300 text-emerald-600" : "hover:border-amber-300"}`}
-                              >
-                                <span className="text-muted-foreground">{cat} · </span>
-                                {t.id}
-                              </button>
-                            ))}
-                          </div>
-                        ))}
-                      </div>
-                      <p className="text-[9px] text-muted-foreground mt-1.5">18 主题移植自 wewrite（MIT）：6 大分类，全部内联样式 + 暗黑模式 + 粘贴加固</p>
-                    </div>
-                  )}
-                </div>
+                <p className="text-[10px] text-muted-foreground">排版主题切换与多平台复制已移至下方「多平台发布中心」（18 主题即时预览，应用后秒级重排）</p>
               </CardContent>
             </Card>
           )}
@@ -833,19 +845,95 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
             </Card>
           )}
 
-          {/* 排版预览 iframe + 发布结果 */}
-          {latest?.formatted && (
+          {/* 多平台发布中心：5 平台导出 + 18 主题即时预览 + 一键复制 */}
+          {latest && (
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-sm flex items-center justify-between">
-                  <span>微信排版预览（{run.theme} 主题 · section 加固）</span>
-                  <Badge variant="outline" className="text-[9px]">{latest.formatted.length} 字符 HTML</Badge>
+                <CardTitle className="text-sm flex items-center justify-between flex-wrap gap-1">
+                  <span className="flex items-center gap-1.5"><Send className="h-3.5 w-3.5 text-amber-500" />多平台发布中心</span>
+                  {exportData && <Badge variant="outline" className="text-[9px]">{exportData.label} · {exportData.content.length.toLocaleString()} 字符</Badge>}
                 </CardTitle>
               </CardHeader>
-              <CardContent className="pt-0 space-y-2">
-                <div className="rounded-lg border bg-muted/40 overflow-hidden">
-                  <iframe title="wechat-preview" srcDoc={`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{margin:0;padding:8px;background:#e8e8e8;}</style></head><body>${latest.formatted}</body></html>`} className="w-full h-[420px] bg-transparent" />
+              <CardContent className="pt-0 space-y-3">
+                {/* 平台 tabs */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {([
+                    { id: "wechat", label: "公众号", dot: "bg-emerald-500" },
+                    { id: "markdown", label: "Markdown", dot: "bg-slate-400" },
+                    { id: "zhihu", label: "知乎", dot: "bg-blue-500" },
+                    { id: "xiaohongshu", label: "小红书", dot: "bg-rose-500" },
+                    { id: "toutiao", label: "头条号", dot: "bg-red-600" },
+                  ] as const).map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => {
+                        setExportTab(p.id)
+                        void doExport(p.id, p.id === "wechat" ? (exportTheme || run.theme) : undefined)
+                      }}
+                      className={`flex items-center gap-1.5 text-[11px] border rounded-full px-2.5 py-1 transition-colors ${exportTab === p.id ? "border-amber-400 bg-amber-50 dark:bg-amber-950/30 text-amber-600 font-semibold" : "hover:border-amber-300 text-muted-foreground"}`}
+                    >
+                      <span className={`h-1.5 w-1.5 rounded-full ${p.dot}`} />
+                      {p.label}
+                    </button>
+                  ))}
+                  <div className="flex-1" />
+                  {exportBusy && <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500" />}
+                  <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={copyExport} disabled={!exportData?.content || exportBusy}>
+                    <Copy className="h-3 w-3 mr-1" />复制{exportData ? exportData.label : ""}格式
+                  </Button>
                 </div>
+
+                {/* 主题画廊（仅公众号 tab；切换即时预览不落库，「应用」才持久化重排） */}
+                {exportTab === "wechat" && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <Palette className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="text-[10px] text-muted-foreground">排版主题（选中即预览）：</span>
+                      <span className="text-[10px] font-medium text-amber-600">{exportTheme || run.theme}</span>
+                      {exportTheme && exportTheme !== run.theme && (
+                        <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={doRetheme} disabled={busy === "retheme"}>
+                          {busy === "retheme" ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}应用并保存为主题
+                        </Button>
+                      )}
+                    </div>
+                    <div className="rounded-lg border bg-muted/30 p-2 max-h-44 overflow-y-auto">
+                      <div className="grid grid-cols-3 sm:grid-cols-4 xl:grid-cols-6 gap-1.5">
+                        {themes.map((t) => (
+                          <button
+                            key={t.id}
+                            title={t.description}
+                            onClick={() => void doExport("wechat", t.id)}
+                            className={`text-left text-[10px] border rounded-md px-2 py-1.5 transition-colors truncate ${(exportTheme || run.theme) === t.id ? "border-amber-400 bg-amber-50 dark:bg-amber-950/30 text-amber-600 font-semibold" : run.theme === t.id ? "border-emerald-300 text-emerald-600" : "hover:border-amber-300"}`}
+                          >
+                            <span className="text-muted-foreground">{t.category} · </span>
+                            {t.id}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[9px] text-muted-foreground mt-1.5">18 主题移植自 wewrite（MIT）：即时预览不入库，点「应用并保存为主题」才重排成稿</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* 预览区：html → iframe；markdown/text → 等宽文本 */}
+                {exportData && exportData.kind === "html" && (
+                  <div className="rounded-lg border bg-muted/40 overflow-hidden">
+                    <iframe title="platform-preview" srcDoc={`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{margin:0;padding:8px;background:#e8e8e8;}</style></head><body>${exportData.content}</body></html>`} className="w-full h-[420px] bg-transparent" />
+                  </div>
+                )}
+                {exportData && exportData.kind !== "html" && (
+                  <ScrollArea className="h-[420px] rounded-lg border bg-muted/30">
+                    <pre className="text-[11px] leading-relaxed whitespace-pre-wrap break-words p-3 font-mono">{exportData.content}</pre>
+                  </ScrollArea>
+                )}
+                {!exportData && <div className="h-[220px] rounded-lg border bg-muted/30 flex items-center justify-center text-xs text-muted-foreground">选择平台后在此预览</div>}
+
+                {/* 平台提示 + 小红书超长警告 */}
+                {exportData?.note && (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50/50 dark:bg-amber-950/20 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-400">⚠ {exportData.note}</div>
+                )}
+                {exportData && <p className="text-[10px] text-muted-foreground">{exportData.instruction}</p>}
+
                 {publishOut && (
                   <div className={`rounded-lg border px-3 py-2 space-y-1 ${publishOut.level === 1 ? "border-emerald-300 bg-emerald-50/50 dark:bg-emerald-950/20" : "border-amber-300 bg-amber-50/50 dark:bg-amber-950/20"}`}>
                     <div className="flex items-center gap-1.5">

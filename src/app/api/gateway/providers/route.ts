@@ -2,6 +2,10 @@ import { NextResponse } from "next/server"
 import { healthCheckAll } from "@/lib/gateway"
 
 export async function GET() {
-  const providers = await healthCheckAll()
-  return NextResponse.json({ providers })
+  try {
+    const providers = await healthCheckAll()
+    return NextResponse.json({ providers })
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 500 })
+  }
 }

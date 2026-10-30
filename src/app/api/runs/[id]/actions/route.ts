@@ -3,10 +3,11 @@ import { db } from "@/lib/db"
 import { chatRetry } from "@/lib/gateway"
 import { generateCoverImage } from "@/lib/gateway/providers/zai-image"
 import { extractJson } from "@/lib/runtime/json"
-import { relayoutForRun } from "@/lib/runtime/relayout"
+import { relayoutForRun, loadRenderClaims } from "@/lib/runtime/relayout"
 import { diffMarkdown, learnMessages, parseRules } from "@/lib/runtime/skills/radar-learn"
 import { REWRITE_TARGETS, rewriteMessages, storyboardMessages, parseStoryboard, parseDirections, directionsMessages, TTS_VOICES, type DirectionBrief, type DirectionProposal } from "@/lib/runtime/skills/radar-rewrite"
 import { publishWechat } from "@/lib/publish/wechat"
+import { buildPlatformExport, PLATFORMS } from "@/lib/publish/platforms"
 import { startVideoRenderInBackground, startSceneReviseInBackground, type VideoAspect, type RenderProgress, type VideoStyle, type VideoChannel, type BgmPreset, type SceneRevision } from "@/lib/runtime/video"
 import { resolveThemeId } from "@/lib/runtime/render"
 
@@ -233,6 +234,30 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         assetId: asset.id,
         message: `指着改已受理：分镜 #${sceneId} 将按意见重做，其余分镜不动 → 出 v${baseVersion + 1} 新版本`,
       })
+    }
+
+    // ---------- export：多平台导出（公众号 18 主题 / Markdown / 知乎 / 小红书 / 头条号） ----------
+    // theme 参数仅用于 wechat 预览（不落库）：切换模板即时预览；「应用并重排」才持久化
+    if (action === "export") {
+      const latest = await db.article.findFirst({ where: { runId: id }, orderBy: { version: "desc" } })
+      if (!latest) return NextResponse.json({ error: "没有成稿可导出" }, { status: 400 })
+      const platform = PLATFORMS.find((p) => p.id === (body.platform ?? ""))
+      if (!platform) return NextResponse.json({ error: `未知导出平台：${body.platform}（可选：${PLATFORMS.map((p) => p.id).join(" / ")}）` }, { status: 400 })
+      const run = await db.agentRun.findUnique({ where: { id } })
+      const theme = resolveThemeId(body.theme ?? run?.theme ?? "professional-clean")
+      const claims = await loadRenderClaims(id)
+      const result = buildPlatformExport(platform.id, latest.markdown, claims, { title: latest.title, theme })
+      // 留痕（不重不阻断：失败忽略）
+      await db.asset
+        .create({
+          data: {
+            runId: id, kind: platform.kind === "html" ? "html" : "text", role: `export-${platform.id}`,
+            provider: "platforms", path: "",
+            meta: JSON.stringify({ platform: platform.id, kind: result.kind, length: result.content.length, ...(platform.id === "wechat" ? { theme } : {}) }),
+          },
+        })
+        .catch(() => {})
+      return NextResponse.json({ export: result })
     }
 
     // ---------- retheme：切换排版主题（不重跑流水线，秒级重排） ----------

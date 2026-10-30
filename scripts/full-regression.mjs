@@ -176,6 +176,29 @@ if (runId) {
   const pub = await call("publish", "POST", `/api/runs/${runId}/actions`, { action: "publish" })
   ok("发布三级降级", pub.res.ok && Boolean(pub.json.outcome?.levelName), `${pub.json.outcome?.level} ${pub.json.outcome?.levelName ?? ""}`)
 
+  // ---------- 7c. 多平台导出（公众号 18 主题 / Markdown / 知乎 / 小红书 / 头条号） ----------
+  section("多平台导出")
+  const EXPECT = {
+    wechat: { kind: "html", probe: (c) => c.includes("<section") && c.includes("参考来源") },
+    markdown: { kind: "markdown", probe: (c) => c.startsWith("#") && c.includes("**参考来源**") && c.includes("[1]:") },
+    zhihu: { kind: "html", probe: (c) => c.includes("<h1") && c.includes("<h2") && c.includes("<p ") && c.includes("参考来源") && c.includes("<a href") },
+    xiaohongshu: { kind: "text", probe: (c) => !c.includes("<section") && !c.includes("<h1") && c.includes("◆") && c.includes("#") && c.includes("信息来源") },
+    toutiao: { kind: "html", probe: (c) => c.includes("font-size:17px") && c.includes("参考来源") },
+  }
+  for (const [pid, exp] of Object.entries(EXPECT)) {
+    const ex = await call(`export-${pid}`, "POST", `/api/runs/${runId}/actions`, { action: "export", platform: pid })
+    const e = ex.json.export
+    const pass = ex.res.ok && e?.kind === exp.kind && Boolean(e?.content) && exp.probe(e?.content ?? "")
+    ok(`导出 ${pid}`, pass, `${e?.kind ?? "?"} ${e?.content?.length ?? 0} 字符${e?.note ? " · " + e.note.slice(0, 40) : ""}`)
+  }
+  // 主题预览隔离：export theme 参数不落库，retheme 才持久化
+  const before = await fetch(`${BASE}/api/runs/${runId}`).then((r) => r.json())
+  const themeBefore = before.run?.theme
+  const exThemed = await call("export-wechat-themed", "POST", `/api/runs/${runId}/actions`, { action: "export", platform: "wechat", theme: "midnight" })
+  const after = await fetch(`${BASE}/api/runs/${runId}`).then((r) => r.json())
+  const themedHtml = exThemed.json.export?.content ?? ""
+  ok("主题预览不落库", exThemed.res.ok && after.run?.theme === themeBefore && themedHtml !== "", `theme=${after.run?.theme}（预览 midnight 未持久化）`)
+
   // 清理 Agnes 回归账号
   await call("agnes-cleanup", "PUT", "/api/settings", { scope: "agnes", value: { enabled: false, accounts: [] } })
 }

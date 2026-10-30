@@ -25,8 +25,8 @@ function extractTitle(markdown: string, fallback: string): string {
   return (markdown.match(/^#\s+(.+)$/m)?.[1] ?? fallback).slice(0, 120)
 }
 
-/** 取某 run 已核实的 claims，映射为渲染脚注 */
-async function loadRenderClaims(runId: string): Promise<RenderClaim[]> {
+/** 取某 run 已核实的 claims，映射为渲染脚注（发布/导出与重排版共用） */
+export async function loadRenderClaims(runId: string): Promise<RenderClaim[]> {
   const claims = await db.claim.findMany({
     where: { runId, idx: { gt: 0 }, verified: true },
     orderBy: { idx: "asc" },

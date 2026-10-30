@@ -284,8 +284,7 @@ const GRAMMAR_CHEATSHEET = [
   "y1_kurzgesagt（科普穿行）：cue kind: title/point/enter；适合概念类比",
   "y2_vox（剪报调查）：cue kind: image/clip/title/point/highlight(data.rect)；适合新闻线索调查感",
   "t1_3b1b（公式形变）：cue kind: title/equation(data.tokens)/point/line；适合推理链",
-  // y4_storytime 已移除：它需要 data.character.frames（AI 生角色帧），本管线不生帧，
-  // 选了必 boot 失败（曾致 art 线第 6/8 分镜整线报废）——叙事段改用 y2_vox / y5_kinetic_type
+  "y4_storytime（故事帧库）：角色在小房间里对镜头讲，反应特写+插入镜头；cue kind: title/point/highlight/react/insert；point/title 可带 data.pose（talk/point/shrug/type）；insert 用 sub 写角色打出的一行字、text 写砸出的大字（如「3000行」）、data.count/unit 写右上角计数器；适合叙事段、吐槽、程序员梗。角色帧库由管线自动注入（勿写 data.character）",
 ].join("\n")
 
 export function artSpecMessages(storyboard: Storyboard, aspect: "9:16" | "16:9"): ChatMessage[] {
@@ -304,8 +303,7 @@ export function artSpecMessages(storyboard: Storyboard, aspect: "9:16" | "16:9")
         "规则：",
         "- cues.at 从 0.3s 起排，与口播节奏对齐（每秒约 4 字）；kind 必须是该语法支持的",
         "- subtitle 的字放进 cue 的 text；数字事实保留原文，不得编造 series 数值——没有数据就用 t2/y5 文字卡，不要硬造图表",
-        "- data 里只写该语法 specData 认识的字段",
-        "- 禁选 y4_storytime（本管线不生成角色帧，引擎会启动失败）——叙事段用 y2_vox 或 y5_kinetic_type",
+        "- data 里只写该语法 specData 认识的字段；y4_storytime 不要写 data.character（管线自动注入内置角色帧库）",
         "严格输出 JSON（不要 markdown 代码块）：",
         `{ "specs": [ { "sceneId": 1, "grammar": "t2_keynote_ui", "theme": "paper", "data": { "title": "…", "subtitle": "…" }, "cues": [ { "at": 0.3, "kind": "title" } ] } ] }`,
       ].join("\n"),
@@ -314,8 +312,8 @@ export function artSpecMessages(storyboard: Storyboard, aspect: "9:16" | "16:9")
   ]
 }
 
-const VALID_GRAMMARS = new Set(["t1_3b1b", "t2_keynote_ui", "t3_finance_chart", "y1_kurzgesagt", "y2_vox", "y3_whiteboard", "y5_kinetic_type"])
-// 注：y4_storytime 不在白名单——需 AI 生角色帧，本管线不提供；LLM 若输出则被拒，场景回落安全默认 t2_keynote_ui
+const VALID_GRAMMARS = new Set(["t1_3b1b", "t2_keynote_ui", "t3_finance_chart", "y1_kurzgesagt", "y2_vox", "y3_whiteboard", "y4_storytime", "y5_kinetic_type"])
+// y4_storytime 已回归白名单：管线在渲染前自动注入内置角色帧库（Y4_CHARACTER_FRAMES，zai-image 生成）
 const VALID_THEMES = new Set(["paper", "poster", "ink", "navy", "bauhaus", "snow", "wood", "chalk"])
 
 export function parseArtSpecs(raw: unknown): ArtSpecItem[] {
