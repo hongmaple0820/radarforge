@@ -177,8 +177,9 @@ export async function renderArtClip(
     await page.waitForFunction("window.__ready === true || !!window.__bootFailed", undefined, { timeout: 60_000 })
     const bootFailed = await page.evaluate("!!window.__bootFailed")
     if (bootFailed) {
-      const err = await page.evaluate("window.__bootError || '引擎启动失败'")
-      throw new Error(`art 引擎启动失败：${String(err).slice(0, 200)}`)
+      // clip.js 的 fail() 把消息写进 __bootFailed（字符串）；__bootError 并不存在
+      const err = await page.evaluate("String(window.__bootError || window.__bootFailed || '')")
+      throw new Error(`art 引擎启动失败：${String(err).slice(0, 200) || "未知启动错误"}`)
     }
 
     await mkdir(path.dirname(outFile), { recursive: true })

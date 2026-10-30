@@ -577,7 +577,8 @@ async function renderVideo(
         const clipPath = path.join(tmp, `c${i}.mp4`)
         const seg = path.join(tmp, `s${i}.mp4`)
         const spec: ArtClipSpec = {
-          grammar: specItem?.grammar ?? "t2_keynote_ui",
+          // 双保险：y4_storytime 需 AI 生角色帧（本管线不提供），即使上游漏过也强制回落安全语法
+          grammar: specItem?.grammar === "y4_storytime" ? "t2_keynote_ui" : specItem?.grammar ?? "t2_keynote_ui",
           duration: Math.min(8, Math.max(2, durations[i])),
           fps: 30,
           width: L.w,

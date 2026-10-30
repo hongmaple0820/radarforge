@@ -405,3 +405,21 @@ wewrite 集成（MIT，纯增量吸收）：
 **终极验证**：全历史 × 全密钥家族超级扫描（AKID/sk-/sk_live/ghp_/github_pat_/AKIA/xox/AIza/PRIVATE KEY）零残留；两枚历史密钥（OpenAI sk-、腾讯云 AKID）均已从全部 16 个提交中物理清除，且当事密钥本身应视为已泄露作废
 
 **推送最终落地（分块方案）**：后台分离进程在会话回收时被杀（沙箱特性：会话结束进程不保）。最终方案 `scripts/push-retry.sh`（幂等可重跑）：按提交前缀分 3 块（≈5 MiB / 33 MiB 引擎大块 / ≈13 MiB），每块独立连接 + 限时重试 + 奇偶交替 postBuffer（500MB 单 POST / 8MB 分块传输）。chunk1 第 2 次尝试成功、chunk2 与 final 一次通过——远端 main 与本地 HEAD 一致，全部 17 个提交落地。后续日常推送均为小增量，若再遇 TLS 中断可复用该脚本
+
+## 2026-10-30 · 双语 README + 全面测试排障（y4 引擎陷阱修复）
+
+**任务**：① 补英文 README ② 全面测试找 bug 与优化点。
+
+**测试矩阵与结果**：
+- 静态门禁：tsc 0 错误 / eslint src/ 0 问题 ✅
+- 全量回归：进程在流水线轮询阶段静默死亡（无报错栈，疑似与浏览器+dev server 并行的资源压力；其余断言手动接力补齐）——Agnes 池语义/密钥脱敏/pi-ai 回退/18 主题注册全绿；搜索 REAL ❌（见 Bug#1）
+- 浏览器 E2E：四 Tab 走查零 console 错误/零 page error ✅
+- 边界攻击：空 query/非法 scope/非法 action 均 400 防御 ✅；超长 query 不炸（已加钳制）
+
+**Bug 清单**：
+1. **搜索静默降级 DEMO（数据层，用户侧待恢复）**：GitHub 清洗事故丢失 DB 内 SearchPro 密钥 → yuanbao-search isConfigured=false → demo-search 兜底。平台行为诚实（mode=DEMO 标记），但 UI 此前只有 9px 小徽章。**修复**：情报中心搜索结果上方新增醒目 amber 警告横幅（说明演示数据性质 + 指引到设置中心填密钥）。根因恢复需用户在设置中心重填 SearchPro 密钥（密钥无法从被物理清除的 git 对象中恢复）
+2. **y4_storytime 语法陷阱（致命，已修复验证）**：art 线第 6/8 分镜整线报废。根因：y4 需 AI 生角色帧（data.character.frames），管线从不生帧，但 GRAMMAR_CHEATSHEET 仍向 LLM 广告 y4"适合叙事段"——LLM 选中即必炸。**三层修复**：L1 速查表移除 y4 + 提示词显式禁选；L2 VALID_GRAMMARS 白名单摘除（漏网输出被拒→场景回落安全默认）；L3 渲染前 grammar===y4 强制改写 t2_keynote_ui（双保险）。修复后 art 线 9/9 分镜全部完成（67.1s 成片）
+3. **boot 错误诊断信息丢失（已修复）**：clip.js 的 fail() 把消息写进 `__bootFailed`（字符串），art-engine.ts 却读不存在的 `__bootError` → 永远只报"引擎启动失败"。改为 `String(window.__bootError || window.__bootFailed || '')`。诊断工具 `scripts/repro-art-boot.mjs` 入库（8 语法逐个 boot 探测，可复用）
+4. **硬化：搜索 query 钳制 200 字符**（超长串会被真实供应商拒绝）
+
+**验证补齐（手动接力）**：retheme sspai/radar 兼容映射、storyboard 8 分镜、cover 生成（90KB）、art 线 v3 成片（HEAD 200 video/mp4）、motion 线 v4 成片、publish 三级降级（level 2 粘贴加固）、DEMO 横幅浏览器实测渲染 ✅

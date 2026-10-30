@@ -247,6 +247,11 @@ export function IntelPanel({ onGoCreate }: { onGoCreate?: (title: string, angle:
               搜索
             </Button>
           </div>
+          {hits.length > 0 && searchMode === "DEMO" && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/40 px-2.5 py-2 text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
+              ⚠️ 当前为<b>演示数据</b>（内置静态样本，非真实联网）。元宝搜索密钥未配置或不可用——到「设置中心 → 模型服务 → AI 搜索」填入 SearchPro 密钥后即可恢复真实检索，情报/早报/流水线将全部回到 REAL 模式。
+            </div>
+          )}
           {hits.length > 0 && (
             <ScrollArea className="max-h-52">
               <div className="space-y-1.5 pr-2">
