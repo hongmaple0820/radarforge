@@ -128,6 +128,80 @@ export function imagePlanMessages(input: {
   ]
 }
 
+// ---------- ①-b 纯图线 2.0：版式卡文案规划（P1 版式骨架） ----------
+
+import { CARD_FAMILIES, CARD_TEMPLATES, type CardPlanItem } from "@/lib/runtime/card-engine"
+
+export function cardPlanMessages(input: { subject: string; usageId: string; count: number; familyId?: string }): ChatMessage[] {
+  const usage = getImageUsage(input.usageId)
+  const families = input.familyId
+    ? CARD_FAMILIES.filter((f) => f.id === input.familyId)
+    : CARD_FAMILIES
+  const familyRule = input.familyId
+    ? `版系已定死为「${families[0]?.label}」，每张卡都用这个版系。`
+    : "每张卡自选最合适的版系（同一组的版系尽量统一，除非内容气质差异大）。"
+  return [
+    {
+      role: "system",
+      content: [
+        "你是版式卡文案编辑。为一组「代码排版的模板卡」规划文案：文字由代码排版渲染（零错字），你只负责把内容填进模板。",
+        `用途：${usage.label}（${usage.hint}）。`,
+        `可用模板：${CARD_TEMPLATES.map((t) => `${t.id}（${t.label}：${t.desc}）`).join("；")}。`,
+        `可用版系：${CARD_FAMILIES.map((f) => `${f.id}（${f.label}：${f.desc}）`).join("；")}。`,
+        familyRule,
+        "生图前清单自检（逐条自查，违反任何一条就改写再输出）：",
+        "a. cover 卡必须有 title（≤20 字）与 subtitle；quote 卡必须有 quote（≤60 字）与 attribution；data 卡必须有 2~4 组 metrics（value ≤10 字，含单位或符号，如 87.4% / 3.2× / ¥2.1亿；label ≤16 字）。",
+        "b. 数字与事实只能来自主题描述里已有的信息；主题没给数字就用定性词（如「三倍速」→ 若无依据则改用「规模化落地」这类措辞），禁止编造精确数字。",
+        "c. 同组卡片信息不重复、有递进（如：封面定调 → 金句立观点 → 数据给证据）。",
+        "d. 所有文案中文（eyebrow 可用英文栏目词如 AI RADAR），语气克制专业，不堆感叹号。",
+        "严格输出 JSON 数组（不要 markdown 代码块、不要多余文字）：",
+        `[{"template":"cover|quote|data","family":"editorial|swiss","eyebrow":"眉题","title":"主标题","subtitle":"副题","quote":"金句","attribution":"署名","metrics":[{"value":"87.4%","label":"指标名"}],"footer":"页脚","caption":"图注≤18字"}]（未用到的字段可省略）`,
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: `主题：${input.subject}\n需要 ${input.count} 张。`,
+    },
+  ]
+}
+
+/** 宽容解析 LLM 版式卡规划（模板/版系非法值回退默认，metrics 兜底裁剪） */
+export function parseCardPlan(raw: unknown, count: number): CardPlanItem[] {
+  const arr = Array.isArray(raw) ? raw : []
+  const templateOk = new Set(CARD_TEMPLATES.map((t) => t.id as string))
+  const familyOk = new Set(CARD_FAMILIES.map((f) => f.id as string))
+  const out: CardPlanItem[] = []
+  for (const it of arr) {
+    if (!it || typeof it !== "object") continue
+    const x = it as Record<string, unknown>
+    const title = typeof x.title === "string" ? x.title.trim() : ""
+    const quote = typeof x.quote === "string" ? x.quote.trim() : ""
+    if (!title && !quote) continue
+    const metrics = Array.isArray(x.metrics)
+      ? (x.metrics as Record<string, unknown>[])
+          .filter((m) => m && typeof m.value === "string" && String(m.value).trim())
+          .slice(0, 4)
+          .map((m) => ({ value: String(m.value).slice(0, 12), label: String(m.label ?? "").slice(0, 18) }))
+      : []
+    const template = templateOk.has(String(x.template)) ? (String(x.template) as CardPlanItem["template"]) : quote ? "quote" : metrics.length >= 2 ? "data" : "cover"
+    out.push({
+      template,
+      family: familyOk.has(String(x.family)) ? (String(x.family) as CardPlanItem["family"]) : "editorial",
+      palette: typeof x.palette === "string" ? x.palette : undefined,
+      eyebrow: typeof x.eyebrow === "string" ? x.eyebrow.slice(0, 16) : undefined,
+      title: (title || quote).slice(0, 24),
+      subtitle: typeof x.subtitle === "string" ? x.subtitle.slice(0, 36) : undefined,
+      quote: quote ? quote.slice(0, 66) : undefined,
+      attribution: typeof x.attribution === "string" ? x.attribution.slice(0, 26) : undefined,
+      metrics: metrics.length > 0 ? metrics : undefined,
+      footer: typeof x.footer === "string" ? x.footer.slice(0, 30) : undefined,
+      caption: typeof x.caption === "string" ? x.caption.slice(0, 20) : `${CARD_TEMPLATES.find((t) => t.id === template)?.label ?? "版式卡"}`,
+    })
+    if (out.length >= count) break
+  }
+  return out
+}
+
 // ---------- ② 图文线：正文插图规划 ----------
 
 export interface IllustrationPlanItem {

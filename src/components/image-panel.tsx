@@ -27,6 +27,7 @@ interface ImageRunItem {
 }
 interface UsageInfo { id: string; label: string; size: string; desc: string }
 interface StyleInfo { id: string; label: string }
+interface FamilyInfo { id: string; label: string; desc: string }
 interface RunStep { name: string; status: "pending" | "running" | "done" | "error" | "skipped"; detail: string; latencyMs: number }
 interface GalleryAsset { id: string; path: string; role: string; meta: string; error: string; createdAt: string }
 
@@ -37,9 +38,13 @@ export function ImagePanel() {
   const [runs, setRuns] = useState<ImageRunItem[]>([])
   const [usages, setUsages] = useState<UsageInfo[]>([])
   const [styles, setStyles] = useState<StyleInfo[]>([])
+  const [families, setFamilies] = useState<FamilyInfo[]>([])
   const [subject, setSubject] = useState("")
   const [usage, setUsage] = useState("general-square")
   const [style, setStyle] = useState("modern-flat")
+  // P1 纯图线 2.0：gen 生成式｜layout 版式卡（代码排版零错字 + VLM 质检闭环）
+  const [mode, setMode] = useState<"gen" | "layout">("gen")
+  const [family, setFamily] = useState("")
   const [count, setCount] = useState(3)
   const [starting, setStarting] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -52,6 +57,7 @@ export function ImagePanel() {
       setRuns(json.runs ?? [])
       setUsages(json.usages ?? [])
       setStyles(json.styles ?? [])
+      setFamilies(json.families ?? [])
     } catch {
       /* 列表失败静默，下次轮询恢复 */
     }
@@ -112,14 +118,20 @@ export function ImagePanel() {
       const res = await fetch("/api/image-runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subject, usage, style, count }),
+        body: JSON.stringify({ subject, usage, style, count, mode, family: mode === "layout" ? family : undefined }),
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error)
       await refresh()
       setSelectedId(json.id)
       const u = usages.find((x) => x.id === usage)
-      toast({ title: "纯图线已启动", description: `构图方案 → ${count} 张批量生图（${u?.size ?? ""}）` })
+      toast({
+        title: mode === "layout" ? "版式卡流水线已启动" : "纯图线已启动",
+        description:
+          mode === "layout"
+            ? `文案规划 → ${count} 张代码排版卡（${u?.size ?? ""}，零错字 + VLM 质检）`
+            : `构图方案 → ${count} 张批量生图（${u?.size ?? ""}，VLM 读回复核）`,
+      })
     } catch (e) {
       toast({ title: "启动失败", description: (e as Error).message, variant: "destructive" })
     } finally {
@@ -140,39 +152,58 @@ export function ImagePanel() {
       {/* 新建纯图任务 */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base"><ImageIcon className="h-4 w-4 text-sky-500" />纯图线 · 主题生图画廊</CardTitle>
-          <p className="text-[11px] text-muted-foreground">主题 → LLM 构图方案（概念组，风格统一）→ zai-image 批量生成 → 画廊（下载 / 复制 Markdown）。生图降级留痕不阻断</p>
+          <CardTitle className="flex items-center gap-2 text-base"><ImageIcon className="h-4 w-4 text-sky-500" />纯图线 2.0 · 主题生图画廊 / 版式卡</CardTitle>
+          <p className="text-[11px] text-muted-foreground">生成式：主题 → 构图方案 → zai-image 批量生图（VLM 读回复核）｜版式卡：文案 → 代码排版模板（零错字）→ Playwright 渲染（Editorial/Swiss 两系）</p>
         </CardHeader>
         <CardContent className="space-y-3">
           <Textarea
-            placeholder="主题或画面描述，如：具身智能走进工厂——机器人与产线协作的一组概念图"
+            placeholder={mode === "layout" ? "主题或事件，如：本周 AI 融资观察——三条主线与关键数据（版式卡会提取标题/金句/数据填入模板）" : "主题或画面描述，如：具身智能走进工厂——机器人与产线协作的一组概念图"}
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
             rows={2}
           />
+          {/* 模式切换：生成式 / 版式卡 */}
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-lg border overflow-hidden text-xs">
+              <button onClick={() => setMode("gen")} className={`px-3 py-1.5 transition-colors ${mode === "gen" ? "bg-sky-500 text-white" : "hover:bg-muted"}`}>生成式生图</button>
+              <button onClick={() => setMode("layout")} className={`px-3 py-1.5 transition-colors ${mode === "layout" ? "bg-violet-500 text-white" : "hover:bg-muted"}`}>版式卡（代码排版）</button>
+            </div>
+            {mode === "layout" && families.length > 0 && (
+              <select value={family} onChange={(e) => setFamily(e.target.value)} className="h-8 rounded-md border bg-background px-2 text-xs" aria-label="版系">
+                <option value="">版系 LLM 自选</option>
+                {families.map((f) => (
+                  <option key={f.id} value={f.id}>{f.label}</option>
+                ))}
+              </select>
+            )}
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)_110px_auto] gap-2">
             <select value={usage} onChange={(e) => setUsage(e.target.value)} className="h-9 rounded-md border bg-background px-2 text-xs" aria-label="用途">
               {usages.map((u) => (
                 <option key={u.id} value={u.id}>{u.label}（{u.size}）</option>
               ))}
             </select>
-            <select value={style} onChange={(e) => setStyle(e.target.value)} className="h-9 rounded-md border bg-background px-2 text-xs" aria-label="风格">
-              {styles.map((s) => (
-                <option key={s.id} value={s.id}>{s.label}</option>
-              ))}
-            </select>
+            {mode === "gen" ? (
+              <select value={style} onChange={(e) => setStyle(e.target.value)} className="h-9 rounded-md border bg-background px-2 text-xs" aria-label="风格">
+                {styles.map((s) => (
+                  <option key={s.id} value={s.id}>{s.label}</option>
+                ))}
+              </select>
+            ) : (
+              <div className="h-9 rounded-md border bg-muted/40 px-2 text-xs flex items-center text-muted-foreground">文字由代码排版（零错字）</div>
+            )}
             <select value={count} onChange={(e) => setCount(Number(e.target.value))} className="h-9 rounded-md border bg-background px-2 text-xs" aria-label="张数">
               {Array.from({ length: 9 }, (_, i) => i + 1).map((n) => (
                 <option key={n} value={n}>{n} 张</option>
               ))}
             </select>
-            <Button onClick={start} disabled={!subject.trim() || starting} className="bg-sky-500 hover:bg-sky-600 text-white shrink-0">
+            <Button onClick={start} disabled={!subject.trim() || starting} className={`text-white shrink-0 ${mode === "layout" ? "bg-violet-500 hover:bg-violet-600" : "bg-sky-500 hover:bg-sky-600"}`}>
               {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-              生成图片组
+              {mode === "layout" ? "生成版式卡" : "生成图片组"}
             </Button>
           </div>
           {usages.find((u) => u.id === usage) && (
-            <p className="text-[10px] text-muted-foreground">{usages.find((u) => u.id === usage)!.desc}</p>
+            <p className="text-[10px] text-muted-foreground">{usages.find((u) => u.id === usage)!.desc}{mode === "layout" ? "｜版式卡封面/金句/数据三类模板自动搭配，生图后 VLM 视觉复核不过自动重试" : ""}</p>
           )}
         </CardContent>
       </Card>
@@ -224,10 +255,14 @@ export function ImagePanel() {
                 {detail?.images.map((a) => {
                   let caption = ""
                   let size = ""
+                  let vlm = ""
+                  let tpl = ""
                   try {
-                    const m = JSON.parse(a.meta) as { caption?: string; size?: string; index?: number }
+                    const m = JSON.parse(a.meta) as { caption?: string; size?: string; index?: number; vlm?: string; template?: string }
                     caption = m.caption ?? ""
                     size = m.size ?? ""
+                    vlm = m.vlm ?? ""
+                    tpl = m.template ?? ""
                   } catch {
                     /* meta 损坏忽略 */
                   }
@@ -236,8 +271,13 @@ export function ImagePanel() {
                       <img src={a.path} alt={caption} className="w-full aspect-video object-cover" loading="lazy" />
                       <figcaption className="px-2.5 py-2 space-y-1.5">
                         <p className="text-xs leading-snug line-clamp-1">{caption || "（无图注）"}</p>
-                        <div className="flex items-center gap-1.5">
-                          <Badge variant="outline" className="text-[9px] px-1 py-0">{a.role}</Badge>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <Badge variant="outline" className="text-[9px] px-1 py-0">{tpl || a.role}</Badge>
+                          {vlm && (
+                            <Badge className={`text-[9px] px-1 py-0 ${vlm.includes("质检通过") || vlm.includes("重试后通过") ? "bg-emerald-600" : vlm.includes("未质检") ? "bg-muted text-muted-foreground" : "bg-amber-600"}`}>
+                              {vlm.startsWith("质检通过") ? "VLM 质检通过" : vlm.startsWith("重试后通过") ? "VLM 重试后通过" : vlm.startsWith("未质检") ? "未质检" : "VLM 未过"}
+                            </Badge>
+                          )}
                           {size && <span className="text-[9px] text-muted-foreground">{size}</span>}
                           <span className="ml-auto flex items-center gap-1">
                             <a href={a.path} target="_blank" rel="noreferrer" className="text-muted-foreground hover:text-sky-600" title="打开原图"><ExternalLink className="h-3.5 w-3.5" /></a>

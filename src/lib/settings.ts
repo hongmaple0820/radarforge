@@ -60,8 +60,8 @@ export interface AgnesSettings {
 }
 
 export interface VideoSettings {
-  /** 视频通道：local=本地渲染（motion/art 双风格）/ agnes=AI 视频模型 / auto=优先 agnes 回退 local */
-  channel: "local" | "agnes" | "auto"
+  /** 视频通道：local=本地渲染（motion/art 双风格）/ agnes=AI 视频模型 / auto=优先 agnes 回退 local / hybrid=混合通道（P1：按分镜 render 标注分发，code 主轨 + model 插播） */
+  channel: "local" | "agnes" | "auto" | "hybrid"
   /** Agnes 视频生成时每镜秒数（4-12s） */
   secondsPerScene: number
 }

@@ -34,7 +34,8 @@ const TMP_ROOT = "/home/z/my-project/.videotmp"
 
 export type VideoAspect = "9:16" | "16:9"
 export type VideoStyle = "motion" | "art"
-export type VideoChannel = "local" | "agnes" | "auto"
+/** local=本地代码动画｜agnes=全模型｜auto=可用则 agnes｜hybrid=混合通道（P1：按分镜 render 标注分发，code 为主轨、model 补 b-roll） */
+export type VideoChannel = "local" | "agnes" | "auto" | "hybrid"
 export type BgmPreset = "none" | "uplift" | "tech" | "calm"
 
 export const BGM_PRESETS: Record<Exclude<BgmPreset, "none">, { label: string; desc: string }> = {
@@ -61,8 +62,8 @@ export interface RenderProgress {
   aspect: VideoAspect
   /** 渲染风格：motion 商业片 / art 艺术动画 */
   style: VideoStyle
-  /** 实际通道（auto 解析后）：local / agnes */
-  channel: "local" | "agnes"
+  /** 实际通道（auto 解析后）：local / agnes / hybrid */
+  channel: "local" | "agnes" | "hybrid"
   aiNote?: string
   seconds?: number
   width?: number
@@ -79,6 +80,9 @@ export interface RenderProgress {
   /** BGM 预设（none=无配乐） */
   bgm?: BgmPreset
   bgmNote?: string
+  /** 混合通道统计：代码动画 / AI 模型镜头数（成本与验收证据） */
+  codeScenes?: number
+  modelScenes?: number
 }
 
 // ---------- 文本工具 ----------
@@ -467,14 +471,28 @@ async function renderVideo(
     const p = registry.get("agnes-video")
     return p.kind === "VIDEO" && p.isConfigured() && Boolean(p.submitVideo)
   })()
-  let channel: "local" | "agnes" = channelChoice === "agnes" ? "agnes" : channelChoice === "auto" ? (agnesReady ? "agnes" : "local") : "local"
+  let channel: "local" | "agnes" | "hybrid"
+  if (channelChoice === "agnes") channel = "agnes"
+  else if (channelChoice === "hybrid") channel = "hybrid"
+  else if (channelChoice === "auto") channel = agnesReady ? "agnes" : "local"
+  else channel = "local"
   let aiNote = ""
   if (channelChoice === "agnes" && !agnesReady) {
     channel = "local"
     aiNote = "Agnes 未配置（账号池为空或未启用）→ 已回退本地渲染"
   } else if (channelChoice === "auto" && !agnesReady) {
     aiNote = "auto：Agnes 未配置 → 本地渲染"
+  } else if (channelChoice === "hybrid" && !agnesReady) {
+    aiNote = "混合通道：Agnes 未配置 → 全部代码动画渲染（配置 Agnes 账号池后 model 镜头自动启用）"
   }
+  // 混合通道的分发判定（P1：LLM 已在分镜 JSON 标注 render=code|model）
+  const useAgnesFor = (i: number): boolean => {
+    if (channel === "agnes") return true
+    if (channel !== "hybrid") return false
+    return scenes[i].render === "model" && agnesReady
+  }
+  const modelSceneCount = scenes.filter((s) => s.render === "model").length
+  const codeSceneCount = n - modelSceneCount
 
   const progress: RenderProgress = {
     stage: "queued", percent: 0, sceneDone: 0, sceneTotal: n,
@@ -482,6 +500,7 @@ async function renderVideo(
     style: channel === "agnes" ? style : style, channel, version,
     ...(aiNote ? { aiNote } : {}),
     ...(bgm !== "none" ? { bgm } : {}),
+    ...(channel === "hybrid" ? { codeScenes: codeSceneCount, modelScenes: agnesReady ? modelSceneCount : 0 } : {}),
   }
   let baseMeta: Record<string, unknown> = {}
   try {
@@ -521,7 +540,12 @@ async function renderVideo(
         durations.push(Math.max(1, await ffprobeSeconds(wav)))
         audioFiles.push(wav)
       } else {
-        const planned = channel === "agnes" ? settings.video.secondsPerScene : Math.min(15, Math.max(2, scenes[i].seconds))
+        const planned =
+          channel === "agnes"
+            ? settings.video.secondsPerScene
+            : channel === "hybrid" && useAgnesFor(i)
+              ? Math.min(10, Math.max(5, scenes[i].seconds)) // model 镜头 5~10s 插播（P1 混合通道）
+              : Math.min(15, Math.max(2, scenes[i].seconds))
         durations.push(planned)
         audioFiles.push("")
       }
@@ -533,8 +557,72 @@ async function renderVideo(
       sceneDone: 0,
     })
 
-    // ===== Stage 2: 分段生成（三通道分叉） =====
+    // ===== Stage 2: 分段生成（四通道分叉：agnes / hybrid / art / motion） =====
     const segs: string[] = []
+
+    /** 混合通道的本地代码动画单镜渲染（style=art 走引擎，否则 motion 场景卡；供 code 分镜与 model 回落共用） */
+    const renderLocalSceneSeg = async (i: number, seg: string, specs: ArtSpecItem[]): Promise<void> => {
+      if (style === "art") {
+        const specItem = specs.find((s) => s.sceneId === scenes[i].id) ?? specs[i]
+        const clipPath = path.join(tmp, `c${i}.mp4`)
+        const grammar = specItem?.grammar ?? "t2_keynote_ui"
+        const spec: ArtClipSpec = {
+          grammar,
+          duration: Math.min(8, Math.max(2, durations[i])),
+          fps: 30,
+          width: L.w,
+          height: L.h,
+          theme: specItem?.theme ?? "paper",
+          data: grammar === "y4_storytime" ? { ...(specItem?.data ?? {}), character: { frames: Y4_CHARACTER_FRAMES } } : specItem?.data ?? {},
+          cues: (specItem?.cues ?? [{ at: 0.3, kind: "title" }]).map((c) => ({
+            at: c.at,
+            kind: c.kind,
+            ...(c.text ? { text: c.text } : {}),
+            ...(c.sub ? { sub: c.sub } : {}),
+            ...(c.data ? { data: c.data } : {}),
+          })),
+        }
+        saveProgress({ stage: "frames", sceneDone: i, aiNote: `混合通道：分镜 ${i + 1}/${n}（code）${spec.grammar} · ${spec.theme ?? "paper"} 渲染中` })
+        try {
+          await renderArtClip(spec, clipPath, (p) => {
+            saveProgress({ percent: Math.round(30 + (45 * (i + p.frameDone / Math.max(1, p.frameTotal))) / n) })
+          })
+        } catch (e) {
+          console.warn(`[video] hybrid art 分镜 ${i + 1}（${grammar}）失败，回落 t2_keynote_ui：${(e as Error).message.slice(0, 120)}`)
+          const fallbackSpec: ArtClipSpec = {
+            grammar: "t2_keynote_ui",
+            duration: spec.duration,
+            fps: 30,
+            width: L.w,
+            height: L.h,
+            theme: spec.theme ?? "paper",
+            data: { title: storyboard.title, subtitle: scenes[i].subtitle },
+            cues: [{ at: 0.3, kind: "title" }],
+          }
+          await renderArtClip(fallbackSpec, clipPath, (p) => {
+            saveProgress({ percent: Math.round(30 + (45 * (i + p.frameDone / Math.max(1, p.frameTotal))) / n) })
+          })
+          saveProgress({ aiNote: `分镜 ${i + 1}（${grammar}）已回落 t2_keynote_ui：${(e as Error).message.slice(0, 60)}` })
+        }
+        await muxSegment(clipPath, audioFiles[i] || null, spec.duration, seg)
+        return
+      }
+      // motion 场景卡（与纯 motion 通道同配方）
+      saveProgress({ stage: "frames", sceneDone: i, aiNote: `混合通道：分镜 ${i + 1}/${n}（code）motion 场景卡渲染中` })
+      const svg = sceneSvg(scenes[i], i, n, storyboard, opts.aspect)
+      const png = await sharp(Buffer.from(svg)).png({ compressionLevel: 9 }).toBuffer()
+      const frame = path.join(tmp, `f${i}.png`)
+      await writeFile(frame, png)
+      const fadeOut = Math.max(0, durations[i] - 0.25).toFixed(2)
+      await execFileP("ffmpeg", [
+        "-y", "-loop", "1", "-framerate", "30", "-t", durations[i].toFixed(2), "-i", frame,
+        ...(audioFiles[i] ? ["-i", audioFiles[i]] : ["-f", "lavfi", "-t", durations[i].toFixed(2), "-i", "anullsrc=r=24000:cl=mono"]),
+        "-vf", `fade=t=in:st=0:d=0.22,fade=t=out:st=${fadeOut}:d=0.22,format=yuv420p`,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "96k", "-ar", "24000", "-ac", "1",
+        "-t", durations[i].toFixed(2), "-shortest", seg,
+      ], { timeout: 120_000 })
+    }
 
     if (channel === "agnes") {
       // ---- 通道 C：Agnes AI 视频模型（逐场景提交→轮询→下载→混音）----
@@ -571,6 +659,48 @@ async function renderVideo(
         }
         saveProgress({ percent: Math.round(30 + (50 * (i + 1)) / n) })
       }
+    } else if (channel === "hybrid") {
+      // ---- 通道 D（P1 混合通道）：按分镜 render 标注分发 ----
+      // code 分镜 → 本地代码动画（style=motion 场景卡 / art 艺术动画，确定可控零错字）
+      // model 分镜 → Agnes AI 视频模型 5~10s 插播（实景/情绪 b-roll），失败单镜回落代码动画
+      // 成本模型：模型秒数 = model 镜头时长之和 ≈ 全片的 1/4~1/3 → 单条成本 ≈ 纯模型 1/3
+      let modelDone = 0
+      let modelFallback = 0
+      const specs = style === "art" ? await convertToArtSpecs(storyboard, opts.aspect) : []
+      if (style === "art") saveProgress({ stage: "spec" })
+      for (let i = 0; i < n; i++) {
+        const seg = path.join(tmp, `s${i}.mp4`)
+        if (useAgnesFor(i)) {
+          // ---- model 镜头：Agnes 插播（失败回落代码动画，诚实留痕） ----
+          const raw = path.join(tmp, `raw${i}.mp4`)
+          const modelDur = Math.min(12, Math.max(5, durations[i]))
+          try {
+            saveProgress({ stage: "submit", sceneDone: i, aiNote: `混合通道：分镜 ${i + 1}/${n}（model）Agnes 生成中 · ${scenes[i].render === "model" ? "实景/情绪镜头" : ""}` })
+            await agnesSceneToMp4(scenes[i], modelDur, opts.aspect, raw, (waited) => {
+              saveProgress({ stage: "poll", percent: Math.round(30 + (45 * (i + Math.min(1, waited / 60))) / n), aiNote: `混合通道：分镜 ${i + 1}/${n}（model）Agnes 生成中（已等 ${waited}s）` })
+            })
+            saveProgress({ stage: "download", sceneDone: i + 1 })
+            await muxSegment(raw, audioFiles[i] || null, durations[i], seg)
+            segs.push(seg)
+            modelDone++
+          } catch (e) {
+            modelFallback++
+            console.warn(`[video] hybrid 分镜 ${i + 1}（model）Agnes 失败，回落代码动画：${(e as Error).message.slice(0, 120)}`)
+            saveProgress({ aiNote: `分镜 ${i + 1}（model）Agnes 失败已回落代码动画：${(e as Error).message.slice(0, 60)}` })
+            await renderLocalSceneSeg(i, seg, specs)
+          }
+        } else {
+          // ---- code 镜头：本地代码动画 ----
+          await renderLocalSceneSeg(i, seg, specs)
+        }
+        saveProgress({ percent: Math.round(30 + (50 * (i + 1)) / n) })
+      }
+      const modelOk = Math.max(0, modelDone)
+      saveProgress({
+        codeScenes: n - modelOk,
+        modelScenes: modelOk,
+        aiNote: aiNote || `混合通道完成：${n - modelOk} 镜代码动画 + ${modelOk} 镜 AI 模型${modelFallback > 0 ? `（${modelFallback} 镜回落代码）` : ""}｜模型秒数占比 ≈ ${Math.round((durations.reduce((s, d, i) => s + (scenes[i].render === "model" ? d : 0), 0) / Math.max(1, durations.reduce((s, d) => s + d, 0))) * 100)}%`,
+      })
     } else if (style === "art") {
       // ---- 通道 B：艺术动画（LLM spec → Canvas 引擎逐帧 → 混音）----
       saveProgress({ stage: "spec" })
@@ -702,7 +832,14 @@ async function renderVideo(
       where: { id: assetId },
       data: {
         path: path.join("/assets", path.basename(finalPath)),
-        provider: channel === "agnes" ? `agnes-video${ttsOk > 0 ? "+tts" : ""}${bgm !== "none" ? "+bgm" : ""}` : style === "art" ? `art-motion${ttsOk > 0 ? "+tts" : ""}${bgm !== "none" ? "+bgm" : ""}` : `ffmpeg${ttsOk > 0 ? "+tts" : "+tts(降级)"}${bgm !== "none" ? "+bgm" : ""}`,
+        provider:
+          channel === "agnes"
+            ? `agnes-video${ttsOk > 0 ? "+tts" : ""}${bgm !== "none" ? "+bgm" : ""}`
+            : channel === "hybrid"
+              ? `hybrid(${(progress.codeScenes ?? 0)}code+${(progress.modelScenes ?? 0)}model)${ttsOk > 0 ? "+tts" : ""}${bgm !== "none" ? "+bgm" : ""}`
+              : style === "art"
+                ? `art-motion${ttsOk > 0 ? "+tts" : ""}${bgm !== "none" ? "+bgm" : ""}`
+                : `ffmpeg${ttsOk > 0 ? "+tts" : "+tts(降级)"}${bgm !== "none" ? "+bgm" : ""}`,
       },
     })
   } catch (e) {

@@ -159,21 +159,32 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       const voice = TTS_VOICES.some((v) => v.id === body.voice) ? body.voice! : "xiaochen"
       const aspect: VideoAspect = body.aspect === "16:9" ? "16:9" : "9:16"
       const style: VideoStyle = body.style === "art" ? "art" : "motion"
-      const channel: VideoChannel | undefined = body.channel === "agnes" || body.channel === "auto" || body.channel === "local" ? body.channel : undefined
+      const channel: VideoChannel | undefined =
+        body.channel === "agnes" || body.channel === "auto" || body.channel === "local" || body.channel === "hybrid" ? body.channel : undefined
       const bgm: BgmPreset = ["uplift", "tech", "calm"].includes(body.bgm ?? "") ? (body.bgm as BgmPreset) : "none"
       const progress: RenderProgress = {
         stage: "queued", percent: 0, sceneDone: 0, sceneTotal: storyboard.scenes.length,
-        audioMode: "pending", voice, aspect, style, channel: channel === "agnes" ? "agnes" : "local",
+        audioMode: "pending", voice, aspect, style,
+        channel: channel === "agnes" ? "agnes" : channel === "hybrid" ? "hybrid" : "local",
         ...(bgm !== "none" ? { bgm } : {}),
       }
       const asset = await db.asset.create({
         data: {
-          runId: id, kind: "video", role: "video-final", provider: `${channel === "agnes" ? "agnes-video" : style === "art" ? "art-motion" : "ffmpeg"}+tts`, path: "",
+          runId: id, kind: "video", role: "video-final",
+          provider: `${channel === "agnes" ? "agnes-video" : channel === "hybrid" ? "hybrid(code+model)" : style === "art" ? "art-motion" : "ffmpeg"}+tts`, path: "",
           meta: JSON.stringify({ ...progress, storyboard }),
         },
       })
       startVideoRenderInBackground(id, asset.id, storyboard, { voice, aspect, style, channel, bgm })
-      const styleLabel = channel === "agnes" ? "Agnes AI 模型" : style === "art" ? "艺术动画（art-motion 引擎）" : "商业片（motion 场景卡）"
+      const modelScenes = storyboard.scenes.filter((s) => s.render === "model").length
+      const styleLabel =
+        channel === "agnes"
+          ? "Agnes AI 模型"
+          : channel === "hybrid"
+            ? `混合通道（${storyboard.scenes.length - modelScenes} 镜代码动画 + ${modelScenes} 镜 AI 模型插播）`
+            : style === "art"
+              ? "艺术动画（art-motion 引擎）"
+              : "商业片（motion 场景卡）"
       return NextResponse.json({
         assetId: asset.id,
         message: `成片渲染已开始：${storyboard.scenes.length} 个分镜 · ${aspect} · ${styleLabel}${storyboard.direction ? ` · 方向「${storyboard.direction.name}」` : ""}${bgm !== "none" ? " · BGM" : ""} · ${TTS_VOICES.find((v) => v.id === voice)?.label}`,

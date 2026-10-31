@@ -23,6 +23,8 @@ import {
   getImageStyle,
   getImageUsage,
   imagePlanMessages,
+  cardPlanMessages,
+  parseCardPlan,
   illustrationPlanMessages,
   insertImageAfterHeading,
   findHeadingIndex,
@@ -30,6 +32,8 @@ import {
   type ImagePlanItem,
   type IllustrationPlanItem,
 } from "./skills/radar-image"
+import { renderCardToAsset, CARD_FAMILIES, type CardPlanItem } from "./card-engine"
+import { vlmCheckImage, type VlmCheckResult } from "@/lib/gateway/vlm"
 
 export interface RunStep {
   name: string
@@ -658,6 +662,10 @@ async function executeArticleRun(runId: string): Promise<void> {
 // ============================================================
 // 纯图线（image run）：主题 → 构图方案（LLM）→ 批量生图 → 画廊
 // 不写文章、不做搜索；产品定位：封面/组图/概念卡的独立产线
+// P1 升级 2.0：mode=gen 生成式（zai-image + VLM 读回复核）｜
+//   mode=layout 版式卡（代码排版零错字 + VLM 读回复核），
+//   双层校验：规划提示词内置清单自检（生图前）+ 读回图片复核（生图后），
+//   未过自动重试一次（重试提示拼进下一次方案），VLM 不可达诚实标「未质检」
 // ============================================================
 
 const IMAGE_STEP_DEFS: { name: string; label: string }[] = [
@@ -676,19 +684,25 @@ export interface CreateImageRunArgs {
   usage: string
   style: string
   count: number
+  /** gen=生成式生图（默认）｜layout=版式卡（代码排版） */
+  mode?: "gen" | "layout"
+  /** layout 模式锁定版系（editorial/swiss；空=LLM 自选） */
+  family?: string
 }
 
 export async function createImageRun(args: CreateImageRunArgs): Promise<string> {
   const usage = getImageUsage(args.usage)
-  const style = getImageStyle(args.style)
+  const mode = args.mode === "layout" ? "layout" : "gen"
   const count = Math.min(9, Math.max(1, Math.floor(args.count) || 3))
+  const familyOk = CARD_FAMILIES.some((f) => f.id === args.family)
+  const style = getImageStyle(args.style)
   const run = await db.agentRun.create({
     data: {
       kind: "image",
       ideaTitle: args.subject.slice(0, 200),
-      // 自描述参数行：`${用途} · ${风格} · ${N} 张`（执行时反向解析，UI 可直接展示）
-      ideaAngle: `${usage.label} · ${style.label} · ${count} 张`.slice(0, 500),
-      persona: style.id,
+      // 自描述参数行（执行时反向解析，UI 可直接展示）
+      ideaAngle: `${mode === "layout" ? "版式卡" : "生成式"} · ${usage.label} · ${count} 张`.slice(0, 500),
+      persona: mode === "layout" ? `layout${familyOk ? `:${args.family}` : ""}` : style.id,
       theme: usage.id,
       input: args.subject,
       status: "queued",
@@ -711,7 +725,11 @@ async function executeImageRun(runId: string): Promise<void> {
   const steps = initialImageSteps()
   const artifacts: Record<string, unknown> = {}
   const usage = getImageUsage(run.theme)
-  const style = getImageStyle(run.persona || "modern-flat")
+  const size = usage.size.split("x").map(Number) as [number, number]
+  const mode: "gen" | "layout" = run.persona?.startsWith("layout") ? "layout" : "gen"
+  const familyLock = mode === "layout" ? run.persona.split(":")[1] : undefined
+  const familyOk = CARD_FAMILIES.some((f) => f.id === familyLock)
+  const style = getImageStyle(mode === "gen" ? run.persona || "modern-flat" : "modern-flat")
   const count = Math.min(9, Math.max(1, Number(run.ideaAngle.match(/(\d+)\s*张/)?.[1] ?? 3) || 3))
 
   await db.agentRun.update({ where: { id: runId }, data: { status: "running", steps: JSON.stringify(steps) } })
@@ -731,35 +749,121 @@ async function executeImageRun(runId: string): Promise<void> {
     await save()
   }
 
+  /** 质检结果摘要（Asset meta.vlm 留痕） */
+  const vlmNote = (v: VlmCheckResult | null, retried: boolean): string => {
+    if (!v || !v.done) return v?.error ? `未质检（VLM 不可达：${v.error.slice(0, 60)}）` : "未质检"
+    if (v.pass) return retried ? "重试后通过" : "质检通过"
+    return `质检未过（${v.issues.join("；") || "原因不明"}）`
+  }
+
   try {
-    // ========== Step 1: 构图方案（LLM） ==========
+    // ========== Step 1: 构图方案 / 版式文案（LLM，含生图前清单自检） ==========
     let plan: ImagePlanItem[] | null = null
+    let cards: CardPlanItem[] | null = null
     await step(0, async () => {
       for (const temp of [0.5, 0.2]) {
-        const raw = await chatRetry(
-          imagePlanMessages({ subject: run.input || run.ideaTitle, usageId: usage.id, styleId: style.id, count }),
-          { temperature: temp },
-        )
-        plan = extractJson<ImagePlanItem[]>(raw)
-        if (Array.isArray(plan) && plan.length > 0) break
+        if (mode === "layout") {
+          const raw = await chatRetry(
+            cardPlanMessages({ subject: run.input || run.ideaTitle, usageId: usage.id, count, familyId: familyOk ? familyLock : undefined }),
+            { temperature: temp },
+          )
+          cards = parseCardPlan(extractJson(raw) ?? raw, count)
+          if (cards && cards.length > 0) break
+        } else {
+          const raw = await chatRetry(
+            imagePlanMessages({ subject: run.input || run.ideaTitle, usageId: usage.id, styleId: style.id, count }),
+            { temperature: temp },
+          )
+          plan = extractJson<ImagePlanItem[]>(raw)
+          if (Array.isArray(plan) && plan.length > 0) break
+        }
+      }
+      if (mode === "layout") {
+        if (!cards || cards.length === 0) throw new Error("版式卡文案解析失败（两档温度重试后仍不合格式，请重试）")
+        artifacts.cards = cards.slice(0, count)
+        return `${Math.min(cards.length, count)} 张版式卡文案｜${familyOk ? `${familyLock} 版系锁定` : "版系 LLM 自选"}｜代码排版零错字`
       }
       if (!Array.isArray(plan) || plan.length === 0) throw new Error("构图方案解析失败（两档温度重试后仍不合格式，请重试）")
       artifacts.plan = plan.slice(0, count)
       return `${Math.min(plan.length, count)} 个构图概念｜${style.label}｜${usage.label}`
     })
 
-    // ========== Step 2: 批量生图（逐张生成留痕，全降级才算失败） ==========
+    // ========== Step 2: 批量产出（逐张生成 + VLM 读回复核，未过重试一次留痕） ==========
     await step(1, async () => {
-      const items = (plan ?? []).filter((x) => x?.concept).slice(0, count)
-      if (items.length === 0) throw new Error("构图方案为空")
       let ok = 0
       let degraded = 0
+      let vlmPass = 0
+      let vlmFail = 0
+      let vlmSkip = 0
+      let retried = 0
       const gallery: { path: string; caption: string }[] = []
-      const outputLines = [`# ${run.ideaTitle}`, "", `> 纯图线 · ${usage.label} · ${style.label} · ${items.length} 张`, ""]
-      for (let i = 0; i < items.length; i++) {
-        const it = items[i]
-        const img = await generateImage(`${it.concept}，${style.prompt}`, runId, `card-${i + 1}`, usage.size)
-        const caption = (it.caption ?? `图 ${i + 1}`).slice(0, 30)
+      const outputLines = [`# ${run.ideaTitle}`, "", `> 纯图线 · ${mode === "layout" ? "版式卡（代码排版）" : usage.label + " · " + style.label} · ${usage.label}`, ""]
+
+      const items: number[] = Array.from({ length: mode === "layout" ? (cards ?? []).length : (plan ?? []).filter((x) => x?.concept).length }, (_, i) => i)
+      for (const i of items.slice(0, count)) {
+        const caption = mode === "layout" ? ((cards ?? [])[i]?.caption ?? `图 ${i + 1}`).slice(0, 30) : ((plan ?? [])[i]?.caption ?? `图 ${i + 1}`).slice(0, 30)
+
+        if (mode === "layout") {
+          // ---- 版式卡：代码排版渲染（确定性，零错字）----
+          const card = (cards ?? [])[i]
+          let rendered: { filePath: string; absPath: string; sizeBytes: number } | null = null
+          try {
+            rendered = await renderCardToAsset(card, { runId, slug: `card-${i + 1}`, size: { width: size[0], height: size[1] } })
+          } catch (e) {
+            degraded++
+            await db.asset.create({
+              data: {
+                runId, kind: "image", role: i === 0 ? "hero" : `card-${i + 1}`, provider: "card-engine(降级)", path: "",
+                meta: JSON.stringify({ size: usage.size, caption, template: card.template, family: card.family, index: i + 1 }),
+                error: (e as Error).message,
+              },
+            })
+            continue
+          }
+          if (!rendered) continue
+          // VLM 读回复核：不过 → 截短文案重渲染一次（版式卡失败主因是文字溢出）
+          let vlm = await vlmCheckImage({ absPath: rendered.absPath, concept: `${card.template}｜${card.title}${card.quote ? "｜" + card.quote : ""}`, caption, kind: "layout" })
+          let didRetry = false
+          if (vlm.done && !vlm.pass) {
+            didRetry = true
+            retried++
+            const shrunk: CardPlanItem = {
+              ...card,
+              title: card.title.slice(0, Math.max(8, card.title.length - 4)),
+              subtitle: card.subtitle?.slice(0, 20),
+              quote: card.quote?.slice(0, 44),
+            }
+            try {
+              const again = await renderCardToAsset(shrunk, { runId, slug: `card-${i + 1}`, size: { width: size[0], height: size[1] } })
+              const vlm2 = await vlmCheckImage({ absPath: again.absPath, concept: `${card.template}｜${shrunk.title}`, caption, kind: "layout" })
+              if (vlm2.done && vlm2.pass) vlm = vlm2
+              rendered = again
+            } catch {
+              /* 重渲染失败保留首图 + 首次质检结果 */
+            }
+          }
+          if (vlm.done && vlm.pass) vlmPass++
+          else if (vlm.done) vlmFail++
+          else vlmSkip++
+          ok++
+          gallery.push({ path: rendered.filePath, caption })
+          outputLines.push(`![${caption}](${rendered.filePath})`, "")
+          await db.asset.create({
+            data: {
+              runId, kind: "image", role: i === 0 ? "hero" : `card-${i + 1}`, provider: "card-engine(代码排版)", path: rendered.filePath,
+              meta: JSON.stringify({
+                size: usage.size, bytes: rendered.sizeBytes, caption, template: card.template, family: card.family, index: i + 1,
+                vlm: vlmNote(vlm, didRetry),
+              }),
+            },
+          })
+          continue
+        }
+
+        // ---- 生成式：zai-image 生图 + VLM 读回复核（未过带建议重试一次）----
+        const it = (plan ?? [])[i]
+        let prompt = `${it.concept}，${style.prompt}`
+        const img = await generateImage(prompt, runId, `card-${i + 1}`, usage.size)
         if (!img.ok) {
           degraded++
           await db.asset.create({
@@ -771,21 +875,44 @@ async function executeImageRun(runId: string): Promise<void> {
           })
           continue
         }
+        let finalImg = img
+        let vlm = await vlmCheckImage({ absPath: img.absPath, concept: it.concept, caption, kind: "gen" })
+        let didRetry = false
+        if (vlm.done && !vlm.pass && vlm.retryHint) {
+          // 带质检建议重试一次（覆盖同名文件；首图失败留证在 Asset.error 文案里）
+          didRetry = true
+          retried++
+          prompt = `${prompt}。注意规避以下问题：${vlm.retryHint}`
+          const img2 = await generateImage(prompt, runId, `card-${i + 1}`, usage.size)
+          if (img2.ok) {
+            const vlm2 = await vlmCheckImage({ absPath: img2.absPath, concept: `${it.concept}（重试：${vlm.retryHint}）`, caption, kind: "gen" })
+            if (vlm2.done && vlm2.pass) vlm = vlm2
+            finalImg = img2
+          }
+        }
+        if (vlm.done && vlm.pass) vlmPass++
+        else if (vlm.done) vlmFail++
+        else vlmSkip++
         ok++
-        gallery.push({ path: img.filePath, caption })
-        outputLines.push(`![${caption}](${img.filePath})`, "")
+        gallery.push({ path: finalImg.filePath, caption })
+        outputLines.push(`![${caption}](${finalImg.filePath})`, "")
         await db.asset.create({
           data: {
-            runId, kind: "image", role: i === 0 ? "hero" : `card-${i + 1}`, provider: "zai-image", path: img.filePath,
-            meta: JSON.stringify({ size: usage.size, bytes: img.sizeBytes, caption, concept: it.concept.slice(0, 200), index: i + 1 }),
+            runId, kind: "image", role: i === 0 ? "hero" : `card-${i + 1}`, provider: "zai-image", path: finalImg.filePath,
+            meta: JSON.stringify({
+              size: usage.size, bytes: finalImg.sizeBytes, caption, concept: it.concept.slice(0, 200), index: i + 1,
+              vlm: vlmNote(vlm, didRetry),
+            }),
           },
         })
       }
-      if (ok === 0) throw new Error(`全部生图降级：${(plan ?? []).length} 张均未成功（可稍后重试或在设置中心配置自定义生图端点）`)
+      if (ok === 0) throw new Error(`全部产出降级：${items.length} 张均未成功（${mode === "layout" ? "版式渲染引擎异常" : "生图端点不稳定，可稍后重试或在设置中心配置自定义生图端点"}）`)
       artifacts.gallery = gallery
+      const vlmSummary = `质检：${vlmPass} 过 / ${vlmFail} 未过 / ${vlmSkip} 未检${retried > 0 ? `（${retried} 张重试）` : ""}`
+      artifacts.vlm = { pass: vlmPass, fail: vlmFail, skip: vlmSkip, retried }
       const output = outputLines.join("\n")
       await db.agentRun.update({ where: { id: runId }, data: { output } })
-      return `${ok}/${items.length} 张已生成（${usage.size}）${degraded > 0 ? `，${degraded} 张降级留痕` : ""}`
+      return `${ok}/${items.length} 张已产出（${usage.size}）｜${vlmSummary}${degraded > 0 ? `，${degraded} 张降级留痕` : ""}`
     })
 
     await db.agentRun.update({

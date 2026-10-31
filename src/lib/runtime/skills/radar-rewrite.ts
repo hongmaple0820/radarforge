@@ -67,6 +67,8 @@ export interface StoryboardScene {
   narration: string // 口播文本
   subtitle: string // 屏幕字幕
   broll: string // B-roll 素材建议
+  /** P1 混合通道：code=代码动画（数据/字排/对比，确定性零错字）｜model=AI 视频模型（实景/情绪 b-roll，5~10s）；缺省 code */
+  render?: "code" | "model"
 }
 
 /** 选定方向的轻量摘要（随分镜存储，供渲染取色与恢复） */
@@ -111,6 +113,7 @@ export function storyboardMessages(markdown: string, platform: string, direction
         "要求：",
         "- hook：前 3 秒钩子（提问/冲突/反常识），一句话",
         "- 每个分镜：seconds（2~12 秒）、visual（画面怎么做：实拍/屏幕录制/AI 素材）、narration（口播，口语短句）、subtitle（屏幕大字 ≤12 字）、broll（空镜素材建议）",
+        "- render（混合通道标注，每个分镜必填）：画面是数据/数字/对比/字排/流程/品牌一致性 → \"code\"（代码动画，确定可控零错字）；画面是实景氛围/情绪镜头/转场空镜 → \"model\"（AI 视频模型 5~10 秒插播）。资讯速递类视频 code 应占大多数，model 只在真正需要实拍感的镜头用（通常 1~3 镜）",
         "- caption：发布文案（含 3~5 个 #话题标签）",
         "- 事实数字保留原文，不得新增未经证实的数字",
         "严格输出 JSON（不要 markdown 代码块）：",
@@ -118,7 +121,7 @@ export function storyboardMessages(markdown: string, platform: string, direction
         `  "title": "视频标题",`,
         `  "hook": "前3秒钩子",`,
         `  "totalSeconds": 60,`,
-        `  "scenes": [ { "id": 1, "seconds": 5, "visual": "...", "narration": "...", "subtitle": "...", "broll": "..." } ],`,
+        `  "scenes": [ { "id": 1, "seconds": 5, "render": "code", "visual": "...", "narration": "...", "subtitle": "...", "broll": "..." } ],`,
         `  "bgm": "音乐风格建议",`,
         `  "caption": "发布文案 #标签"`,
         `}`,
@@ -178,6 +181,7 @@ export function storyboardDirectMessages(input: {
         "要求：",
         "- hook：前 3 秒钩子（提问/冲突/反常识），一句话",
         "- 每个分镜：seconds（2~12 秒）、visual（画面怎么做：数据卡/大字/素材混剪）、narration（口播，口语短句）、subtitle（屏幕大字 ≤12 字）、broll（空镜素材建议）",
+        "- render（混合通道标注，每个分镜必填）：数据/数字/对比/字排/流程 → \"code\"（代码动画）；实景氛围/情绪镜头/转场空镜 → \"model\"（AI 视频模型 5~10 秒）。code 应占大多数，model 只给真正需要实拍感的镜头（1~3 镜）",
         "- caption：发布文案（含 3~5 个 #话题标签）",
         "- 事实数字只能来自检索摘要（保留原文数字与日期），检索没有的细节一律不编造——宁可讲观点也不造事实",
         "- 检索摘要为 DEMO 演示数据时（标题带「演示数据」），只借用主题方向，不使用其中的具体数字",
@@ -186,7 +190,7 @@ export function storyboardDirectMessages(input: {
         `  "title": "视频标题",`,
         `  "hook": "前3秒钩子",`,
         `  "totalSeconds": 60,`,
-        `  "scenes": [ { "id": 1, "seconds": 5, "visual": "...", "narration": "...", "subtitle": "...", "broll": "..." } ],`,
+        `  "scenes": [ { "id": 1, "seconds": 5, "render": "code", "visual": "...", "narration": "...", "subtitle": "...", "broll": "..." } ],`,
         `  "bgm": "音乐风格建议",`,
         `  "caption": "发布文案 #标签"`,
         `}`,
@@ -492,6 +496,7 @@ export function parseStoryboard(raw: unknown): Storyboard | null {
         narration: String(x.narration ?? "").slice(0, 300),
         subtitle: String(x.subtitle ?? "").slice(0, 30),
         broll: String(x.broll ?? "").slice(0, 120),
+        ...(x.render === "model" ? { render: "model" as const } : { render: "code" as const }),
       }
     })
     .filter((x) => x.narration || x.visual)
