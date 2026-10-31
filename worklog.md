@@ -667,3 +667,4 @@ Stage Summary:
 - 12 步 sweep 未在会话内跑完；基建已全部就绪且自测通过，恢复后**一键续跑**：
   `bash scripts/with-server.sh "node scripts/sweep-step.mjs"`（重复执行至打印收尾聚合，幂等断点续跑；状态在 /tmp/sweep-state.json，删之即重头）
 - 50 题全量基线（`eval-set.mjs --count 50`）同样待配额恢复后续跑，命令与节拍已备
+- 最终探测（14:24）：累计静默 60+ 分钟仍 429——确认日级/长效配额池耗尽，非滑动窗口；sweep 与 50 题基线留待配额恢复后一键续跑（命令见上），基建与自测已全部就绪
