@@ -573,3 +573,26 @@ Stage Summary:
 - 在线回归 `scripts/regression-p13.mjs`：18/18（真 LLM 选段重写两轮：v0→v1→v2 连续累加、未选中节原文保留、[1] 引用保留、越界 400、飞轮规则提炼 3 条）
 - tsc / eslint 双零
 - 踩坑留痕：①agent-browser `find text` 会命中被对话框遮挡的背景同名元素（看板 run 卡）→ 面板项须 `find role option`；②opacity-0 的 hover 按钮直接 click 报「被覆盖」→ 先 hover 分节再按快照 ref 点击；③快照 -i 不含非交互文本（label/正文）→ 文本断言用 read
+
+---
+## 2026-10-31 · P1 第四批（p14 RSS 信源 + SimHash 去重）
+
+### 数据层
+- Prisma 新模型：`SourceFeed`（url 唯一 / active / lastFetchedAt / lastStatus(ok|error|pending) / lastError 人话化 / lastItemCount）+ `FeedItem`（feedId+guid 唯一约束 / simhash 索引 / status new|promoted|skipped / ideaId 转选题回填溯源）→ db push
+
+### 信源引擎（src/lib/sources/）
+- `simhash.ts`：64-bit 双 32 位半字 SimHash（FNV-1a 双种子），token 复用 matching.ts 的 CJK bigram + 拉丁词分词器（与 claims 匹配同一语言学假设）；海明距离 ≤3 判转载重复（学 TrendRadar）
+- `rss.ts`：①零依赖宽容正则解析器（RSS 2.0 / Atom / RDF；CDATA + 实体 + 数字实体解码；rel=alternate 链接优先；guid 缺省 link 哈希兜底；摘要去标签截断 300）②`refreshFeeds` 有界并发 6 路（24 源 4 分钟 → 38 秒）：粗粒度新鲜度（>14 天超龄跳过，无日期宽容）→ 细粒度 guid 去重 → SimHash 跨源去重 → 入库；逐源诚实留痕（失败不阻断其他源）③`fetchAndParse` 网络类瞬时错误（fetch failed/timeout/5xx）自动重试 1 次——探活实证沙箱出网抖动（curl 三连可达而 fetch 偶发失败，重试救回 TechCrunch/Interconnects）④`ensureDefaultFeeds` 首访自动播种 ⑤`promoteItemToIdea` 转选题池闭环
+- 默认源注册表 24 个（探活修正后）：中文 5（量子位/InfoQ/少数派/阮一峰周刊/Solidot）+ 英文 19（HN×2/TechCrunch/VentureBeat/Verge/MIT TR/MarkTechPost/AI News/Techmeme/Wired/DeepMind/OpenAI/Google AI/BAIR/arXiv cs.AI/Simon Willison/AI Snake Oil/Latent Space/Interconnects）；**探活剔除失效源：机器之心与 36氪官方 RSS 已死（改返 HTML）、虎嗅/AIbase/差评 404、HuggingFace/ImportAI 沙箱不可达、Anthropic 无 RSS**——修正记录在源注册表注释
+- `.ts` 扩展相对导入 + tsconfig `allowImportingTsExtensions`（Node 24 离线可测规约，学 card-engine）
+
+### API + UI
+- `/api/sources`：GET（自动播种 + 源墙统计 + 最近 30 条）/ POST（refresh|promote|add）/ PATCH（启停）/ DELETE（级联删条目）；refresh 支持 limit/feedIds 定向
+- `rss-panel.tsx`（情报中心首卡）：源墙（状态灯 ok/error/pending + 分类 + 启停/删除 + 悬停看失败原因）+ 自定义源添加 + 最近条目（转选题闭环）+ 失败源诚实提示条；intel-panel 集成于 AI 搜索卡之上
+
+### 质量证据
+- 离线回归 `scripts/test-rss.mjs`：**37/37 全绿**（simhash 8：同文 0/近文 3/远文 28/转载判定/空文本；parseFeed 13：CDATA/实体/日期/rel=alternate/guid 兜底/无标题跳过/非 feed；本地 HTTP E2E 16：超龄跳过/guid 二次去重/SimHash 跨源去重不误杀/非 RSS 诚实报错/状态落库/转选题 Idea+ideaId 回填/默认源 24 无重复 URL）
+- 真实外网全量刷新三跑：24 源注册、单跑 17 ok / 226 条真实入库（量子位 10、OpenAI 40、HN 40、InfoQ 20、Techmeme 15…）、7 失败均诚实留痕（VentureBeat 429 限流 / arXiv 超时 / 其余为沙箱出网抖动——不同跑次失败源不同、curl 探活可达，非代码问题）；并发刷新 38s
+- 浏览器验证：情报中心 RSS 面板 24 源 / 17 正常徽章 / 230 条目 / 34 个转选题按钮渲染，console 零错误
+- tsc / eslint 双零（顺手修复 video.ts 遗留 hooks 命名误报：useAgnesFor → agnesForScene）
+- 诚实边界：WeWe RSS（公众号全文）需自部署服务、热榜聚合 API 待接——自定义源入口已支持任意 RSSHub 路由，P2 再补托管

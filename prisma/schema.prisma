@@ -207,3 +207,40 @@ model SettingKV {
   value     String   @default("{}") // JSON
   updatedAt DateTime @updatedAt
 }
+
+// ============ 信源层（P1 p14：RSS/RSSHub 订阅 → 选题池） ============
+
+model SourceFeed {
+  id            String    @id @default(cuid())
+  name          String // 展示名，如「机器之心」
+  url           String    @unique // RSS/Atom 地址（RSSHub 路由拼好的完整 URL）
+  category      String    @default("综合") // AI 资讯 / 研究前沿 / 开源生态 / 资本动向 …
+  site          String    @default("") // 主站域名（解析 item link 时兜底）
+  active        Boolean   @default(true)
+  lastFetchedAt DateTime?
+  lastStatus    String    @default("pending") // ok | partial | error | pending（诚实留痕）
+  lastError     String    @default("") // 失败原因（人话）
+  lastItemCount Int       @default(0) // 最近一次新增条目数
+  note          String    @default("")
+  createdAt     DateTime  @default(now())
+  items         FeedItem[]
+}
+
+model FeedItem {
+  id         String   @id @default(cuid())
+  feed       SourceFeed @relation(fields: [feedId], references: [id], onDelete: Cascade)
+  feedId     String
+  guid       String // feed 内唯一标识（RSS guid / Atom id；缺省用 link 哈希）
+  title      String
+  url        String   @default("")
+  site       String   @default("")
+  summary    String   @default("") // description/summary 去标签截断
+  simhash    String   @default("") // 64-bit 十六进制（标题+摘要，跨源去重用）
+  publishedAt DateTime?
+  status     String   @default("new") // new | promoted(转选题) | skipped
+  ideaId     String?  // 转选题后回填（溯源动线）
+  createdAt  DateTime @default(now())
+
+  @@unique([feedId, guid])
+  @@index([simhash])
+}

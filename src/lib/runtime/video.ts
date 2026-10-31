@@ -486,7 +486,7 @@ async function renderVideo(
     aiNote = "混合通道：Agnes 未配置 → 全部代码动画渲染（配置 Agnes 账号池后 model 镜头自动启用）"
   }
   // 混合通道的分发判定（P1：LLM 已在分镜 JSON 标注 render=code|model）
-  const useAgnesFor = (i: number): boolean => {
+  const agnesForScene = (i: number): boolean => {
     if (channel === "agnes") return true
     if (channel !== "hybrid") return false
     return scenes[i].render === "model" && agnesReady
@@ -543,7 +543,7 @@ async function renderVideo(
         const planned =
           channel === "agnes"
             ? settings.video.secondsPerScene
-            : channel === "hybrid" && useAgnesFor(i)
+            : channel === "hybrid" && agnesForScene(i)
               ? Math.min(10, Math.max(5, scenes[i].seconds)) // model 镜头 5~10s 插播（P1 混合通道）
               : Math.min(15, Math.max(2, scenes[i].seconds))
         durations.push(planned)
@@ -670,7 +670,7 @@ async function renderVideo(
       if (style === "art") saveProgress({ stage: "spec" })
       for (let i = 0; i < n; i++) {
         const seg = path.join(tmp, `s${i}.mp4`)
-        if (useAgnesFor(i)) {
+        if (agnesForScene(i)) {
           // ---- model 镜头：Agnes 插播（失败回落代码动画，诚实留痕） ----
           const raw = path.join(tmp, `raw${i}.mp4`)
           const modelDur = Math.min(12, Math.max(5, durations[i]))

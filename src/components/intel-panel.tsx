@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useToast } from "@/hooks/use-toast"
 import { MdView } from "./md-view"
+import { RssPanel } from "./rss-panel"
 import { Radar, Plus, Trash2, RefreshCw, ExternalLink, Newspaper, MessageSquarePlus, Loader2, Search, Lightbulb, Star, CircleDot, CheckCheck, Sparkles, Send } from "lucide-react"
 
 interface Topic { id: string; name: string; keywords: string; description: string; createdAt: string; _count?: { reports: number; ideas: number } }
@@ -225,6 +226,9 @@ export function IntelPanel({ onGoCreate }: { onGoCreate?: (title: string, angle:
 
   return (
     <div className="space-y-4">
+      {/* 顶部：RSS 信源（P1 p14：订阅式情报底座，先看见才谈生产） */}
+      <RssPanel />
+
       {/* 顶部：AI 搜索（写前情报，归位情报中心） */}
       <Card>
         <CardHeader className="pb-3">
