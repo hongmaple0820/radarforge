@@ -89,4 +89,30 @@ for (let i = 0; i < 60; i++) {
 }
 ok("motion 成片终态", mMeta?.stage === "done", `stage=${mMeta?.stage} ${mMeta?.seconds ?? 0}s ${mMeta?.width}×${mMeta?.height}`)
 
+// 5. 混合通道（P1：render 标注分发；Agnes 未配置 → 全代码动画诚实留痕）
+if (storyboard?.scenes?.length) {
+  // 兼容旧分镜（无 render 字段时补默认 code）
+  const sbHybrid = { ...storyboard, scenes: storyboard.scenes.map((s) => ({ ...s, render: s.render === "model" ? "model" : "code" })) }
+  const rvH = await call("POST", `/api/runs/${runId}/actions`, {
+    action: "render-video", storyboard: sbHybrid, voice: "xiaochen", aspect: "9:16", style: "motion", channel: "hybrid",
+  })
+  ok("hybrid 渲染启动", rvH.res.ok, rvH.json.message?.slice(0, 70) ?? rvH.json.error ?? "")
+  let hMeta = null
+  let hVa = null
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 5000))
+    const rj = await fetch(`${BASE}/api/runs/${runId}`).then((r) => r.json())
+    const vas = [...(rj.run?.assets ?? [])].filter((a) => a.role === "video-final")
+    const va = [...vas].reverse().find((a) => {
+      try { return JSON.parse(a.meta || "{}").channel === "hybrid" } catch { return false }
+    })
+    if (!va) continue
+    hVa = va
+    try { hMeta = JSON.parse(va.meta || "{}") } catch { continue }
+    if (["done", "error"].includes(hMeta.stage)) break
+  }
+  const hTotal = (hMeta?.codeScenes ?? 0) + (hMeta?.modelScenes ?? 0)
+  ok("hybrid 成片终态 + 通道统计", hMeta?.stage === "done" && hTotal === sbHybrid.scenes.length, `stage=${hMeta?.stage} code=${hMeta?.codeScenes ?? "?"} model=${hMeta?.modelScenes ?? "?"} ${(hVa?.provider ?? "").slice(0, 48)} ${hMeta?.aiNote ?? ""}`)
+}
+
 console.log("━━━ 完成 ━━━")

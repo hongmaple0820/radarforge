@@ -512,3 +512,31 @@ Stage Summary:
 - 本轮文档：README 核心能力更新、方案附录 D（改动清单+回归证据）、评测基线报告入库
 - 质量证据：主段 55 断言全绿 + 视频双成片 + 评测 4 题 8.25 均分门禁 100% + 浏览器 E2E + tsc/eslint 双零
 - 待办（用户侧）：①重播搜索密钥后跑全量 50 题基线 + 断言核验指标生效（SEARCH_KEY=xxx bun scripts/set-search-key.mjs）②配置第二 LLM 家族启用真跨家族裁判 ③生图端点恢复后重测配图恰当率 ④git push 需新令牌
+
+---
+## 2026-10-31 · P1 执行（第 5-8 周路线图）
+
+### p11 纯图线 2.0 + p12 视频混合通道（上棒中断续完）
+
+**背景**：上棒会话在 p11/p12 核心代码落地途中被沙箱回收（工作区被 amend 进 UUID 提交 6c7b018，~935 行无 worklog）。本棒核实代码本体完整（tsc 零错；「const ode,」为 Bash 工具 ANSI 转义显示假象，文件无损），补齐 UI 暴露 + 回归验证 + 留痕。
+
+**p11 纯图线 2.0（版式骨架 + VLM 质检闭环）**：
+- `card-engine.ts`：Editorial（杂志衬线）/Swiss（瑞士网格）两版系 × 封面/金句/数据三模板 × 4 色板/版系；纯函数 `cardHtml`（XSS 转义 + 超长硬截断 clamp）+ Playwright `renderCardToAsset`（字体就绪等待 + 产物 ≥5KB 校验），文件名与生图线同规约
+- `radar-image.ts` 增 `cardPlanMessages`（生图前清单自检：模板字段约束/禁编数字/同组递进/语气克制）+ `parseCardPlan` 宽容解析（非法模板/版系回退、metrics 裁剪）
+- `run-manager.ts` image run 双模式：mode=gen（zai-image + VLM 读回复核，未过带 retryHint 重试一次）｜mode=layout（代码排版渲染，未过截短文案重渲一次——版式卡失败主因是文字溢出）；VLM 不可达诚实标「未质检」不阻断；质检统计落 artifacts.vlm，逐张留痕落 Asset meta.vlm
+- `vlm.ts`（gateway）：glm-4.5v 读回判定（4 项清单：画面完整/文字健康/主题相关/构图质量），429 退避一次，绝不 throw
+- API/前端：POST /api/image-runs 增 mode/family；GET 增 families/templates 注册表；image-panel 双模式切换（violet 主色区分）+ 版系锁定下拉
+- 离线回归 `scripts/test-card-engine.mjs`：**33/33 全绿**（HTML 纯函数 19 探针含 XSS 转义/硬截断 + 渲染全组合 2 版系×3 模板×2 尺寸 12 张 PNG 头/尺寸/非空白 + slug 净化规约）
+- VLM 闭环探针 `scripts/probe-vlm-loop.mjs`：真实调用 done:true pass:true ✅
+
+**p12 视频混合通道（code 主轨 + model 插播）**：
+- 分镜协议：StoryboardScene 增 `render?: "code" | "model"`（两条 storyboard 提示词均要求逐镜标注：数据/字排/对比→code，实景/情绪→model，code 应占大多数）；parseStoryboard 缺省补 code
+- `video.ts` 通道 D：hybrid 分发（render=model 且 Agnes 可用 → agnesSceneToMp4 5~12s 插播，失败单镜回落代码动画；render=code → motion 场景卡/art 引擎）；model 镜头时长钳制 5~10s；codeScenes/modelScenes 统计 + 完成时算模型秒数占比；provider 留痕 `hybrid(Ncode+Mmodel)+tts`
+- API：actions 路由 channel 白名单增 hybrid，启动消息含分镜统计
+- UI 补齐（本棒）：video-panel 混合通道卡（Blend 图标 + 分镜 model 数徽章 + Agnes 未配置诚实提示）/run-detail 通道 chip 增「混合」+ 解释文案 + 成片徽章配比/settings-panel 四通道（2×2 网格）+ 顶部状态徽章；VideoMeta 增 codeScenes/modelScenes
+- settings.ts：VideoSettings.channel 类型增 hybrid
+
+**回归断言新增**（full-regression + video-only）：
+- 分镜 render 字段全覆盖断言（图文线分镜 + 直出分镜）
+- 6d 版式卡 E2E：family 锁定 → 两步流水线 → provider=card-engine → VLM 留痕（meta.vlm + artifacts.vlm）→ PNG 静态可访问 → 画廊 markdown
+- 7c/video-only 混合通道 E2E：channel=hybrid 渲染 → 终态 done + codeScenes+modelScenes=分镜总数 → provider 配比留痕

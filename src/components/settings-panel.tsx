@@ -42,7 +42,7 @@ interface SettingsData {
     rpmImage: number
     rpmVideo: number
   }
-  video: { channel: "local" | "agnes" | "auto"; secondsPerScene: number }
+  video: { channel: "local" | "agnes" | "auto" | "hybrid"; secondsPerScene: number }
   style: { positioning: string; audience: string; domains: string; tone: string; taboos: string }
   _meta: Record<string, { hasKey: boolean; envFallback: boolean }>
 }
@@ -77,7 +77,7 @@ export function SettingsPanel() {
     rpmVideo: number
   }>({ enabled: false, accounts: [], chatModel: "agnes-2.5-flash", imageModel: "agnes-image-2.1-flash", videoModel: "agnes-video-2.5-flash", strategy: "round-robin", rpmImage: 20, rpmVideo: 1 })
   const [agnesKeyDrafts, setAgnesKeyDrafts] = useState<Record<string, string>>({})
-  const [videoForm, setVideoForm] = useState<{ channel: "local" | "agnes" | "auto"; secondsPerScene: number }>({ channel: "local", secondsPerScene: 8 })
+  const [videoForm, setVideoForm] = useState<{ channel: "local" | "agnes" | "auto" | "hybrid"; secondsPerScene: number }>({ channel: "local", secondsPerScene: 8 })
 
   const load = useCallback(async () => {
     const json = await fetch("/api/settings").then((x) => x.json())
@@ -318,7 +318,7 @@ export function SettingsPanel() {
               <Users className="h-3 w-3 mr-0.5" />Agnes 池：{agnesEnabled ? `${agnesAccountCount} 号可用` : "未启用"}
             </Badge>
             <Badge variant={data.video.channel === "local" ? "secondary" : "default"} className={data.video.channel !== "local" ? "bg-emerald-600" : ""}>
-              <Video className="h-3 w-3 mr-0.5" />视频：{data.video.channel === "local" ? "本地双风格" : data.video.channel === "agnes" ? "Agnes AI 模型" : "自动（优先 AI）"}
+              <Video className="h-3 w-3 mr-0.5" />视频：{data.video.channel === "local" ? "本地双风格" : data.video.channel === "agnes" ? "Agnes AI 模型" : data.video.channel === "hybrid" ? "混合通道（code主轨+model插播）" : "自动（优先 AI）"}
             </Badge>
             <Badge variant={(data.style.positioning || data.style.tone) ? "default" : "secondary"} className={(data.style.positioning || data.style.tone) ? "bg-amber-500" : ""}>
               <Compass className="h-3 w-3 mr-0.5" />风格定位：{(data.style.positioning || data.style.tone) ? "已配置" : "未配置"}
@@ -683,18 +683,18 @@ export function SettingsPanel() {
             <TestBadge scope="video" />
           </CardTitle>
           <p className="text-[11px] text-muted-foreground">
-            三通道：本地双风格渲染（motion 商业片 / art 艺术动画，Playwright+ffmpeg 出片）/ Agnes AI 视频模型（720P · 4-12s）/ 自动（优先 AI，失败回退本地）
+            四通道：本地双风格渲染（motion 商业片 / art 艺术动画，Playwright+ffmpeg 出片）/ Agnes AI 视频模型（720P · 4-12s）/ 自动（优先 AI，失败回退本地）/ 混合通道（分镜按 render 标注分发：数据/字排→代码动画，实景/情绪→AI 模型 5~10s 插播，成本 ≈ 纯模型 1/3）
           </p>
         </CardHeader>
         <CardContent className="space-y-2.5">
-          <div className="grid grid-cols-3 gap-1.5">
-            {(["local", "agnes", "auto"] as const).map((c) => (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5">
+            {(["local", "agnes", "auto", "hybrid"] as const).map((c) => (
               <button
                 key={c}
                 onClick={() => setVideoForm((f) => ({ ...f, channel: c }))}
                 className={`rounded-md border px-2 py-1.5 text-xs transition-colors ${videoForm.channel === c ? "border-rose-400 bg-rose-50 dark:bg-rose-950/30 font-semibold" : "hover:border-rose-200"}`}
               >
-                {c === "local" ? "本地双风格" : c === "agnes" ? "Agnes AI 模型" : "自动（优先 AI）"}
+                {c === "local" ? "本地双风格" : c === "agnes" ? "Agnes AI 模型" : c === "hybrid" ? "混合通道" : "自动（优先 AI）"}
               </button>
             ))}
           </div>

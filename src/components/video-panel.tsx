@@ -19,10 +19,10 @@ import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useToast } from "@/hooks/use-toast"
 import { TTS_VOICES } from "@/lib/runtime/skills/radar-rewrite"
-import { Clapperboard, Loader2, Video, Download, RefreshCw, FileText, Play, Mic, Film, Palette, Sparkles, Wand2, Compass, MessageSquare, Music4, History, Star } from "lucide-react"
+import { Clapperboard, Loader2, Video, Download, RefreshCw, FileText, Play, Mic, Film, Palette, Sparkles, Wand2, Compass, MessageSquare, Music4, History, Star, Blend } from "lucide-react"
 
 interface RunItem { id: string; ideaTitle: string; status: string; mode: string; createdAt: string; _count?: { articles: number } }
-interface StoryboardScene { id: number; seconds: number; visual: string; narration: string; subtitle: string; broll: string }
+interface StoryboardScene { id: number; seconds: number; visual: string; narration: string; subtitle: string; broll: string; render?: "code" | "model" }
 interface DirectionBrief { key: string; kind: string; name: string; language: string; accent: string; base: string; feel: string }
 interface StoryboardData { title: string; hook: string; totalSeconds: number; scenes: StoryboardScene[]; bgm: string; caption: string; direction?: DirectionBrief }
 interface DirectionCard { key: string; kind: "fit" | "amplify" | "unexpected"; name: string; language: string; logline: string; why: string; feel: string; palette: { accent: string; base: string; note: string }; depth: boolean; recommended: boolean }
@@ -37,7 +37,10 @@ interface VideoMeta {
   ttsNote?: string
   aiNote?: string
   style?: "motion" | "art"
-  channel?: "local" | "agnes"
+  channel?: "local" | "agnes" | "hybrid"
+  /** 混合通道统计（P1）：代码动画 / AI 模型镜头数 */
+  codeScenes?: number
+  modelScenes?: number
   voice: string
   aspect: string
   seconds?: number
@@ -73,7 +76,7 @@ const BGM_OPTIONS: { id: string; label: string }[] = [
 ]
 
 type VideoStyle = "motion" | "art"
-type VideoChannel = "local" | "agnes" | "auto"
+type VideoChannel = "local" | "agnes" | "auto" | "hybrid"
 
 const STYLE_META: Record<VideoStyle, { label: string; desc: string; icon: typeof Film }> = {
   motion: { label: "商业片 · motion", desc: "品牌化场景卡 + 方向调色板 + TTS 口播（本地确定性渲染，秒级出片）", icon: Film },
@@ -635,7 +638,7 @@ export function VideoPanel() {
               {(Object.keys(STYLE_META) as VideoStyle[]).map((k) => {
                 const meta = STYLE_META[k]
                 const Icon = meta.icon
-                const active = channel !== "agnes" && style === k
+                const active = channel !== "agnes" && channel !== "hybrid" && style === k
                 return (
                   <button
                     key={k}
@@ -666,6 +669,20 @@ export function VideoPanel() {
               </div>
               <p className="text-[10px] text-muted-foreground leading-snug">agnes-video-2.5-flash（720P · 4-12s）；每账号 1 任务/分钟，失败自动本地兜底{settingsChannel === "auto" ? "；设置中心默认 auto" : ""}</p>
             </button>
+            {/* 混合通道（P1）：code 主轨 + model 插播 */}
+            <button
+              onClick={() => setChannel(channel === "hybrid" ? "local" : "hybrid")}
+              className={`w-full text-left rounded-lg border p-3 space-y-1.5 transition-colors ${channel === "hybrid" ? "border-violet-400 bg-violet-50/50 dark:bg-violet-950/20" : "hover:border-violet-200"}`}
+            >
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <Blend className="h-4 w-4 text-violet-600" />
+                <span className="text-xs font-bold">混合通道 · code 主轨 + model 插播</span>
+                <Badge variant={agnesReady ? "default" : "secondary"} className={`text-[8px] ${agnesReady ? "bg-violet-600" : ""}`}>
+                  {agnesReady ? `分镜已标注 ${storyboard?.scenes?.filter((s) => s.render === "model").length ?? 0} 个 model 镜头` : "Agnes 未配置 → 全代码动画"}
+                </Badge>
+              </div>
+              <p className="text-[10px] text-muted-foreground leading-snug">按分镜 render 标注智能分发：数据/字排 → 代码动画（确定零错字），实景/情绪 → AI 模型 5~10s 插播，单镜失败自动回落代码动画，成本 ≈ 纯模型 1/3</p>
+            </button>
 
             {/* 音色 + 画幅 + BGM + 渲染按钮 */}
             <div className="flex items-center gap-2 flex-wrap pt-1">
@@ -692,7 +709,7 @@ export function VideoPanel() {
               </div>
               <Button size="sm" className="h-7 text-[11px] bg-rose-500 hover:bg-rose-600 text-white ml-auto" onClick={doRender} disabled={busy === "render" || rendering}>
                 {busy === "render" || rendering ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Play className="h-3 w-3 mr-1" />}
-                {channel === "agnes" ? "AI 通道渲染 MP4" : style === "art" ? "艺术动画渲染 MP4" : "商业片渲染 MP4"}
+                {channel === "agnes" ? "AI 通道渲染 MP4" : channel === "hybrid" ? "混合通道渲染 MP4" : style === "art" ? "艺术动画渲染 MP4" : "商业片渲染 MP4"}
               </Button>
             </div>
           </CardContent>
@@ -827,7 +844,7 @@ export function VideoPanel() {
                     {activeMeta.audioMode === "tts" ? `${TTS_VOICES.find((v) => v.id === activeMeta?.voice)?.label ?? activeMeta.voice} 口播` : activeMeta.audioMode === "partial" ? "部分口播" : "静音降级（字幕可读）"}
                   </Badge>
                   <Badge variant="outline" className="text-[9px]">
-                    {activeMeta.channel === "agnes" ? "Agnes AI 模型" : activeMeta.style === "art" ? "艺术动画" : "商业片"} · {activeMeta.aspect}
+                    {activeMeta.channel === "agnes" ? "Agnes AI 模型" : activeMeta.channel === "hybrid" ? `混合（${activeMeta.codeScenes ?? 0}code+${activeMeta.modelScenes ?? 0}model）` : activeMeta.style === "art" ? "艺术动画" : "商业片"} · {activeMeta.aspect}
                   </Badge>
                   {activeMeta.bgm && activeMeta.bgm !== "none" && (
                     <Badge variant="outline" className="text-[9px] gap-0.5"><Music4 className="h-2.5 w-2.5" />{BGM_OPTIONS.find((b) => b.id === activeMeta.bgm)?.label ?? activeMeta.bgm}</Badge>

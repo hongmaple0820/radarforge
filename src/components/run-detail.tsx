@@ -45,7 +45,10 @@ interface VideoMeta {
   ttsNote?: string
   aiNote?: string
   style?: "motion" | "art"
-  channel?: "local" | "agnes"
+  channel?: "local" | "agnes" | "hybrid"
+  /** 混合通道统计（P1） */
+  codeScenes?: number
+  modelScenes?: number
   voice: string
   aspect: string
   seconds?: number
@@ -75,7 +78,7 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
   const [voiceChoice, setVoiceChoice] = useState("xiaochen")
   const [aspectChoice, setAspectChoice] = useState<"9:16" | "16:9">("9:16")
   const [videoStyle, setVideoStyle] = useState<"motion" | "art">("motion")
-  const [videoChannel, setVideoChannel] = useState<"local" | "agnes" | "auto">("local")
+  const [videoChannel, setVideoChannel] = useState<"local" | "agnes" | "hybrid">("local")
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const refresh = useCallback(async () => {
@@ -836,16 +839,21 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
                       { id: "motion", label: "商业片", title: "品牌化场景卡，本地确定性渲染" },
                       { id: "art", label: "艺术动画", title: "huashu-art-motion 引擎：8 语法 × 8 色板 Canvas 逐帧" },
                       { id: "agnes", label: "AI 模型", title: "agnes-video（720P · 4-12s，需设置中心配置账号池）" },
+                      { id: "hybrid", label: "混合", title: "P1 混合通道：数据/字排→代码动画，实景/情绪→AI 模型 5~10s 插播，成本 ≈ 纯模型 1/3" },
                     ] as const).map((c) => (
                       <button
                         key={c.id}
                         title={c.title}
                         onClick={() => {
-                          setVideoChannel(c.id === "agnes" ? "agnes" : "local")
+                          setVideoChannel(c.id === "agnes" ? "agnes" : c.id === "hybrid" ? "hybrid" : "local")
                           setVideoStyle(c.id === "art" ? "art" : "motion")
                         }}
                         className={`text-[10px] border rounded-full px-2 py-0.5 transition-colors ${
-                          videoChannel === "agnes" ? c.id === "agnes" : c.id !== "agnes" && videoStyle === c.id
+                          videoChannel === "agnes"
+                            ? c.id === "agnes"
+                            : videoChannel === "hybrid"
+                              ? c.id === "hybrid"
+                              : c.id !== "agnes" && c.id !== "hybrid" && videoStyle === c.id
                             ? "border-rose-400 bg-rose-50 dark:bg-rose-950/30 text-rose-600 font-semibold"
                             : "hover:border-rose-300 text-muted-foreground"
                         }`}
@@ -882,9 +890,11 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
                   <p className="text-[10px] text-muted-foreground">
                     {videoChannel === "agnes"
                       ? "Agnes AI 视频模型：提交 → 轮询 → 下载 → 混音（每账号 1 任务/分钟；失败自动本地兜底）"
-                      : videoStyle === "art"
-                        ? "艺术动画：LLM 把分镜转 clip spec（8 语法×8 色板）→ Canvas 逐帧渲染（Playwright+ffmpeg，风格化强）"
-                        : "商业片：分镜 → 场景卡 + TTS 口播 → ffmpeg 合成 MP4（本地渲染；TTS 不可达自动静音降级，字幕已烧录）"}
+                      : videoChannel === "hybrid"
+                        ? "混合通道：数据/字排分镜走代码动画（确定零错字），实景/情绪分镜走 AI 模型 5~10s 插播，单镜失败自动回落代码动画"
+                        : videoStyle === "art"
+                          ? "艺术动画：LLM 把分镜转 clip spec（8 语法×8 色板）→ Canvas 逐帧渲染（Playwright+ffmpeg，风格化强）"
+                          : "商业片：分镜 → 场景卡 + TTS 口播 → ffmpeg 合成 MP4（本地渲染；TTS 不可达自动静音降级，字幕已烧录）"}
                   </p>
                 </div>
               </CardContent>
@@ -935,7 +945,7 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
                             : "静音降级（字幕可读）"}
                       </Badge>
                       <Badge variant="outline" className="text-[9px]">{videoMeta.aspect} · {videoMeta.sceneTotal} 分镜</Badge>
-                      <Badge variant="outline" className="text-[9px]">{videoMeta.channel === "agnes" ? "Agnes AI 模型" : videoMeta.style === "art" ? "艺术动画" : "商业片"}</Badge>
+                      <Badge variant="outline" className="text-[9px]">{videoMeta.channel === "agnes" ? "Agnes AI 模型" : videoMeta.channel === "hybrid" ? `混合（${videoMeta.codeScenes ?? 0}code+${videoMeta.modelScenes ?? 0}model）` : videoMeta.style === "art" ? "艺术动画" : "商业片"}</Badge>
                       <a href={videoAsset.path} download className="text-[10px] text-amber-600 hover:underline flex items-center gap-0.5">
                         <Download className="h-3 w-3" />下载 MP4
                       </a>

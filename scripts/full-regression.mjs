@@ -170,6 +170,7 @@ if (runId) {
   const sb = await call("storyboard", "POST", `/api/runs/${runId}/actions`, { action: "storyboard", platform: "douyin" })
   const sbData = sb.json.storyboard
   ok("视频分镜生成", sb.res.ok && (sbData?.scenes?.length ?? 0) >= 3, `${sbData?.scenes?.length ?? 0} 分镜 ${sbData?.totalSeconds ?? 0}s`)
+  ok("分镜混合通道标注（P1 render 字段）", (sbData?.scenes ?? []).every((s) => s.render === "code" || s.render === "model"), `${(sbData?.scenes ?? []).filter((s) => s.render === "model").length}/${sbData?.scenes?.length ?? 0} 镜标 model`)
 
   // 封面
   const cover = await call("cover", "POST", `/api/runs/${runId}/actions`, { action: "cover" })
@@ -215,6 +216,7 @@ if (runId) {
       ...(vDir ? { direction: { key: vDir.key, kind: vDir.kind, name: vDir.name, language: vDir.language, accent: vDir.palette.accent, base: vDir.palette.base, feel: vDir.feel } } : {}),
     })
     const vSbData = vSb.json.storyboard
+    ok("直出分镜 render 标注（P1）", (vSbData?.scenes ?? []).every((s) => s.render === "code" || s.render === "model"), `${(vSbData?.scenes ?? []).filter((s) => s.render === "model").length} 镜 model`)
     ok("直出分镜生成（≥3 镜）", vSb.res.ok && (vSbData?.scenes?.length ?? 0) >= 3, `${vSbData?.scenes?.length ?? 0} 分镜 ${vSbData?.totalSeconds ?? 0}s${vSbData?.direction ? ` · 方向「${vSbData.direction.name}」` : ""}`)
     const vRunAfter = await fetch(`${BASE}/api/runs/${vRunId}`).then((r) => r.json())
     ok("直出 run 终态 done（三步全终）", vRunAfter.run?.status === "done", JSON.parse(vRunAfter.run?.steps || "[]").map((s) => `${s.name}:${s.status}`).join(" "))
@@ -254,6 +256,44 @@ if (runId) {
     }
   }
 
+  // ---------- 6d. 纯图线 2.0：版式卡端到端（P1 mode=layout，LLM 文案 → 代码排版 → VLM 读回） ----------
+  section("纯图线 2.0 版式卡（image run · mode=layout · card-engine + VLM 质检）")
+  const cardCreated = await call("image-runs-layout-create", "POST", "/api/image-runs", {
+    subject: "P1 回归：本周 AI 融资观察——三条主线与关键数据",
+    usage: "xiaohongshu",
+    count: 3,
+    mode: "layout",
+    family: "swiss",
+  })
+  const cardRunId = cardCreated.json.id
+  ok("创建版式卡 run（family 锁定）", cardCreated.res.ok && Boolean(cardRunId), cardRunId ?? "")
+  if (cardRunId) {
+    let cardRun = null
+    for (let i = 0; i < 45; i++) {
+      await new Promise((r) => setTimeout(r, 4000))
+      const rj = await fetch(`${BASE}/api/runs/${cardRunId}`).then((r) => r.json())
+      cardRun = rj.run
+      if (cardRun?.status === "done" || cardRun?.status === "error") break
+    }
+    const cardSteps = cardRun ? JSON.parse(cardRun.steps || "[]") : []
+    ok("版式卡终态 done", cardRun?.status === "done", `status=${cardRun?.status} err=${(cardRun?.error ?? "").slice(0, 80)}`)
+    ok("两步流水线（plan 文案 → gen 渲染）", cardSteps.length === 2 && cardSteps[0]?.name === "plan" && cardSteps[1]?.name === "gen", cardSteps.map((s) => `${s.name}:${s.status}`).join(" "))
+    if (cardRun?.status === "done") {
+      const cardAssets = (cardRun?.assets ?? []).filter((a) => a.path)
+      ok("版式卡产出（≥2 张，代码排版零错字）", cardAssets.length >= 2, `${cardAssets.length} 张 provider=${cardAssets[0]?.provider}`)
+      ok("provider 为 card-engine（非生图端点）", (cardAssets[0]?.provider ?? "").startsWith("card-engine"), cardAssets[0]?.provider ?? "")
+      const vlmMeta = cardAssets.map((a) => (JSON.parse(a.meta || "{}").vlm ?? ""))
+      ok("VLM 读回复核留痕（meta.vlm）", vlmMeta.some((v) => v.includes("质检") || v.includes("未质检")), vlmMeta.slice(0, 3).join("｜").slice(0, 90))
+      const headCard = await fetch(BASE + cardAssets[0].path, { method: "HEAD" })
+      ok("版式卡静态可访问", headCard.ok && headCard.headers.get("content-type") === "image/png", `${cardAssets[0].path} ${cardAssets[0].meta ? JSON.parse(cardAssets[0].meta).size ?? "" : ""}`)
+      const cardDetail = await fetch(`${BASE}/api/runs/${cardRunId}`).then((r) => r.json())
+      const cardArtifacts = JSON.parse(cardDetail.run?.artifacts || "{}")
+      ok("文案规划落 artifacts.cards（LLM 只产文案）", Array.isArray(cardArtifacts.cards) && cardArtifacts.cards.length >= 2, `${cardArtifacts.cards?.length ?? 0} 张卡文案｜模板分布 ${(cardArtifacts.cards ?? []).map((c) => c.template).join(",")}`)
+      ok("VLM 质检统计落 artifacts.vlm", Boolean(cardArtifacts.vlm) && typeof cardArtifacts.vlm.pass === "number", JSON.stringify(cardArtifacts.vlm ?? {}))
+      ok("画廊 markdown 输出", (cardRun.output ?? "").includes("](/assets/"), `${(cardRun.output ?? "").length} 字符`)
+    }
+  }
+
   // ---------- 7. 视频双风格成片（REG_SKIP_VIDEO=1 时跳过，用 regression-part2.mjs 分段跑） ----------
   if (sbData && !process.env.REG_SKIP_VIDEO) {
     // 7a. art 艺术动画线（Playwright + art-motion 引擎真出片）
@@ -287,6 +327,24 @@ if (runId) {
       if (["done", "error"].includes(mMeta.stage)) break
     }
     ok("motion 成片终态", mMeta?.stage === "done", `stage=${mMeta?.stage} ${mMeta?.seconds ?? 0}s ${mMeta?.width}×${mMeta?.height}`)
+
+    // 7c. 混合通道（P1：render 标注分发，Agnes 未配置 → 全代码动画诚实降级）
+    const rvH = await call("render-video-hybrid", "POST", `/api/runs/${runId}/actions`, { action: "render-video", storyboard: sbData, voice: "xiaochen", aspect: "9:16", style: "motion", channel: "hybrid" })
+    ok("hybrid 渲染启动（分镜统计入消息）", rvH.res.ok, (rvH.json.message ?? rvH.json.error ?? "").slice(0, 80))
+    let hMeta = null
+    let hVa = null
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 5000))
+      const rj = await fetch(`${BASE}/api/runs/${runId}`).then((r) => r.json())
+      const va = [...(rj.run?.assets ?? [])].reverse().find((a) => a.role === "video-final")
+      if (!va) continue
+      hVa = va
+      hMeta = JSON.parse(va.meta || "{}")
+      if (["done", "error"].includes(hMeta.stage)) break
+    }
+    const hTotal = (hMeta?.codeScenes ?? 0) + (hMeta?.modelScenes ?? 0)
+    ok("hybrid 成片终态 + 通道统计（codeScenes+modelScenes=分镜总数）", hMeta?.stage === "done" && hTotal === (sbData?.scenes?.length ?? 0), `stage=${hMeta?.stage} code=${hMeta?.codeScenes ?? "?"} model=${hMeta?.modelScenes ?? "?"} ${hMeta?.aiNote ?? ""}`)
+    ok("hybrid provider 留痕含配比", (hVa?.provider ?? "").includes("hybrid("), `${hVa?.provider ?? "?"} ${hTotal ? `${hMeta.codeScenes}code+${hMeta.modelScenes}model` : ""}`)
   }
 
   // 发布（质量门禁 + 三级降级）
