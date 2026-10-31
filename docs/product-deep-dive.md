@@ -390,3 +390,12 @@ gantt
 | 混合通道单条成本 ≤纯模型 1/3 | 已落地（`dcbf656`）：code 主轨 + model 5~10s 插播，分镜 render 标注自动分发 |
 | RSS 源 ≥20 个稳定运行 | **24 源注册，真实外网单跑 17 ok / 226 条入库**（量子位 10、OpenAI 40、HN 40、InfoQ 20…）；7 失败均诚实留痕（429 限流/超时/沙箱出网抖动——不同跑次失败源不同、curl 探活可达，非代码问题）；并发刷新 38s |
 | 纯图线 2.0 / DSPy 调优 | 已落地（`0fa8975` / 本批）：调优闭环 live 验证——v2 注入真实管线（draft 步留痕「调优 v2」）→ G-Eval 8.0 门禁 PASS → 无基线诚实不推荐并回滚 v0 |
+
+### E.5 交付收尾批（2026-10-31 · 远端推送 / DB 重建 / sweep 断点续跑基建）
+
+| 事项 | 结果 |
+|------|------|
+| 远端推送 | 新令牌 `push-retry.sh` 一次成功：`1919212..bd7328f -> main`（P0 三项 + P1 五批共 10 提交），后续收尾提交 `9bb8ec3` 已续推；令牌走环境变量 + 日志脱敏 |
+| 沙箱回收影响 | `prisma/dev.db` 文件级丢失 + Prisma client 生成物丢失 → `prisma generate`（重试过出网抖动）+ `db push` 重建 + 搜索密钥重落（`set-search-key.mjs`） |
+| 调优 sweep 全量执行 | **基建就绪、执行被配额阻断**（诚实边界）：后台长任务被沙箱清理实证（setsid 7 分钟后 server 被杀）→ 改分段断点续跑执行器 `sweep-step.mjs`（12 步队列：v0 基线×3 补历史 + v1/v2/v3×3；429 不消费队列；配额探针；队列空自动聚合推荐落库 + 报告）；离线状态机自测 11/11；配额静默 40+ 分钟仍受限（疑小时/日级池），恢复后一键续跑 `bash scripts/with-server.sh "node scripts/sweep-step.mjs"` |
+| 50 题全量基线 | 同待配额恢复：`bash scripts/with-server.sh "node scripts/eval-set.mjs --count 50 --pace 90"`（分段调 `--offset` 断点续跑） |
