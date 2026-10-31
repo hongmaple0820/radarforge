@@ -638,3 +638,32 @@ Stage Summary:
 - p14 RSS 信源 + SimHash 去重 ✅ `0e2c3a2`
 - p15 DSPy 式调优闭环 ✅ `be768e7`
 - 文档：deep-dive 附录 E（改动清单+验收对照）+ 双语 README 核心能力与质量基线
+
+---
+## 2026-10-31 · P1 交付收尾：远端推送 + DB 重建 + 调优 sweep 断点续跑基建（配额阻断诚实留痕）
+
+### 沙箱回收影响（比上次更重，如实记录）
+- `prisma/dev.db` **文件级丢失**（不止 run 数据回滚）+ `node_modules/.prisma/client` 生成物丢失
+- 恢复：`prisma generate`（首跑撞出网抖动，重试即过）→ `prisma db push` 重建 schema → `set-search-key.mjs` 重落 provider:search（用户重播密钥，掩码 sk-b45…8199）
+- 卡死残留：DB 中 1 条 run 停在 running 态（后台进程被清理所致，如实保留不抹）
+
+### 远端推送（用户给新令牌）
+- `push-retry.sh final` 一次成功：`1919212..bd7328f -> main`，本地领先 10 提交全上（P0 三项 + P1 五批 p11~p15），令牌全程走环境变量、日志 sed 脱敏
+- 历史重写决策：`6c7b018`（沙箱回收自动 amend 产物，消息是 runId）内容为真实 VLM 闭环代码，后续提交与 worklog/deep-dive 引用其后哈希——**不重写直接推**
+
+### 调优 sweep：后台长任务死路 → 分段断点续跑执行器（核心工程产出）
+- **实证**：setsid 后台跑 with-server 编排，90s 后存活、7 分钟后 server 被沙箱清理（with-server.sh 注释的教训再次验证，setsid 也救不了）→ 长任务必须按 Bash 调用边界切片
+- `scripts/sweep-step.mjs`：状态文件 `/tmp/sweep-state.json` 驱动——12 步队列（v0 基线×3 题补 DB 丢失的历史基线 + v1/v2/v3×3）+ 队列空自动收尾（aggregateTuneReport 聚合 → 推荐 tune-apply 落库 / 诚实回 v0 → 报告 download/tune-report-*.json）
+  - 每步一次调用完成全生命周期：with-server 起 server → tune-apply/clear → 九步管线（waitRunDone 330s）→ draft 留痕断言（「调优 vx」）→ G-Eval 评分（eval-score 落 DB）→ 杀 server
+  - **429 不消费队列**：管线终态 error 且原因含 429 → 留队首下轮重试（限流是暂时性错误，不能标 failed 跳过——首版在此吃亏，m01 被误消费后重置状态修正）
+  - 配额探针：起 run 前探一次（45s 间隔最多 180s，429 探测不消耗计数）
+  - `__isMain` 用 `path.resolve(argv[1]) === import.meta.filename` 精确判定（endsWith 会被 test-sweep-step.mjs 误命中）
+- `scripts/test-sweep-step.mjs`：状态机离线自测 **11/11**（队列顺序/持久化往返/429 不消费/坏 JSON 回退/收尾触发）——零 LLM 配额
+- `scripts/p1-final-sweep.sh`：一次性编排（v0 基线 → quota-wait → 变体 sweep），适用允许后台长任务的标准环境；沙箱实测不可行，保留为部署环境用法
+- tsc / eslint 双零（.mjs 全干净，.sh 不在 eslint 范围属正常）
+
+### 配额阻断（诚实边界，不虚报进度）
+- sweep 首步两次尝试均撞 429；此后**绝对静默 30+ 分钟（零调用）后单次探测仍受限**——超出「用户级 10 分钟 30 次」滑动窗口的解释范围，疑触发小时级/日级配额池（今日 P1 收官全量回归已消耗数百次调用）
+- 12 步 sweep 未在会话内跑完；基建已全部就绪且自测通过，恢复后**一键续跑**：
+  `bash scripts/with-server.sh "node scripts/sweep-step.mjs"`（重复执行至打印收尾聚合，幂等断点续跑；状态在 /tmp/sweep-state.json，删之即重头）
+- 50 题全量基线（`eval-set.mjs --count 50`）同样待配额恢复后续跑，命令与节拍已备
