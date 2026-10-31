@@ -560,7 +560,9 @@ async function renderVideo(
     // ===== Stage 2: 分段生成（四通道分叉：agnes / hybrid / art / motion） =====
     const segs: string[] = []
 
-    /** 混合通道的本地代码动画单镜渲染（style=art 走引擎，否则 motion 场景卡；供 code 分镜与 model 回落共用） */
+    /** 混合通道的本地代码动画单镜渲染（style=art 走引擎，否则 motion 场景卡；供 code 分镜与 model 回落共用）
+     * 修复（2026-10-31）：渲染完成必须 segs.push——此前仅在调用方 model 路径 push，
+     * 全 code 分镜时 segs 为空导致 concat 空列表失败；有 model 分镜时 code 分镜被静默丢帧（更糟）。 */
     const renderLocalSceneSeg = async (i: number, seg: string, specs: ArtSpecItem[]): Promise<void> => {
       if (style === "art") {
         const specItem = specs.find((s) => s.sceneId === scenes[i].id) ?? specs[i]
@@ -605,6 +607,7 @@ async function renderVideo(
           saveProgress({ aiNote: `分镜 ${i + 1}（${grammar}）已回落 t2_keynote_ui：${(e as Error).message.slice(0, 60)}` })
         }
         await muxSegment(clipPath, audioFiles[i] || null, spec.duration, seg)
+        segs.push(seg)
         return
       }
       // motion 场景卡（与纯 motion 通道同配方）
@@ -622,6 +625,7 @@ async function renderVideo(
         "-c:a", "aac", "-b:a", "96k", "-ar", "24000", "-ac", "1",
         "-t", durations[i].toFixed(2), "-shortest", seg,
       ], { timeout: 120_000 })
+      segs.push(seg)
     }
 
     if (channel === "agnes") {

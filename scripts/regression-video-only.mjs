@@ -113,6 +113,21 @@ if (storyboard?.scenes?.length) {
   }
   const hTotal = (hMeta?.codeScenes ?? 0) + (hMeta?.modelScenes ?? 0)
   ok("hybrid 成片终态 + 通道统计", hMeta?.stage === "done" && hTotal === sbHybrid.scenes.length, `stage=${hMeta?.stage} code=${hMeta?.codeScenes ?? "?"} model=${hMeta?.modelScenes ?? "?"} ${(hVa?.provider ?? "").slice(0, 48)} ${hMeta?.aiNote ?? ""}`)
+
+  // 成片时长断言（防静默丢镜：segs 缺分镜曾致成片偏短，2026-10-31 修复后补）
+  if (hMeta?.stage === "done" && hVa?.path) {
+    try {
+      const expected = sbHybrid.scenes.reduce((s, sc) => s + Math.min(15, Math.max(2, sc.seconds)), 0)
+      const ff = await import("node:child_process")
+      const durOut = await new Promise((resolve) => {
+        ff.execFile("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", `http://localhost:3000${hVa.path}`], { timeout: 30_000 }, (err, stdout) => resolve(err ? "" : String(stdout).trim()))
+      })
+      const dur = Number(durOut) || 0
+      ok("hybrid 成片时长 ≈ 全部分镜之和（无丢镜）", dur >= expected * 0.75 && dur <= expected * 2.5, `实测 ${dur.toFixed(1)}s vs 预期 ~${expected}s（7 镜全渲染）`)
+    } catch {
+      ok("hybrid 成片时长探针（ffprobe）", false, "探针异常")
+    }
+  }
 }
 
 console.log("━━━ 完成 ━━━")

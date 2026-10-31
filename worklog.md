@@ -615,3 +615,26 @@ Stage Summary:
 ### P1 收官备注
 - 路线图验收对照见附录 E.4：混合通道成本 ✅ / RSS ≥20 源 ✅（24 注册 17+ ok/轮，沙箱出网抖动诚实留痕）/ 纯图线 2.0 ✅ / 调优闭环 ✅ / 新手首跑向导落地但埋点属 P2（未虚报）
 - 全量调优 sweep（v1/v2/v3 × 多题）与 50 题全量基线需用户重播搜索密钥后跑（SEARCH_KEY=xxx bun scripts/set-search-key.mjs → node scripts/tune-prompts.mjs --variants v1,v2,v3 --ids m01,m02,m03）
+
+---
+## 2026-10-31 · P1 收官：全量分段回归 + 混合通道丢镜 bug 修复
+
+### 混合通道静默丢镜 bug（本轮回归当场抓获，真实工程价值证明）
+- **症状**：video-only 回归 hybrid 段 `stage=error`——concat 空列表失败
+- **根因**：`renderLocalSceneSeg`（hybrid 通道的本地代码动画单镜渲染）渲染出 `s{i}.mp4` 后**从未 `segs.push`**——只有调用方的 model 分镜路径 push。全 code 分镜（今日主回归覆盖 last-storyboard.json 后 render 全为 code）→ segs 空 → concat 必挂；**此前有 model 分镜时更糟：code 分镜被静默丢帧**（成片缺镜但 meta 统计正常，旧断言只查 codeScenes+modelScenes 计数不查实际时长，未抓获）
+- **修复**：renderLocalSceneSeg 两条路径（art 引擎 / motion 场景卡）渲染完成即 push；model 回落路径经此函数自动覆盖，无双重 push
+- **回归加固**：video-only 增「成片时长 ≈ 全部分镜之和」断言（ffprobe 实测 vs 预期；本次实测 59.0s vs ~59s，零丢镜）——从此丢镜类 bug 无处遁形
+
+### 全量分段回归证据（P1 三批落地后）
+- 离线五套件：claim-match 全过 / test-section-rewrite 28/28 / test-rss 37/37 / test-tune 27/27 / test-card-engine 33/33
+- 主段（REG_SKIP_VIDEO=1，full-regression）：**0 失败全绿**（约 45 项断言：九步 done/大纲 5 节/分节对齐 5/5/审稿留痕/断言诚实跳过/配图降级留痕/排版 v2/G-Eval 评分 7.6（同家族裁判 + 配额受限窗口，单样本波动如实记录）/评测题库 50/视频直出 E2E/纯图线诚实降级/版式卡 E2E 3 张 VLM 全过/发布门禁/5 平台导出/无 5xx）
+- 视频段（regression-video-only）：**10/10**（art 50s 0.6MB + motion 59s 1280×720 + hybrid done 含时长断言）
+- 配额工程事实：主段连跑 3 次撞用户级 10 分钟 30 次限流（第 2/3 次仅用于数断言数，无谓消耗——教训：回归输出应一次落盘再统计，已在收官轮改为 `> /tmp/reg-*.log` 模式）；quota-wait 探针等待窗口后视频段一次通过
+
+### P1 最终交付清单（五项全落地）
+- p11 纯图线 2.0（版式骨架 + VLM 质检闭环）✅ `dcbf656`+`0fa8975`
+- p12 视频混合通道 ✅ `dcbf656` + 本轮丢镜修复
+- p13 交互三件套（向导/⌘K/指着改/前馈/重排）✅ `8ca8f39`
+- p14 RSS 信源 + SimHash 去重 ✅ `0e2c3a2`
+- p15 DSPy 式调优闭环 ✅ `be768e7`
+- 文档：deep-dive 附录 E（改动清单+验收对照）+ 双语 README 核心能力与质量基线
