@@ -596,3 +596,22 @@ Stage Summary:
 - 浏览器验证：情报中心 RSS 面板 24 源 / 17 正常徽章 / 230 条目 / 34 个转选题按钮渲染，console 零错误
 - tsc / eslint 双零（顺手修复 video.ts 遗留 hooks 命名误报：useAgnesFor → agnesForScene）
 - 诚实边界：WeWe RSS（公众号全文）需自部署服务、热榜聚合 API 待接——自定义源入口已支持任意 RSSHub 路由，P2 再补托管
+
+---
+## 2026-10-31 · P1 第五批（p15 DSPy 式 prompt 调优）
+
+### 落地（学 MIPROv2 精神子集，诚实边界：不引入 python dspy 依赖，自建轻量度量驱动闭环）
+- `src/lib/runtime/tune.ts`（新）：变体注册表——v0 基线（空指令零侵入）/ v1 结构强化（段首论点句+显式递进）/ v2 证据密度（每段 [n] 锚点+数字必带来源+禁空泛收尾）/ v3 口语节奏（「你」视角回勾+砍学术腔+短句重音），各带调优假设；SettingKV `tune:draft` 读写（apply/clear/resolve，坏记录回基线）；`aggregateTuneReport` 聚合推荐纯函数（无基线不推荐防误判+样本量警告防过拟合声明）
+- 注入位：`sectionMessages`/`draftMessages` 增 `tunePrompt` 可选参（【调优指令】块，分节与单遍两路径同生效）；run-manager 每次 run 读一次注入，draft 步留痕含变体号（「调优 v2」）
+- `/api/eval`：GET 增 tune 状态+变体注册表；POST 增 tune-apply / tune-clear / tune-aggregate
+- `scripts/tune-prompts.mjs`（新）：调优运行器——逐变体（apply → 逐题跑九步管线 → 等终态 → G-Eval 评分）→ 历史基线合并聚合 → 推荐落库或诚实回 v0 → 报告落 download/；题间节拍 75s + 429 重试 + draft 步注入断言
+
+### 质量证据
+- 离线单测 `scripts/test-tune.mjs`：**27/27**（注册表 6 / 注入位 5 / SettingKV 读写回滚 6 / 聚合推荐数学 10）
+- live E2E（v2 × m01）：变体应用 → 九步管线真实跑通 → **draft 步留痕「调优 v2」实证注入生效** → G-Eval 评分 8.0 门禁 PASS → 聚合（DB 无历史基线 → 诚实不推荐并自动回滚 v0）→ 报告落 download/tune-report-2026-10-31.json
+- 文档：README/README.en 核心能力与质量基线更新（交互/RSS/混合通道/版式卡/调优闭环）；deep-dive 附录 E（P1 全五项改动清单+验收对照）
+- tsc / eslint 双零
+
+### P1 收官备注
+- 路线图验收对照见附录 E.4：混合通道成本 ✅ / RSS ≥20 源 ✅（24 注册 17+ ok/轮，沙箱出网抖动诚实留痕）/ 纯图线 2.0 ✅ / 调优闭环 ✅ / 新手首跑向导落地但埋点属 P2（未虚报）
+- 全量调优 sweep（v1/v2/v3 × 多题）与 50 题全量基线需用户重播搜索密钥后跑（SEARCH_KEY=xxx bun scripts/set-search-key.mjs → node scripts/tune-prompts.mjs --variants v1,v2,v3 --ids m01,m02,m03）

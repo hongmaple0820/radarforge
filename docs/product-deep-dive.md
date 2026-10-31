@@ -339,3 +339,54 @@ gantt
 - **评测集试跑**（4 题）：m01 8.3 / m02 8.2 / m03 8.2 / m05 8.3，门禁通过率 100%（详见 docs/eval-baseline-2026-10-30.md 的边界声明）。
 - **浏览器端到端**（agent-browser）：run-detail 九列步骤条/大纲卡/断言标签/门禁按钮全渲染；视频直出 UI 全链（切模式→填选题→启动→blocked→方向卡→按方向生成分镜→run done，console 零错误）。
 - **tsc / eslint 双零**；离线匹配用例（test-claim-match.mjs）5/5。
+
+---
+
+## 附录 E：P1 落地改动清单与回归证据（2026-10-31 第三、四、五批）
+
+> P1 五项已全部落地：p11 纯图线 2.0（版式骨架 + VLM 质检闭环）、p12 视频混合通道（`dcbf656`+`0fa8975`）、p13 交互三件套、p14 RSS 信源、p15 DSPy 式调优（本附录）。路线图验收对照见文末。
+
+### E.1 p13 交互三件套（方案 §3.4 五抓手全落地）
+
+| 文件 | 改动 |
+|------|------|
+| `src/components/wizard.tsx`（新） | 三步向导：选题 → 人格与风格（7 人格可视化卡片 + 18 主题分类墙 + 文风档案）→ 确认（brief 要点预览 + 九步预告卡）；每步带「下一秒会发生什么」预期文案 |
+| `src/components/command-palette.tsx`（新，cmdk） | ⌘K 命令面板：新图文/新视频/新图组/早报 + 四主区导航 + 最近 Run 直达（懒加载）；联动走页面层 props（wizardFocus 自增/jumpRunId），弃 window 事件（Turbopack 首编译时序不可靠） |
+| `src/app/page.tsx` | 全局 ⌘K/⌘1/2/3 快捷键 + header ⌘K 按钮 + 面板挂载与确定性联动状态 |
+| `src/components/studio-panel.tsx` | 向导/高级模式切换（偏好持久化）；高级模式保留原直达表单；start() payload 参数化 |
+| `src/lib/runtime/skills/radar-rewrite.ts` | `splitMarkdownSections`（## 分节）/ `sectionRewriteMessages`（前后节摘要 + 铁律：[n] 保留/篇幅 ±30%/禁新事实）/ `normalizeSectionRewrite`（围栏客套剥离、丢标题补回、>2 个 ## 判全文拒绝、空输入先判空） |
+| `src/app/api/runs/[id]/actions/route.ts` | `rewrite-section`：选段 → 两档温度重写 → relayout 存 v+1 → diff 喂飞轮（与 edit 同链路） |
+| `src/components/md-view.tsx` | `SectionedMdView` 分节容器（group-hover 高亮 + 浮动「指着改」按钮） |
+| `src/components/run-detail.tsx` | ①成稿卡：版本树选择器（历史只读+作用域提示）+ 指着改反馈面板 ②运行前馈条（brief 核心判断+大纲预告 chips，零额外请求）③信息重排：稿优先单列 + 「为什么这样写」证据链 Collapsible 抽屉（运行中自动展开/完成折叠）——重排用行级 python 手术脚本完成 |
+| 回归脚本 | `scripts/test-section-rewrite.mjs`（28/28）、`scripts/verify-p13-browser.sh`（agent-browser 34/34）、`scripts/regression-p13.mjs`（真 LLM 18/18：两轮选段重写 v0→v1→v2、未选中节原文保留、[n] 保留、越界 400、飞轮 3 条） |
+
+### E.2 p14 RSS 信源 + SimHash 去重
+
+| 文件 | 改动 |
+|------|------|
+| `prisma/schema.prisma` | `SourceFeed`（url 唯一/lastStatus/lastError 人话化）+ `FeedItem`（feedId+guid 唯一/simhash 索引/ideaId 转选题回填） |
+| `src/lib/sources/simhash.ts`（新） | 64-bit 双半字 SimHash（FNV-1a 双种子），token 复用 matching.ts 分词器；海明 ≤3 判转载 |
+| `src/lib/sources/rss.ts`（新） | 零依赖宽容解析（RSS/Atom/RDF、CDATA/实体/guid 兜底）+ `refreshFeeds` 有界并发 6 路（38s/24 源）：粗粒度超龄 → guid 去重 → SimHash 跨源去重；网络类瞬时错误重试 1 次（实证沙箱出网抖动）；逐源诚实留痕 |
+| `src/app/api/sources/route.ts`（新） | GET 自动播种+源墙统计+最近 30 条；POST refresh/promote/add；PATCH 启停；DELETE 级联 |
+| `src/components/rss-panel.tsx`（新） | 情报中心首卡：源墙状态灯 + 自定义源 + 条目转选题闭环 + 失败诚实提示条 |
+| 默认源注册表 | 24 源（中文 5 + 英文 19），探活剔除失效：机器之心/36氪官方 RSS 已死（改返 HTML）、虎嗅/AIbase/差评 404、HF/ImportAI 沙箱不可达、Anthropic 无 RSS |
+| 回归脚本 | `scripts/test-rss.mjs`（**37/37**：simhash 8 + parseFeed 13 + 本地 HTTP E2E 16） |
+
+### E.3 p15 DSPy 式调优（评测驱动 prompt 变体搜索）
+
+| 文件 | 改动 |
+|------|------|
+| `src/lib/runtime/tune.ts`（新） | 变体注册表（v0 基线/v1 结构强化/v2 证据密度/v3 口语节奏，各带调优假设）+ SettingKV `tune:draft` 读写（apply/clear/resolve，坏记录回基线）+ `aggregateTuneReport` 聚合推荐纯函数（无基线不推荐防误判） |
+| `run-manager.ts` + `radar-outline.ts` + `radar-write.ts` | draft 步读 tune 指令注入【调优指令】块（分节与单遍两路径同生效；v0 空指令零侵入）；draft 步留痕含变体号 |
+| `src/app/api/eval/route.ts` | GET 增 tune 状态与变体注册表；POST 增 tune-apply/tune-clear/tune-aggregate |
+| `scripts/tune-prompts.mjs`（新） | 调优运行器：apply → 跑题 → 评分 → 与历史基线聚合 → 推荐落库（或诚实回 v0）→ 报告落 download/；题间节拍 + 429 重试 |
+| `scripts/test-tune.mjs`（新） | 离线 27/27：注册表/注入位/SettingKV 读写回滚/聚合推荐数学 |
+
+### E.4 P1 验收对照（路线图 §5）
+
+| 验收标准 | 结果 |
+|---------|------|
+| 新手首跑完成率 ≥80%（埋点） | 向导把首跑动作收敛为 3 步（每步预览下一秒），34/34 浏览器断言通过；埋点属 P2 定时出版批（需后端事件表，未在本轮虚报） |
+| 混合通道单条成本 ≤纯模型 1/3 | 已落地（`dcbf656`）：code 主轨 + model 5~10s 插播，分镜 render 标注自动分发 |
+| RSS 源 ≥20 个稳定运行 | **24 源注册，真实外网单跑 17 ok / 226 条入库**（量子位 10、OpenAI 40、HN 40、InfoQ 20…）；7 失败均诚实留痕（429 限流/超时/沙箱出网抖动——不同跑次失败源不同、curl 探活可达，非代码问题）；并发刷新 38s |
+| 纯图线 2.0 / DSPy 调优 | 已落地（`0fa8975` / 本批）：调优闭环 live 验证——v2 注入真实管线（draft 步留痕「调优 v2」）→ G-Eval 8.0 门禁 PASS → 无基线诚实不推荐并回滚 v0 |

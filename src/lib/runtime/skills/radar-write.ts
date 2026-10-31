@@ -157,6 +157,7 @@ export interface DraftInput {
   ideaAngle: string
   stylePrompt?: string // 创作者风格定位（设置中心）
   exemplarPrompt?: string // 文风校准档案（学习中心；仅结构节奏，安全条款内置）
+  tunePrompt?: string // P1 p15 调优指令（评测驱动选优变体；v0 基线为空）
 }
 
 export function draftMessages(input: DraftInput): ChatMessage[] {
@@ -174,6 +175,7 @@ export function draftMessages(input: DraftInput): ChatMessage[] {
     `${input.persona.label}：${input.persona.voice}`,
     input.stylePrompt ? `\n【创作者风格定位（与人格叠加生效）】\n${input.stylePrompt}` : "",
     input.exemplarPrompt ? `\n${input.exemplarPrompt}` : "",
+    input.tunePrompt ? `\n${input.tunePrompt}` : "",
     "",
     "【铁律（优先级最高）】",
     "1. 引用事实时句尾标 [n] 上标编号，n 对应证据块编号，禁止编造来源。",

@@ -130,6 +130,8 @@ export interface SectionDraftInput {
   ideaAngle: string
   stylePrompt?: string
   exemplarPrompt?: string
+  /** P1 p15 调优指令（评测驱动选优后的变体注入；v0 基线为空） */
+  tunePrompt?: string
   /** 已写完的各节正文（上下文连贯性） */
   writtenSoFar: string[]
 }
@@ -154,6 +156,7 @@ export function sectionMessages(input: SectionDraftInput): ChatMessage[] {
     `${input.persona.label}：${input.persona.voice}`,
     input.stylePrompt ? `\n【创作者风格定位】\n${input.stylePrompt}` : "",
     input.exemplarPrompt ? `\n${input.exemplarPrompt}` : "",
+    input.tunePrompt ? `\n${input.tunePrompt}` : "",
     "",
     "【铁律（优先级最高）】",
     "1. 引用事实时句尾标 [n] 上标编号，n 对应证据块编号，禁止编造来源。",

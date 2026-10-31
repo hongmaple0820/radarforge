@@ -34,6 +34,7 @@ import {
 } from "./skills/radar-image"
 import { renderCardToAsset, CARD_FAMILIES, type CardPlanItem } from "./card-engine"
 import { vlmCheckImage, type VlmCheckResult } from "@/lib/gateway/vlm"
+import { resolveTuneInstruction } from "./tune"
 
 export interface RunStep {
   name: string
@@ -100,6 +101,8 @@ async function executeArticleRun(runId: string): Promise<void> {
   const artifacts: Record<string, unknown> = {}
   const settings = await getSettings()
   const stylePrompt = styleProfilePrompt(settings.style)
+  // P1 p15 调优指令（评测驱动选优变体；v0 基线为空串 → 零改动）
+  const tune = await resolveTuneInstruction()
   // 文风校准档案（学 wewrite exemplar：仅结构节奏，安全条款在注入块内）
   const exItem = run.exemplarId ? (settings.exemplars.items.find((x) => x.id === run.exemplarId) ?? null) : null
   const exPrompt = exItem
@@ -292,6 +295,7 @@ async function executeArticleRun(runId: string): Promise<void> {
               ideaAngle: run.ideaAngle,
               stylePrompt,
               exemplarPrompt: exPrompt,
+              tunePrompt: tune.instruction,
               writtenSoFar: bodies,
             }),
             { temperature: 0.75 },
@@ -314,6 +318,7 @@ async function executeArticleRun(runId: string): Promise<void> {
             ideaAngle: run.ideaAngle,
             stylePrompt,
             exemplarPrompt: exPrompt,
+            tunePrompt: tune.instruction,
           }),
           { temperature: 0.75 },
         )
@@ -329,8 +334,8 @@ async function executeArticleRun(runId: string): Promise<void> {
         data: { runId, version: 0, title: title.slice(0, 120), markdown: draft, wordCount },
       })
       return outline
-        ? `${persona.label}｜分节 ${outline.sections.length}/${outline.sections.length}｜${wordCount} 字｜注入飞轮规则 ${rules.length} 条`
-        : `${persona.label}｜单遍降级｜${wordCount} 字｜注入飞轮规则 ${rules.length} 条`
+        ? `${persona.label}｜分节 ${outline.sections.length}/${outline.sections.length}｜${wordCount} 字｜注入飞轮规则 ${rules.length} 条${tune.instruction ? `｜调优 ${tune.variant}` : ""}`
+        : `${persona.label}｜单遍降级｜${wordCount} 字｜注入飞轮规则 ${rules.length} 条${tune.instruction ? `｜调优 ${tune.variant}` : ""}`
     })
 
     // ========== Step 5: 跨家族审稿（≤2 轮修订 + 成对比较裁决） ==========
