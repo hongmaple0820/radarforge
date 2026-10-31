@@ -10,7 +10,8 @@ import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useToast } from "@/hooks/use-toast"
 import { RunDetail } from "./run-detail"
-import { PenLine, Play, Loader2, RefreshCw, Lightbulb, FileText, CheckCircle2, XCircle, BookOpen, Sparkles, Trash2 } from "lucide-react"
+import { Wizard } from "./wizard"
+import { PenLine, Play, Loader2, RefreshCw, Lightbulb, FileText, CheckCircle2, XCircle, BookOpen, Sparkles, Trash2, Wand2, SlidersHorizontal } from "lucide-react"
 
 interface RunItem {
   id: string
@@ -27,8 +28,10 @@ interface ThemeInfo { id: string; label: string; category: string; description: 
 interface IdeaItem { id: string; title: string; angle: string; status: string }
 interface ExemplarItem { id: string; name: string; source: string; createdAt: string; words: number; fingerprint: { structure: string; rhythm: string; lexicon: string; rhetoric: string; voice: string; endings: string } }
 
-/** seed：情报中心「去创作」送来的选题（自动填入并聚焦） */
-export function StudioPanel({ seed }: { seed?: { title: string; angle: string } | null }) {
+/** seed：情报中心「去创作」送来的选题（自动填入并聚焦）
+ *  wizardFocus：⌘K「新图文」自增信号 → 重置到向导第一步
+ *  jumpRunId：⌘K「最近 Run」直达详情（确定性 props 传递） */
+export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { title: string; angle: string } | null; wizardFocus?: number; jumpRunId?: string | null }) {
   const { toast } = useToast()
   const [runs, setRuns] = useState<RunItem[]>([])
   const [personas, setPersonas] = useState<PersonaInfo[]>([])
@@ -38,6 +41,10 @@ export function StudioPanel({ seed }: { seed?: { title: string; angle: string } 
   const [ideaAngle, setIdeaAngle] = useState("")
   const [persona, setPersona] = useState("cold-analyst")
   const [theme, setTheme] = useState("professional-clean")
+  // P1 三步向导：新手向导 / 高级模式（表单直达，老手动线），偏好持久化
+  const [formMode, setFormMode] = useState<"wizard" | "advanced">("wizard")
+  // ⌘K 命令面板送来的选题种子（「新图文」动作）
+  const [cmdSeed, setCmdSeed] = useState<{ title: string; angle: string } | null>(null)
   // 文风校准（学 wewrite exemplar）
   const [exemplars, setExemplars] = useState<ExemplarItem[]>([])
   const [exemplarId, setExemplarId] = useState("")
@@ -48,13 +55,37 @@ export function StudioPanel({ seed }: { seed?: { title: string; angle: string } 
   const [starting, setStarting] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
-  // 情报中心送来的选题种子 → 填入表单
+  // 情报中心送来的选题种子 → 填入表单；页面级种子更新时清掉面板种子（较新优先）
   useEffect(() => {
     if (seed?.title) {
       setIdeaTitle(seed.title)
       setIdeaAngle(seed.angle ?? "")
+      setCmdSeed(null)
     }
   }, [seed])
+
+  // 偏好持久化（向导/高级模式）
+  useEffect(() => {
+    const saved = localStorage.getItem("rf:form-mode")
+    if (saved === "advanced") setFormMode("advanced")
+  }, [])
+  const switchFormMode = (m: "wizard" | "advanced") => {
+    setFormMode(m)
+    try { localStorage.setItem("rf:form-mode", m) } catch { /* 私密模式容错 */ }
+  }
+
+  // ⌘K「新图文」：回到向导第一步（自增信号，确定性触发）
+  useEffect(() => {
+    if (wizardFocus <= 0) return
+    setSelectedId(null)
+    setFormMode("wizard")
+    setCmdSeed({ title: "", angle: "" })
+  }, [wizardFocus])
+
+  // ⌘K「最近 Run」直达详情
+  useEffect(() => {
+    if (jumpRunId) setSelectedId(jumpRunId)
+  }, [jumpRunId])
 
   const refresh = useCallback(async () => {
     const [r, i, e] = await Promise.all([
@@ -82,19 +113,27 @@ export function StudioPanel({ seed }: { seed?: { title: string; angle: string } 
     return () => clearInterval(t)
   }, [runs, refresh])
 
-  const start = async () => {
-    if (!ideaTitle.trim()) return
+  const start = async (payload?: { ideaTitle: string; ideaAngle: string; persona: string; theme: string; exemplarId: string }) => {
+    const t = payload?.ideaTitle ?? ideaTitle
+    if (!t.trim()) return
     setStarting(true)
     try {
       const res = await fetch("/api/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ideaTitle, ideaAngle, persona, theme, exemplarId }),
+        body: JSON.stringify({
+          ideaTitle: t,
+          ideaAngle: payload?.ideaAngle ?? ideaAngle,
+          persona: payload?.persona ?? persona,
+          theme: payload?.theme ?? theme,
+          exemplarId: payload?.exemplarId ?? exemplarId,
+        }),
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error)
       await refresh()
       setSelectedId(json.id)
+      setCmdSeed(null)
       toast({ title: "九步流水线已启动", description: "brief → claims → 大纲 → 分节初稿 → 审稿 → 断言 → 配图 → 封面 → 排版" })
     } catch (e) {
       toast({ title: "启动失败", description: (e as Error).message, variant: "destructive" })
@@ -142,7 +181,37 @@ export function StudioPanel({ seed }: { seed?: { title: string; angle: string } 
 
   return (
     <div className="space-y-4">
-      {/* 新建运行 */}
+      {/* 新建运行：三步向导（新手动线）／ 高级模式（表单直达，老手动线） */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1 rounded-lg border p-0.5 bg-muted/40">
+          <button
+            onClick={() => switchFormMode("wizard")}
+            className={`flex items-center gap-1 text-[11px] rounded-md px-2.5 py-1 transition-colors ${formMode === "wizard" ? "bg-amber-500 text-white font-medium" : "text-muted-foreground hover:text-foreground"}`}
+          >
+            <Wand2 className="h-3 w-3" />三步向导
+          </button>
+          <button
+            onClick={() => switchFormMode("advanced")}
+            className={`flex items-center gap-1 text-[11px] rounded-md px-2.5 py-1 transition-colors ${formMode === "advanced" ? "bg-amber-500 text-white font-medium" : "text-muted-foreground hover:text-foreground"}`}
+            title="老手动线：一次性填完全部参数直达表单"
+          >
+            <SlidersHorizontal className="h-3 w-3" />高级模式
+          </button>
+        </div>
+        <span className="text-[10px] text-muted-foreground">{formMode === "wizard" ? "选题 → 人格与风格 → 确认（每步预览下一秒会发生什么）" : "一次填全参数，直接点火（老手适用）"}</span>
+      </div>
+
+      {formMode === "wizard" ? (
+        <Wizard
+          seed={cmdSeed ?? seed}
+          personas={personas}
+          themes={themes}
+          ideas={ideas}
+          exemplars={exemplars.map((x) => ({ id: x.id, name: x.name, words: x.words }))}
+          starting={starting}
+          onStart={(p) => void start(p)}
+        />
+      ) : (
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base"><PenLine className="h-4 w-4 text-amber-500" />图文线 · 九步流水线</CardTitle>
@@ -150,7 +219,7 @@ export function StudioPanel({ seed }: { seed?: { title: string; angle: string } 
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-[1fr_170px_130px_auto] gap-2">
-            <Input placeholder="选题标题，如：具身智能融资观察" value={ideaTitle} onChange={(e) => setIdeaTitle(e.target.value)} onKeyDown={(e) => e.key === "Enter" && start()} />
+            <Input placeholder="选题标题，如：具身智能融资观察" value={ideaTitle} onChange={(e) => setIdeaTitle(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void start() }} />
             <select value={persona} onChange={(e) => setPersona(e.target.value)} className="h-9 rounded-md border bg-background px-2 text-xs">
               {personas.map((p) => (
                 <option key={p.id} value={p.id}>{p.label}</option>
@@ -170,7 +239,7 @@ export function StudioPanel({ seed }: { seed?: { title: string; angle: string } 
                 </optgroup>
               ))}
             </select>
-            <Button onClick={start} disabled={!ideaTitle.trim() || starting} className="bg-amber-500 hover:bg-amber-600 text-white shrink-0">
+            <Button onClick={() => void start()} disabled={!ideaTitle.trim() || starting} className="bg-amber-500 hover:bg-amber-600 text-white shrink-0">
               {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               启动流水线
             </Button>
@@ -226,6 +295,7 @@ export function StudioPanel({ seed }: { seed?: { title: string; angle: string } 
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* 看板 or 详情 */}
       {selectedId ? (

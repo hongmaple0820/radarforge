@@ -372,6 +372,91 @@ export function parseSceneRevision(raw: unknown, fallback: StoryboardScene): { s
   return { scene, reason }
 }
 
+// ---------- 指着改 · 图文线选段改写（P1 交互三件套 · 抓手 5） ----------
+// 视频线「指着改」（时间轴点击→单分镜重做→版本树）平移到图文：
+// 选中段落 → 只重写这一节 → 存为新版本（文章版本树）。改稿动作已
+// 存在（rewrite target / edit），这里补的是「选段」交互的服务端半边。
+
+/** 把成稿 markdown 按 ## 小节切开（前言作为第 0 节，heading 为空串） */
+export function splitMarkdownSections(markdown: string): { index: number; heading: string; text: string }[] {
+  const lines = markdown.split(/\n/)
+  const sections: { heading: string; lines: string[] }[] = []
+  let cur: { heading: string; lines: string[] } = { heading: "", lines: [] }
+  for (const line of lines) {
+    if (/^##\s+/.test(line)) {
+      if (cur.lines.some((l) => l.trim())) sections.push(cur)
+      cur = { heading: line.replace(/^##\s+/, "").trim(), lines: [line] }
+    } else {
+      cur.lines.push(line)
+    }
+  }
+  if (cur.lines.some((l) => l.trim())) sections.push(cur)
+  return sections.map((s, i) => ({ index: i, heading: s.heading, text: s.lines.join("\n").trim() }))
+}
+
+/** 选段改写提示词：只重写本节，上下文来自前后节摘要，铁律防漂移 */
+export function sectionRewriteMessages(input: {
+  articleTitle: string
+  sectionIndex: number
+  totalSections: number
+  sectionHeading: string
+  sectionText: string
+  prevDigest: string
+  nextDigest: string
+  feedback: string
+}): ChatMessage[] {
+  const system = [
+    "你是资深公众号编辑，负责「指着改」：作者选中了一节，你只重写这一节，把它改得更好。",
+    "",
+    "【铁律（优先级最高）】",
+    "1. 只输出本节重写后的完整文本，不要输出其他节、不要解释、不要客套。",
+    "2. 原节以「## 小节标题」开头的，重写稿也必须以「## 」开头（标题可润色）。",
+    "3. 引用编号 [n] 原样保留或按原节证据对应，禁止编造新的来源或数字。",
+    "4. 不引入原节与用户意见之外的新事实；证据不足处宁可删去，不脑补。",
+    "5. 篇幅与原节相当（±30% 以内），除非用户意见明确要求扩写/删减。",
+    "6. 与前后节保持衔接：不重复邻节内容，不产生逻辑断裂。",
+  ].join("\n")
+  const user = [
+    `文章标题：${input.articleTitle}`,
+    `本节是全文第 ${input.sectionIndex + 1}/${input.totalSections} 节${input.sectionHeading ? `（「${input.sectionHeading}」）` : "（开篇前言）"}。`,
+    "",
+    "【前一节摘要（保持衔接，不要重复）】",
+    input.prevDigest || "（本节即开篇，无前一节）",
+    "",
+    "【后一节摘要（为后文留钩子）】",
+    input.nextDigest || "（本节即末节，无后一节）",
+    "",
+    "【本节原文】",
+    input.sectionText.slice(0, 6000),
+    "",
+    "【作者改稿意见（最高优先级，逐条落实）】",
+    input.feedback.trim() || "（未给具体意见：请提升表达密度与节奏，砍掉空话套话）",
+  ].join("\n")
+  return [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ]
+}
+
+/** 归一化选段改写产物：保住 ## 开头契约，防 LLM 输出全文或解释 */
+export function normalizeSectionRewrite(raw: string, section: { heading: string; text: string }): string {
+  let out = (raw ?? "").trim()
+  // 剥掉可能的代码围栏与「以下是…」客套行
+  out = out.replace(/^```(?:markdown)?\s*\n?/i, "").replace(/\n?```\s*$/i, "")
+  out = out.replace(/^(?:以下是|这是|改写后)[^\n]*[:：]\s*\n/i, "")
+  // 清洗后为空 → 直接判失败（先于标题补回，防空壳标题骗过校验）
+  if (!out) return ""
+  const hadHeading = /^##\s+/.test(section.text)
+  if (hadHeading && !/^##\s+/.test(out)) {
+    // 丢了节标题 → 补回原标题（保守：不猜新标题）
+    out = `## ${section.heading}\n\n${out}`
+  }
+  // 明显输出全文（节节数暴涨）→ 视为失败返回空
+  const sectionCount = (out.match(/^##\s+/gm) ?? []).length
+  if (sectionCount > 2) return ""
+  return out
+}
+
 // ---------- 视频成片（TTS 口播音色清单，客户端与服务端共用） ----------
 
 export const TTS_VOICES: { id: string; label: string }[] = [

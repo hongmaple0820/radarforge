@@ -2,6 +2,8 @@
 
 import ReactMarkdown from "react-markdown"
 import { Badge } from "@/components/ui/badge"
+import { splitMarkdownSections } from "@/lib/runtime/skills/radar-rewrite"
+import { MousePointerClick } from "lucide-react"
 
 export function MdView({ content, onCite }: { content: string; onCite?: (n: number) => void }) {
   return (
@@ -34,6 +36,70 @@ export function MdView({ content, onCite }: { content: string; onCite?: (n: numb
       >
         {content}
       </ReactMarkdown>
+    </div>
+  )
+}
+
+// ============================================================
+// SectionedMdView —— 指着改 · 图文选段容器（P1 交互三件套 · 抓手 5）
+// 视频线「指着改」平移到图文：按 ## 小节分块渲染，hover 高亮 +
+// 浮动「指着改」按钮，点击回调由上层接入选段改写面板。
+// ============================================================
+
+export function SectionedMdView({
+  content,
+  onRewrite,
+  onCite,
+}: {
+  content: string
+  onRewrite?: (sectionIndex: number, heading: string) => void
+  onCite?: (n: number) => void
+}) {
+  if (!onRewrite) return <MdView content={content} onCite={onCite} />
+  const sections = splitMarkdownSections(content)
+  if (sections.length <= 1) {
+    // 单节文章没有「选段」意义，但至少允许整体指着改（第 0 节）
+    return (
+      <SectionBlock index={0} heading="" onRewrite={onRewrite}>
+        <MdView content={content} onCite={onCite} />
+      </SectionBlock>
+    )
+  }
+  return (
+    <div className="space-y-1">
+      {sections.map((s) => (
+        <SectionBlock key={s.index} index={s.index} heading={s.heading} onRewrite={onRewrite}>
+          <MdView content={s.text} onCite={onCite} />
+        </SectionBlock>
+      ))}
+    </div>
+  )
+}
+
+function SectionBlock({
+  index,
+  heading,
+  onRewrite,
+  children,
+}: {
+  index: number
+  heading: string
+  onRewrite: (sectionIndex: number, heading: string) => void
+  children: React.ReactNode
+}) {
+  return (
+    <div className="group relative rounded-lg -mx-1.5 px-1.5 py-0.5 transition-colors hover:bg-amber-50/60 dark:hover:bg-amber-950/20">
+      {onRewrite && (
+        <button
+          onClick={() => onRewrite(index, heading)}
+          title={`指着改：只重写${heading ? `「${heading}」` : index === 0 ? "开篇前言" : "本节"}，其余不动`}
+          className="absolute right-0 top-0 z-10 flex items-center gap-1 text-[10px] rounded-full border border-amber-300 bg-background/95 px-2 py-0.5 text-amber-600 dark:text-amber-400 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity shadow-sm hover:bg-amber-50 dark:hover:bg-amber-950/40"
+        >
+          <MousePointerClick className="h-3 w-3" />
+          指着改
+        </button>
+      )}
+      {children}
     </div>
   )
 }

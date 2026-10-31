@@ -7,10 +7,11 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Textarea } from "@/components/ui/textarea"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { useToast } from "@/hooks/use-toast"
-import { MdView } from "./md-view"
+import { MdView, SectionedMdView } from "./md-view"
 import { TTS_VOICES } from "@/lib/runtime/skills/radar-rewrite"
-import { CheckCircle2, XCircle, Loader2, Circle, Clock, Edit3, Send, Copy, FileText, ImageIcon, Sparkles, ThumbsUp, ThumbsDown, ExternalLink, Clapperboard, Palette, Video, Download, RefreshCw, Mic } from "lucide-react"
+import { CheckCircle2, XCircle, Loader2, Circle, Clock, Edit3, Send, Copy, FileText, ImageIcon, Sparkles, ThumbsUp, ThumbsDown, ExternalLink, Clapperboard, Palette, Video, Download, RefreshCw, Mic, MousePointerClick, History, ChevronDown, HelpCircle } from "lucide-react"
 
 export interface StoryboardScene { id: number; seconds: number; visual: string; narration: string; subtitle: string; broll: string }
 export interface StoryboardData { title: string; hook: string; totalSeconds: number; scenes: StoryboardScene[]; bgm: string; caption: string }
@@ -80,6 +81,13 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
   const [videoStyle, setVideoStyle] = useState<"motion" | "art">("motion")
   const [videoChannel, setVideoChannel] = useState<"local" | "agnes" | "hybrid">("local")
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // P1 指着改图文：选中节 + 反馈输入
+  const [sectionEdit, setSectionEdit] = useState<{ index: number; heading: string } | null>(null)
+  const [sectionFeedback, setSectionFeedback] = useState("")
+  // P1 文章版本树：查看历史版本（只读，改稿始终作用于最新版）
+  const [viewVersion, setViewVersion] = useState<number | null>(null)
+  // P1 信息重排：「为什么这样写」证据链抽屉（null = 自动：运行中展开/完成折叠）
+  const [whyOpen, setWhyOpen] = useState<boolean | null>(null)
 
   const refresh = useCallback(async () => {
     if (!runId) return
@@ -97,6 +105,10 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
     setExportData(null)
     setExportTab("wechat")
     setExportTheme("")
+    setSectionEdit(null)
+    setSectionFeedback("")
+    setViewVersion(null)
+    setWhyOpen(null)
     void refresh()
     // 主题画廊数据（18 主题注册表，/api/runs 顺带返回）
     void fetch("/api/runs")
@@ -222,6 +234,22 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
   }
   const sbShow = storyboard ?? videoMeta?.storyboard ?? null
 
+  // P1 运行前馈：等待有内容可看——brief 已定而初稿未完时，展示核心判断
+  // 与大纲节标题预告（数据已在 artifacts，只差展示层，零额外请求）
+  let artifactsJson: Record<string, unknown> = {}
+  try { artifactsJson = JSON.parse(run.artifacts) as Record<string, unknown> } catch { /* ignore */ }
+  const briefArt = (artifactsJson.brief ?? {}) as Record<string, string>
+  const outlineArt = artifactsJson.outline as { title: string; sections: { heading: string; point: string }[] } | undefined
+  const draftStep = steps.find((s) => s.name === "draft")
+  const feedforward =
+    run.status === "running" && !!briefArt.coreJudgment && !!draftStep && ["running", "pending"].includes(draftStep.status)
+  // 版本树：历史版本只读预览（改稿动作始终作用于最新版）
+  const viewArticle = viewVersion !== null ? run.articles.find((a) => a.version === viewVersion) : undefined
+  const displayArticle = viewArticle ?? latest
+  const viewingHistory = !!viewArticle && viewArticle.version !== latest?.version
+  // 抽屉开合：null = 自动（运行中展开给前馈，完成折叠让稿优先）
+  const whyOpenValue = whyOpen ?? run.status !== "done"
+
   const saveEdit = async () => {
     if (!latest || !editText.trim()) return
     setBusy("edit")
@@ -257,6 +285,30 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
       toast({ title: `已改写：${json.target}`, description: `${json.wordCount} 字` })
     } catch (e) {
       toast({ title: "改写失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // P1 指着改图文：选中节 → AI 只重写本节 → 新版本入版本树 → diff 喂飞轮
+  const doRewriteSection = async () => {
+    if (!sectionEdit || !run) return
+    setBusy("rewrite-section")
+    try {
+      const res = await fetch(`/api/runs/${run.id}/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "rewrite-section", sectionIndex: sectionEdit.index, feedback: sectionFeedback }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      toast({ title: `第 ${json.sectionIndex + 1} 节已重写 → v${json.version}`, description: json.message })
+      setSectionEdit(null)
+      setSectionFeedback("")
+      setViewVersion(null)
+      await refresh()
+    } catch (e) {
+      toast({ title: "选段改写失败", description: (e as Error).message, variant: "destructive" })
     } finally {
       setBusy(null)
     }
@@ -470,232 +522,30 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
               </div>
             ))}
           </div>
+          {/* P1 运行前馈：4 分钟等待有内容可看（预告而非状态汇报） */}
+          {feedforward && (
+            <div className="mt-2.5 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/40 dark:bg-amber-950/20 px-3 py-2.5 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                <Sparkles className="h-3 w-3" />运行前馈 · 任务书已定，初稿正按它写
+              </div>
+              <p className="text-[11px] leading-snug"><span className="text-muted-foreground">核心判断：</span>{briefArt.coreJudgment}</p>
+              {briefArt.targetReader && <p className="text-[10px] text-muted-foreground leading-snug">写给：{briefArt.targetReader}</p>}
+              {outlineArt?.sections?.length ? (
+                <div className="flex items-center gap-1 flex-wrap pt-0.5">
+                  <span className="text-[10px] text-muted-foreground shrink-0">大纲预告：</span>
+                  {outlineArt.sections.map((s, i) => (
+                    <span key={i} className="text-[9px] border border-amber-300/60 dark:border-amber-700 rounded-full px-1.5 py-0.5 text-amber-700 dark:text-amber-300 truncate max-w-[150px]">{i + 1}. {s.heading}</span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          )}
           {run.error && <div className="mt-2 text-xs text-red-500 rounded bg-red-50 dark:bg-red-950/30 px-2 py-1.5">{run.error}</div>}
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[300px_1fr] gap-4">
-        {/* 左列：brief + claims + 审稿 + 封面 + 飞轮 */}
-        <div className="space-y-4">
-          {/* brief */}
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">文章任务书（brief）</CardTitle></CardHeader>
-            <CardContent className="pt-0">
-              {(() => {
-                let brief: Record<string, string> = {}
-                try { brief = JSON.parse(run.artifacts).brief ?? {} } catch { /* ignore */ }
-                if (!brief.coreJudgment) return <p className="text-xs text-muted-foreground">未生成</p>
-                const rows: [string, string][] = [["读者", brief.targetReader], ["问题", brief.realProblem], ["判断", brief.coreJudgment], ["反方", brief.counterView], ["边界", brief.boundary]]
-                return (
-                  <div className="space-y-1.5">
-                    {rows.filter(([, v]) => v).map(([k, v]) => (
-                      <div key={k} className="text-[11px] leading-snug"><span className="text-muted-foreground font-medium">{k}：</span><span>{v}</span></div>
-                    ))}
-                  </div>
-                )
-              })()}
-            </CardContent>
-          </Card>
-
-          {/* 大纲（P0 大纲先行产物） */}
-          {(() => {
-            let outline: { title: string; sections: { heading: string; point: string; evidence: number[]; illustration: string }[] } | null = null
-            try { outline = JSON.parse(run.artifacts).outline ?? null } catch { /* ignore */ }
-            if (!outline) return null
-            return (
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm flex items-center justify-between">
-                    <span>大纲（{outline.sections.length} 节）</span>
-                    <Badge variant="outline" className="text-[9px]">先规划后写作</Badge>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="pt-0">
-                  <div className="space-y-1.5">
-                    {outline.sections.map((s, i) => (
-                      <div key={i} className="rounded-md border px-2 py-1.5 space-y-0.5">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <Badge variant="outline" className="text-[9px] px-1 py-0">{i + 1}</Badge>
-                          <span className="text-[11px] font-semibold">{s.heading}</span>
-                          {s.evidence?.length > 0 && (
-                            <Badge variant="outline" className="text-[8px] px-1 py-0 border-amber-400 text-amber-600 dark:text-amber-400">
-                              证据 {s.evidence.join(",")}
-                            </Badge>
-                          )}
-                          {s.illustration && <Badge variant="outline" className="text-[8px] px-1 py-0">配图位</Badge>}
-                        </div>
-                        <p className="text-[10px] text-muted-foreground leading-snug line-clamp-2">{s.point}</p>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )
-          })()}
-
-          {/* 原子断言核验（P0 事实层产物） */}
-          {(() => {
-            let assertions: { total: number; verified: number; unsupported: number; unsupportedRate: number; threshold: number; gateBlocked: boolean; items?: { text: string; verified: boolean; sourceUrl: string; sourceSite: string }[] } | null = null
-            try { assertions = JSON.parse(run.artifacts).assertions ?? null } catch { /* ignore */ }
-            if (!assertions) return null
-            const pct = Math.round((assertions.unsupportedRate ?? 0) * 100)
-            return (
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm flex items-center justify-between">
-                    <span>原子断言核验</span>
-                    <Badge variant={assertions.gateBlocked ? "destructive" : "default"} className={`text-[9px] ${assertions.gateBlocked ? "" : "bg-emerald-600"}`}>
-                      {assertions.gateBlocked ? "门禁拦截" : "门禁通过"}
-                    </Badge>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="pt-0 space-y-1.5">
-                  <div className="flex items-center gap-2 text-[11px]">
-                    <span className="text-muted-foreground">无据率</span>
-                    <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
-                      <div className={`h-full rounded-full ${pct <= Math.round((assertions.threshold ?? 0.3) * 100) ? "bg-emerald-500" : "bg-red-400"}`} style={{ width: `${Math.min(100, pct)}%` }} />
-                    </div>
-                    <span className={`font-semibold ${assertions.gateBlocked ? "text-red-500" : "text-emerald-600"}`}>{pct}%</span>
-                    <span className="text-[9px] text-muted-foreground">阈值 {Math.round((assertions.threshold ?? 0.3) * 100)}%</span>
-                  </div>
-                  {(assertions.items ?? []).slice(0, 8).map((x, i) => (
-                    <div key={i} className="flex items-start gap-1.5">
-                      {x.verified ? <CheckCircle2 className="h-3 w-3 text-emerald-600 shrink-0 mt-0.5" /> : <XCircle className="h-3 w-3 text-red-400 shrink-0 mt-0.5" />}
-                      <p className="text-[10px] leading-snug line-clamp-1 flex-1">{x.text}</p>
-                      {x.verified && x.sourceUrl && (
-                        <a href={x.sourceUrl} target="_blank" rel="noreferrer" className="text-[9px] text-muted-foreground hover:text-amber-600 shrink-0 max-w-[70px] truncate">{x.sourceSite}</a>
-                      )}
-                    </div>
-                  ))}
-                  {(assertions.items ?? []).length > 8 && (
-                    <p className="text-[9px] text-muted-foreground">…共 {assertions.total} 条（{assertions.verified} 有据 / {assertions.unsupported} 无据）</p>
-                  )}
-                </CardContent>
-              </Card>
-            )
-          })()}
-
-          {/* claims 账本 */}
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">claims 来源账本（{run.claims.filter((c) => c.idx > 0).length}）</CardTitle></CardHeader>
-            <CardContent className="pt-0">
-              <ScrollArea className="max-h-64">
-                <div className="space-y-1.5 pr-2">
-                  {run.claims.filter((c) => c.idx > 0).map((c) => (
-                    <div key={c.id} className="rounded-md border px-2 py-1.5 space-y-1">
-                      <div className="flex items-center gap-1.5">
-                        <Badge variant="outline" className="text-[9px] px-1 py-0 border-amber-400 text-amber-600 dark:text-amber-400">[{c.idx}]</Badge>
-                        <Badge variant="outline" className="text-[9px] px-1 py-0">{c.claimType}</Badge>
-                        {c.verified === true && <Badge className="bg-emerald-600 text-[9px] px-1 py-0">已核实</Badge>}
-                        {c.verified === false && <Badge variant="destructive" className="text-[9px] px-1 py-0">无来源</Badge>}
-                        {c.verified === null && <Badge variant="secondary" className="text-[9px] px-1 py-0">非事实</Badge>}
-                      </div>
-                      <p className="text-[10px] leading-snug line-clamp-2">{c.text}</p>
-                      {c.verified && c.sourceUrl && (
-                        <a href={c.sourceUrl} target="_blank" rel="noreferrer" className="text-[10px] text-muted-foreground hover:text-amber-600 flex items-center gap-0.5 truncate">
-                          <ExternalLink className="h-2.5 w-2.5 shrink-0" />{c.sourceSite} · {c.sourceDate.slice(0, 10)}
-                        </a>
-                      )}
-                    </div>
-                  ))}
-                  {run.claims.filter((c) => c.idx > 0).length === 0 && <p className="text-xs text-muted-foreground py-3 text-center">无</p>}
-                </div>
-              </ScrollArea>
-            </CardContent>
-          </Card>
-
-          {/* 审稿 */}
-          {review && (
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm flex items-center justify-between">
-                  <span>五维审稿</span>
-                  <span className={`text-sm font-bold ${review.average >= 7.5 ? "text-emerald-600" : "text-amber-600"}`}>{review.average}</span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0 space-y-2">
-                {(() => {
-                  let scores: Record<string, number> = {}
-                  let comments: { dim: string; comment: string }[] = []
-                  try { scores = JSON.parse(review.scoresJson); comments = JSON.parse(review.commentsJson) } catch { /* ignore */ }
-                  return (
-                    <>
-                      <div className="space-y-1">
-                        {Object.entries(scores).map(([k, v]) => (
-                          <div key={k} className="flex items-center gap-2">
-                            <span className="text-[10px] text-muted-foreground w-8 shrink-0">{DIM_LABELS[k] ?? k}</span>
-                            <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
-                              <div className={`h-full rounded-full ${v >= 8 ? "bg-emerald-500" : v >= 6 ? "bg-amber-400" : "bg-red-400"}`} style={{ width: `${v * 10}%` }} />
-                            </div>
-                            <span className="text-[10px] w-6 text-right shrink-0">{v}</span>
-                          </div>
-                        ))}
-                      </div>
-                      {review.revised && <Badge variant="secondary" className="text-[9px]">触发修订一轮</Badge>}
-                      {comments.slice(0, 3).map((c, i) => (
-                        <p key={i} className="text-[10px] text-muted-foreground leading-snug"><span className="font-medium">{c.dim}：</span>{c.comment}</p>
-                      ))}
-                    </>
-                  )
-                })()}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* 封面（手动可重试：生图降级后配好自定义端点再点「重新生成」） */}
-          {(run.status === "done" || covers.length > 0) && (
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-1.5"><ImageIcon className="h-3.5 w-3.5" />封面</span>
-                  <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={doCover} disabled={busy === "cover"}>
-                    {busy === "cover" ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <RefreshCw className="h-3 w-3 mr-1" />}
-                    {cover?.path ? "重新生成" : "生成封面"}
-                  </Button>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0">
-                {cover?.path ? (
-                  <img src={cover.path} alt="封面" className="rounded-md w-full border" />
-                ) : (
-                  <p className="text-[10px] text-muted-foreground leading-snug">
-                    生图降级：{cover?.error?.slice(0, 80) || "未生成"}（不阻断出稿；可在设置中心配置自定义生图端点后点「重新生成」）
-                  </p>
-                )}
-                {covers.length > 1 && <p className="text-[9px] text-muted-foreground mt-1">共尝试 {covers.length} 次（Asset 留痕）</p>}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* 飞轮规则 */}
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5 text-amber-500" />编辑飞轮</CardTitle></CardHeader>
-            <CardContent className="pt-0 space-y-2">
-              {proposedRules.map((r) => (
-                <div key={r.id} className="rounded-md border border-amber-300 bg-amber-50/50 dark:bg-amber-950/20 px-2 py-1.5 space-y-1">
-                  <p className="text-[10px] leading-snug">{r.rule}</p>
-                  <div className="flex items-center gap-1">
-                    <Button size="sm" variant="outline" className="h-5 text-[9px] px-1.5" onClick={() => ruleAction(r.id, "confirm")}><ThumbsUp className="h-2.5 w-2.5 mr-0.5" />激活</Button>
-                    <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1.5" onClick={() => ruleAction(r.id, "reject")}><ThumbsDown className="h-2.5 w-2.5 mr-0.5" />拒绝</Button>
-                  </div>
-                </div>
-              ))}
-              {activeRules.length > 0 && (
-                <div className="space-y-1">
-                  {activeRules.slice(0, 4).map((r) => (
-                    <div key={r.id} className="text-[10px] rounded bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 px-2 py-1 leading-snug">
-                      <Badge className="bg-emerald-600 text-[8px] px-1 py-0 mr-1">active</Badge>{r.rule}（注入 {r.hits} 次）
-                    </div>
-                  ))}
-                </div>
-              )}
-              {rules.length === 0 && <p className="text-[10px] text-muted-foreground">改稿后自动提炼候选规则（proposed → 确认后 active 注入初稿）</p>}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* 右列：成稿 + 预览 + 动作 */}
-        <div className="space-y-4">
+      {/* 稿件主体（P1 信息重排：稿优先——正文与导出占首屏） */}
+      <div className="space-y-4">
           {/* 动作栏 */}
           {run.status === "done" && latest && (
             <Card>
@@ -767,19 +617,77 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
             </Card>
           )}
 
-          {/* 成稿 markdown */}
-          {latest && !editing && (
+          {/* 成稿 markdown（P1：版本树 + 指着改选段重写） */}
+          {displayArticle && !editing && (
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-sm flex items-center justify-between">
-                  <span>成稿（v{latest.version} · {latest.title}）</span>
-                  <span className="text-[10px] font-normal text-muted-foreground">[n] = claims 账本编号</span>
+                <CardTitle className="text-sm flex items-center justify-between flex-wrap gap-1.5">
+                  <span>成稿（v{displayArticle.version} · {displayArticle.title}）</span>
+                  <span className="flex items-center gap-1.5">
+                    {/* 文章版本树：v0 初稿 → 指着改/改稿逐版累加，历史版本只读 */}
+                    {run.articles.length > 1 && (
+                      <span className="flex items-center gap-1 text-[10px] font-normal text-muted-foreground">
+                        <History className="h-3 w-3" />版本
+                        <select
+                          value={viewVersion ?? latest?.version ?? 0}
+                          onChange={(e) => setViewVersion(Number(e.target.value))}
+                          className="h-6 text-[10px] border rounded-md bg-background px-1"
+                          aria-label="文章版本树"
+                        >
+                          {run.articles.map((a) => (
+                            <option key={a.id} value={a.version}>v{a.version}（{a.wordCount} 字）</option>
+                          ))}
+                        </select>
+                      </span>
+                    )}
+                    <span className="text-[10px] font-normal text-muted-foreground">[n] = claims 账本编号</span>
+                  </span>
+                </CardTitle>
+                {viewingHistory && (
+                  <p className="text-[10px] text-amber-600 flex items-center gap-1"><History className="h-3 w-3" />正在查看历史版本 v{viewArticle?.version}（只读）——指着改与改稿始终作用于最新版 v{latest?.version}</p>
+                )}
+              </CardHeader>
+              <CardContent className="pt-0 space-y-2">
+                <ScrollArea className="h-[420px] rounded-md border bg-muted/30 p-3">
+                  <SectionedMdView
+                    content={displayArticle.markdown}
+                    onRewrite={viewingHistory ? undefined : (i, h) => { setSectionEdit({ index: i, heading: h }); setSectionFeedback("") }}
+                  />
+                </ScrollArea>
+                {/* 指着改提示（只对最新版开放） */}
+                {!viewingHistory && latest && (
+                  <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+                    <MousePointerClick className="h-3 w-3" />指着改：鼠标悬停任意小节 → 点「指着改」→ 填意见 → AI 只重写该节（其余不动，版本树 +1）
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* 指着改面板：选段反馈 → 单节重写（学视频线「指着改」交互） */}
+          {sectionEdit && latest && !viewingHistory && (
+            <Card className="border-amber-300 dark:border-amber-700">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-1.5">
+                  <MousePointerClick className="h-3.5 w-3.5 text-amber-500" />
+                  指着改 · 第 {sectionEdit.index + 1} 节{sectionEdit.heading ? `「${sectionEdit.heading}」` : "（开篇前言）"}
                 </CardTitle>
               </CardHeader>
-              <CardContent className="pt-0">
-                <ScrollArea className="h-[420px] rounded-md border bg-muted/30 p-3">
-                  <MdView content={latest.markdown} />
-                </ScrollArea>
+              <CardContent className="pt-0 space-y-2">
+                <Textarea
+                  placeholder="改稿意见（最高优先级，逐条落实），如：这段太绕，直接给结论；数据只保留两个最关键的"
+                  value={sectionFeedback}
+                  onChange={(e) => setSectionFeedback(e.target.value)}
+                  rows={3}
+                />
+                <div className="flex items-center gap-2">
+                  <Button size="sm" onClick={doRewriteSection} disabled={busy === "rewrite-section"} className="bg-amber-500 hover:bg-amber-600 text-white">
+                    {busy === "rewrite-section" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <MousePointerClick className="h-3.5 w-3.5 mr-1" />}
+                    AI 重写本节
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => { setSectionEdit(null); setSectionFeedback("") }} disabled={busy === "rewrite-section"}>取消</Button>
+                  <span className="text-[10px] text-muted-foreground">只动这一节，其余原文保留；改完存 v{latest.version + 1}，diff 自动喂飞轮</span>
+                </div>
               </CardContent>
             </Card>
           )}
@@ -1074,8 +982,216 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
               </CardContent>
             </Card>
           )}
-        </div>
+          {/* 封面（手动可重试：生图降级后配好自定义端点再点「重新生成」） */}
+          {(run.status === "done" || covers.length > 0) && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5"><ImageIcon className="h-3.5 w-3.5" />封面</span>
+                  <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={doCover} disabled={busy === "cover"}>
+                    {busy === "cover" ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+                    {cover?.path ? "重新生成" : "生成封面"}
+                  </Button>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {cover?.path ? (
+                  <img src={cover.path} alt="封面" className="rounded-md w-full border" />
+                ) : (
+                  <p className="text-[10px] text-muted-foreground leading-snug">
+                    生图降级：{cover?.error?.slice(0, 80) || "未生成"}（不阻断出稿；可在设置中心配置自定义生图端点后点「重新生成」）
+                  </p>
+                )}
+                {covers.length > 1 && <p className="text-[9px] text-muted-foreground mt-1">共尝试 {covers.length} 次（Asset 留痕）</p>}
+              </CardContent>
+            </Card>
+          )}
+
       </div>
+
+      {/* 为什么这样写（P1 信息重排：证据链折叠抽屉，与可溯源卖点对齐） */}
+      <Collapsible open={whyOpenValue} onOpenChange={(v) => setWhyOpen(v)}>
+        <CollapsibleTrigger asChild>
+          <button className="w-full rounded-xl border px-4 py-3 flex items-center gap-2 hover:bg-muted/40 transition-colors text-left">
+            <HelpCircle className="h-4 w-4 text-amber-500 shrink-0" />
+            <span className="text-sm font-semibold">为什么这样写</span>
+            <span className="text-[10px] text-muted-foreground">任务书 · 大纲 · 断言核验 · claims 账本 · 审稿 · 飞轮</span>
+            <span className="flex-1" />
+            <Badge variant="outline" className="text-[9px]">{run.claims.filter((c) => c.idx > 0).length} claims</Badge>
+            <Badge variant="outline" className="text-[9px]">{run.reviews.length} 审稿</Badge>
+            <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${whyOpenValue ? "rotate-180" : ""}`} />
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mt-3">
+          {/* brief */}
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">文章任务书（brief）</CardTitle></CardHeader>
+            <CardContent className="pt-0">
+              {(() => {
+                let brief: Record<string, string> = {}
+                try { brief = JSON.parse(run.artifacts).brief ?? {} } catch { /* ignore */ }
+                if (!brief.coreJudgment) return <p className="text-xs text-muted-foreground">未生成</p>
+                const rows: [string, string][] = [["读者", brief.targetReader], ["问题", brief.realProblem], ["判断", brief.coreJudgment], ["反方", brief.counterView], ["边界", brief.boundary]]
+                return (
+                  <div className="space-y-1.5">
+                    {rows.filter(([, v]) => v).map(([k, v]) => (
+                      <div key={k} className="text-[11px] leading-snug"><span className="text-muted-foreground font-medium">{k}：</span><span>{v}</span></div>
+                    ))}
+                  </div>
+                )
+              })()}
+            </CardContent>
+          </Card>
+
+          {/* 大纲（P0 大纲先行产物） */}
+          {(() => {
+            let outline: { title: string; sections: { heading: string; point: string; evidence: number[]; illustration: string }[] } | null = null
+            try { outline = JSON.parse(run.artifacts).outline ?? null } catch { /* ignore */ }
+            if (!outline) return null
+            return (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm flex items-center justify-between">
+                    <span>大纲（{outline.sections.length} 节）</span>
+                    <Badge variant="outline" className="text-[9px]">先规划后写作</Badge>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  <div className="space-y-1.5">
+                    {outline.sections.map((s, i) => (
+                      <div key={i} className="rounded-md border px-2 py-1.5 space-y-0.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <Badge variant="outline" className="text-[9px] px-1 py-0">{i + 1}</Badge>
+                          <span className="text-[11px] font-semibold">{s.heading}</span>
+                          {s.evidence?.length > 0 && (
+                            <Badge variant="outline" className="text-[8px] px-1 py-0 border-amber-400 text-amber-600 dark:text-amber-400">
+                              证据 {s.evidence.join(",")}
+                            </Badge>
+                          )}
+                          {s.illustration && <Badge variant="outline" className="text-[8px] px-1 py-0">配图位</Badge>}
+                        </div>
+                        <p className="text-[10px] text-muted-foreground leading-snug line-clamp-2">{s.point}</p>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )
+          })()}
+
+          {/* 原子断言核验（P0 事实层产物） */}
+          {(() => {
+            let assertions: { total: number; verified: number; unsupported: number; unsupportedRate: number; threshold: number; gateBlocked: boolean; items?: { text: string; verified: boolean; sourceUrl: string; sourceSite: string }[] } | null = null
+            try { assertions = JSON.parse(run.artifacts).assertions ?? null } catch { /* ignore */ }
+            if (!assertions) return null
+            const pct = Math.round((assertions.unsupportedRate ?? 0) * 100)
+            return (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm flex items-center justify-between">
+                    <span>原子断言核验</span>
+                    <Badge variant={assertions.gateBlocked ? "destructive" : "default"} className={`text-[9px] ${assertions.gateBlocked ? "" : "bg-emerald-600"}`}>
+                      {assertions.gateBlocked ? "门禁拦截" : "门禁通过"}
+                    </Badge>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-0 space-y-1.5">
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <span className="text-muted-foreground">无据率</span>
+                    <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full ${pct <= Math.round((assertions.threshold ?? 0.3) * 100) ? "bg-emerald-500" : "bg-red-400"}`} style={{ width: `${Math.min(100, pct)}%` }} />
+                    </div>
+                    <span className={`font-semibold ${assertions.gateBlocked ? "text-red-500" : "text-emerald-600"}`}>{pct}%</span>
+                    <span className="text-[9px] text-muted-foreground">阈值 {Math.round((assertions.threshold ?? 0.3) * 100)}%</span>
+                  </div>
+                  {(assertions.items ?? []).slice(0, 8).map((x, i) => (
+                    <div key={i} className="flex items-start gap-1.5">
+                      {x.verified ? <CheckCircle2 className="h-3 w-3 text-emerald-600 shrink-0 mt-0.5" /> : <XCircle className="h-3 w-3 text-red-400 shrink-0 mt-0.5" />}
+                      <p className="text-[10px] leading-snug line-clamp-1 flex-1">{x.text}</p>
+                      {x.verified && x.sourceUrl && (
+                        <a href={x.sourceUrl} target="_blank" rel="noreferrer" className="text-[9px] text-muted-foreground hover:text-amber-600 shrink-0 max-w-[70px] truncate">{x.sourceSite}</a>
+                      )}
+                    </div>
+                  ))}
+                  {(assertions.items ?? []).length > 8 && (
+                    <p className="text-[9px] text-muted-foreground">…共 {assertions.total} 条（{assertions.verified} 有据 / {assertions.unsupported} 无据）</p>
+                  )}
+                </CardContent>
+              </Card>
+            )
+          })()}
+
+          {/* claims 账本 */}
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">claims 来源账本（{run.claims.filter((c) => c.idx > 0).length}）</CardTitle></CardHeader>
+            <CardContent className="pt-0">
+              <ScrollArea className="max-h-64">
+                <div className="space-y-1.5 pr-2">
+                  {run.claims.filter((c) => c.idx > 0).map((c) => (
+                    <div key={c.id} className="rounded-md border px-2 py-1.5 space-y-1">
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant="outline" className="text-[9px] px-1 py-0 border-amber-400 text-amber-600 dark:text-amber-400">[{c.idx}]</Badge>
+                        <Badge variant="outline" className="text-[9px] px-1 py-0">{c.claimType}</Badge>
+                        {c.verified === true && <Badge className="bg-emerald-600 text-[9px] px-1 py-0">已核实</Badge>}
+                        {c.verified === false && <Badge variant="destructive" className="text-[9px] px-1 py-0">无来源</Badge>}
+                        {c.verified === null && <Badge variant="secondary" className="text-[9px] px-1 py-0">非事实</Badge>}
+                      </div>
+                      <p className="text-[10px] leading-snug line-clamp-2">{c.text}</p>
+                      {c.verified && c.sourceUrl && (
+                        <a href={c.sourceUrl} target="_blank" rel="noreferrer" className="text-[10px] text-muted-foreground hover:text-amber-600 flex items-center gap-0.5 truncate">
+                          <ExternalLink className="h-2.5 w-2.5 shrink-0" />{c.sourceSite} · {c.sourceDate.slice(0, 10)}
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                  {run.claims.filter((c) => c.idx > 0).length === 0 && <p className="text-xs text-muted-foreground py-3 text-center">无</p>}
+                </div>
+              </ScrollArea>
+            </CardContent>
+          </Card>
+
+          {/* 审稿 */}
+          {review && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center justify-between">
+                  <span>五维审稿</span>
+                  <span className={`text-sm font-bold ${review.average >= 7.5 ? "text-emerald-600" : "text-amber-600"}`}>{review.average}</span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0 space-y-2">
+                {(() => {
+                  let scores: Record<string, number> = {}
+                  let comments: { dim: string; comment: string }[] = []
+                  try { scores = JSON.parse(review.scoresJson); comments = JSON.parse(review.commentsJson) } catch { /* ignore */ }
+                  return (
+                    <>
+                      <div className="space-y-1">
+                        {Object.entries(scores).map(([k, v]) => (
+                          <div key={k} className="flex items-center gap-2">
+                            <span className="text-[10px] text-muted-foreground w-8 shrink-0">{DIM_LABELS[k] ?? k}</span>
+                            <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                              <div className={`h-full rounded-full ${v >= 8 ? "bg-emerald-500" : v >= 6 ? "bg-amber-400" : "bg-red-400"}`} style={{ width: `${v * 10}%` }} />
+                            </div>
+                            <span className="text-[10px] w-6 text-right shrink-0">{v}</span>
+                          </div>
+                        ))}
+                      </div>
+                      {review.revised && <Badge variant="secondary" className="text-[9px]">触发修订一轮</Badge>}
+                      {comments.slice(0, 3).map((c, i) => (
+                        <p key={i} className="text-[10px] text-muted-foreground leading-snug"><span className="font-medium">{c.dim}：</span>{c.comment}</p>
+                      ))}
+                    </>
+                  )
+                })()}
+              </CardContent>
+            </Card>
+          )}
+
+        </div>
+        </CollapsibleContent>
+      </Collapsible>
     </div>
   )
 }

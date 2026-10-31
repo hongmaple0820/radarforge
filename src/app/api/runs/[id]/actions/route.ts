@@ -5,7 +5,7 @@ import { generateCoverImage } from "@/lib/gateway/providers/zai-image"
 import { extractJson } from "@/lib/runtime/json"
 import { relayoutForRun, loadRenderClaims } from "@/lib/runtime/relayout"
 import { diffMarkdown, learnMessages, parseRules } from "@/lib/runtime/skills/radar-learn"
-import { REWRITE_TARGETS, rewriteMessages, storyboardMessages, parseStoryboard, parseDirections, directionsMessages, TTS_VOICES, type DirectionBrief, type DirectionProposal } from "@/lib/runtime/skills/radar-rewrite"
+import { REWRITE_TARGETS, rewriteMessages, storyboardMessages, parseStoryboard, parseDirections, directionsMessages, TTS_VOICES, splitMarkdownSections, sectionRewriteMessages, normalizeSectionRewrite, type DirectionBrief, type DirectionProposal } from "@/lib/runtime/skills/radar-rewrite"
 import { publishWechat } from "@/lib/publish/wechat"
 import { buildPlatformExport, PLATFORMS } from "@/lib/publish/platforms"
 import { startVideoRenderInBackground, startSceneReviseInBackground, type VideoAspect, type RenderProgress, type VideoStyle, type VideoChannel, type BgmPreset, type SceneRevision } from "@/lib/runtime/video"
@@ -14,7 +14,7 @@ import { resolveThemeId } from "@/lib/runtime/render"
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   try {
-    const body = (await req.json()) as { action?: string; markdown?: string; target?: string; theme?: string; platform?: string; voice?: string; aspect?: string; storyboard?: unknown; style?: string; channel?: string; bgm?: string; direction?: unknown; sceneId?: number; feedback?: string; baseAssetId?: string; force?: boolean }
+    const body = (await req.json()) as { action?: string; markdown?: string; target?: string; theme?: string; platform?: string; voice?: string; aspect?: string; storyboard?: unknown; style?: string; channel?: string; bgm?: string; direction?: unknown; sceneId?: number; feedback?: string; baseAssetId?: string; force?: boolean; sectionIndex?: number }
     const action = body.action ?? ""
 
     // ---------- edit：用户改稿 → 喂飞轮 ----------
@@ -65,6 +65,71 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         data: { runId: id, kind: "html", role: `rewrite-${target.id}`, provider: "zai-llm", path: "", meta: JSON.stringify({ wordCount: out.replace(/\s/g, "").length }) },
       })
       return NextResponse.json({ rewrite: out, target: target.label, wordCount: out.replace(/\s/g, "").length })
+    }
+
+    // ---------- rewrite-section：指着改图文（选段重写 → 新版本 → 喂飞轮） ----------
+    if (action === "rewrite-section") {
+      const latest = await db.article.findFirst({ where: { runId: id }, orderBy: { version: "desc" } })
+      if (!latest) return NextResponse.json({ error: "没有成稿可改" }, { status: 400 })
+      const sectionIndex = Number(body.sectionIndex)
+      const sections = splitMarkdownSections(latest.markdown)
+      if (!Number.isInteger(sectionIndex) || sectionIndex < 0 || sectionIndex >= sections.length) {
+        return NextResponse.json({ error: `选段序号越界：0~${sections.length - 1}` }, { status: 400 })
+      }
+      const feedback = String(body.feedback ?? "").slice(0, 600)
+      const sec = sections[sectionIndex]
+      const digest = (t: string) => t.replace(/\s/g, "").slice(0, 120)
+      let rewritten = ""
+      for (const temp of [0.7, 0.4]) {
+        const raw = await chatRetry(
+          sectionRewriteMessages({
+            articleTitle: latest.title,
+            sectionIndex,
+            totalSections: sections.length,
+            sectionHeading: sec.heading,
+            sectionText: sec.text,
+            prevDigest: sectionIndex > 0 ? digest(sections[sectionIndex - 1].text) : "",
+            nextDigest: sectionIndex < sections.length - 1 ? digest(sections[sectionIndex + 1].text) : "",
+            feedback,
+          }),
+          { temperature: temp },
+        )
+        rewritten = normalizeSectionRewrite(raw ?? "", sec)
+        if (rewritten) break
+      }
+      if (!rewritten) throw new Error("选段改写失败（LLM 空返回或输出全文，两档温度重试后仍失败）")
+
+      // 拼回全文 → 存新版本 → relayout（与 edit 同引擎）
+      const newMarkdown = sections.map((s, i) => (i === sectionIndex ? rewritten : s.text)).join("\n\n")
+      const relayout = await relayoutForRun(id, newMarkdown, latest.title)
+      await db.article.create({
+        data: { runId: id, version: latest.version + 1, title: relayout.title, markdown: newMarkdown, wordCount: relayout.wordCount, formatted: relayout.formatted },
+      })
+
+      // diff → 提炼规则（与 edit 同链路，宁缺毋滥）
+      const diff = diffMarkdown(latest.markdown, newMarkdown)
+      let rules: { rule: string; rationale: string }[] = []
+      if (diff.length > 0) {
+        for (const temp of [0.3, 0.15]) {
+          const raw = await chatRetry(learnMessages(diff), { temperature: temp })
+          rules = parseRules(extractJson(raw))
+          if (rules.length > 0) break
+        }
+        for (const r of rules) {
+          await db.learningRule.create({ data: { runId: id, rule: r.rule, rationale: r.rationale, status: "proposed" } })
+        }
+      }
+      return NextResponse.json({
+        sectionIndex,
+        heading: sec.heading || "开篇前言",
+        before: sec.text,
+        after: rewritten,
+        version: latest.version + 1,
+        wordCount: relayout.wordCount,
+        diffCount: diff.length,
+        rules: rules.map((r) => r.rule),
+        message: `第 ${sectionIndex + 1} 节已重写 → v${latest.version + 1}${rules.length > 0 ? `，${rules.length} 条候选规则待确认` : ""}`,
+      })
     }
 
     // ---------- storyboard-directions：导演三方向提案（学 huashu-motion director §4） ----------

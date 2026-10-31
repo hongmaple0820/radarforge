@@ -540,3 +540,36 @@ Stage Summary:
 - 分镜 render 字段全覆盖断言（图文线分镜 + 直出分镜）
 - 6d 版式卡 E2E：family 锁定 → 两步流水线 → provider=card-engine → VLM 留痕（meta.vlm + artifacts.vlm）→ PNG 静态可访问 → 画廊 markdown
 - 7c/video-only 混合通道 E2E：channel=hybrid 渲染 → 终态 done + codeScenes+modelScenes=分镜总数 → provider 配比留痕
+
+---
+## 2026-10-31 · P1 第三批（p13 交互三件套 · 方案 §3.4 五抓手全落地）
+
+### p13-1 三步向导（新手动线）+ 高级模式
+- `src/components/wizard.tsx`（新建）：选题 → 人格与风格（7 人格可视化卡片 + 18 主题分类墙 + 文风档案）→ 确认（brief 要点预览 + 九步预告卡）三步；每步带「下一步会发生什么」预期文案（预览即所得心智）；选题池直达 chips
+- `studio-panel.tsx`：向导/高级模式切换器（偏好 localStorage 持久化）；高级模式保留原直达表单（老手动线）；start() 收敛为 payload 参数化（两条动线共用）
+
+### p13-2 ⌘K 命令面板
+- `src/components/command-palette.tsx`（新建，cmdk）：新图文/新视频/新图组/生成早报 + 四主区导航 + 最近 Run 直达（懒加载）
+- `page.tsx`：全局 ⌘K/Ctrl+K 开合 + ⌘1/2/3 三产线直达；header ⌘K 按钮
+- 联动改为页面层 props（wizardFocus 自增 / jumpRunId），弃 window 事件（Turbopack 首编译时序不可靠——实测 120ms 延迟派发会丢事件）
+
+### p13-3 指着改图文（选段重写 + 文章版本树）
+- `radar-rewrite.ts`：`splitMarkdownSections`（## 分节，前言为第 0 节）/ `sectionRewriteMessages`（前后节摘要上下文 + 铁律：[n] 保留、篇幅 ±30%、禁新事实）/ `normalizeSectionRewrite`（代码围栏与客套行剥离、丢标题补回、>2 个 ## 判全文输出拒绝返空、空输入先判空）
+- actions 路由 `rewrite-section`：选段 → 两档温度重写 → relayout 存 v+1 → diff 喂飞轮（与 edit 同链路）
+- `md-view.tsx`：`SectionedMdView` 分节容器（group-hover 高亮 + 浮动「指着改」按钮）
+- `run-detail.tsx` 成稿卡：版本树选择器（v0..vN，历史版本只读 + 作用域提示）+ 指着改反馈面板（AI 重写本节/取消）
+
+### p13-4 运行前馈
+- run-detail 九步进度卡：brief 已定且初稿未完时展示「核心判断 + 写给谁 + 大纲节标题 chips」（数据全在 artifacts，零额外请求）——4 分钟等待有内容可看
+
+### p13-5 Run 详情信息重排（稿优先）
+- 单列主体：动作栏 → 成稿（版本树+指着改）→ 改写结果 → 视频分镜/成片 → 多平台发布中心 → 封面
+- 证据链（brief/大纲/断言/claims/审稿/飞轮）折叠进文末「为什么这样写」Collapsible 抽屉：运行中自动展开（配合前馈）、完成态折叠（稿优先）；与可溯源卖点对齐
+- 重排手术用行级 python 脚本（`scripts/restructure_run_detail.py`，幂等防呆）完成大块 JSX 迁移
+
+### 质量证据
+- 离线单测 `scripts/test-section-rewrite.mjs`：28/28（分节 8 + 归一化 10 + 提示词 10）
+- 浏览器 E2E `scripts/verify-p13-browser.sh`（agent-browser + 合成 run 注入）：34/34 全绿（向导三步/高级模式/⌘K 面板与跳转/稿优先行序/抽屉折叠展开/指着改 hover+面板/版本树只读/console 零错误）
+- 在线回归 `scripts/regression-p13.mjs`：18/18（真 LLM 选段重写两轮：v0→v1→v2 连续累加、未选中节原文保留、[1] 引用保留、越界 400、飞轮规则提炼 3 条）
+- tsc / eslint 双零
+- 踩坑留痕：①agent-browser `find text` 会命中被对话框遮挡的背景同名元素（看板 run 卡）→ 面板项须 `find role option`；②opacity-0 的 hover 按钮直接 click 报「被覆盖」→ 先 hover 分节再按快照 ref 点击；③快照 -i 不含非交互文本（label/正文）→ 文本断言用 read

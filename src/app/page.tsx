@@ -1,26 +1,59 @@
 "use client"
 
-import { useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Button } from "@/components/ui/button"
 import { IntelPanel } from "@/components/intel-panel"
 import { StudioPanel } from "@/components/studio-panel"
 import { VideoPanel } from "@/components/video-panel"
 import { ImagePanel } from "@/components/image-panel"
 import { EcoPanel } from "@/components/eco-panel"
 import { SettingsPanel } from "@/components/settings-panel"
-import { Radar, PenLine, Clapperboard, Puzzle, Settings2, FileText, ImageIcon } from "lucide-react"
+import { CommandPalette } from "@/components/command-palette"
+import { Radar, PenLine, Clapperboard, Puzzle, Settings2, FileText, ImageIcon, Command } from "lucide-react"
 
 export default function Home() {
   // 情报中心「去创作」动线：选题种子 → 主 Tab 创作台 → 内层图文线自动填入
   const [mainTab, setMainTab] = useState("intel")
   const [lineTab, setLineTab] = useState("article")
   const [createSeed, setCreateSeed] = useState<{ title: string; angle: string } | null>(null)
+  // ⌘K 命令面板（P1：跨线快捷动作 + 最近 Run 直达）
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  // 面板 → 创作台的确定性联动（props 传递，不依赖 window 事件时序）：
+  // wizardFocus 自增 → 新图文聚焦向导；jumpRunId → 直达 run 详情
+  const [wizardFocus, setWizardFocus] = useState(0)
+  const [jumpRunId, setJumpRunId] = useState<string | null>(null)
 
   const goCreate = (title: string, angle: string) => {
     setCreateSeed({ title, angle })
     setLineTab("article")
     setMainTab("studio")
   }
+
+  const onNavigate = useCallback((m: string, l?: string, extra?: { runId?: string; wizard?: boolean }) => {
+    if (l) setLineTab(l)
+    setMainTab(m)
+    if (extra?.wizard) setWizardFocus((n) => n + 1)
+    if (extra?.runId) setJumpRunId(extra.runId)
+  }, [])
+
+  // 全局快捷键：⌘K/Ctrl+K 开面板；⌘1/2/3 三产线直达
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey
+      if (!mod) return
+      if (e.key.toLowerCase() === "k") {
+        e.preventDefault()
+        setPaletteOpen((v) => !v)
+      } else if (e.key === "1" || e.key === "2" || e.key === "3") {
+        e.preventDefault()
+        setLineTab(e.key === "1" ? "article" : e.key === "2" ? "video" : "image")
+        setMainTab("studio")
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [])
 
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-b from-background to-background">
@@ -43,6 +76,15 @@ export default function Home() {
             <span className="text-[10px] font-mono text-muted-foreground border rounded-full px-2 py-0.5">
               18 主题 · wewrite · art-motion · Agnes
             </span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1.5 text-[11px] px-2.5"
+              onClick={() => setPaletteOpen(true)}
+              title="命令面板：跨线动作与最近 Run（⌘K / Ctrl+K）"
+            >
+              <Command className="h-3 w-3" />⌘K
+            </Button>
           </div>
         </div>
       </header>
@@ -89,7 +131,7 @@ export default function Home() {
                 </span>
               </div>
               <TabsContent value="article" className="mt-0">
-                <StudioPanel seed={createSeed} />
+                <StudioPanel seed={createSeed} wizardFocus={wizardFocus} jumpRunId={jumpRunId} />
               </TabsContent>
               <TabsContent value="video" className="mt-0">
                 <VideoPanel />
@@ -109,6 +151,9 @@ export default function Home() {
           </TabsContent>
         </Tabs>
       </main>
+
+      {/* ⌘K 命令面板（P1 交互三件套） */}
+      <CommandPalette open={paletteOpen} setOpen={setPaletteOpen} onNavigate={onNavigate} />
 
       {/* Footer（sticky bottom） */}
       <footer className="mt-auto border-t bg-background">
