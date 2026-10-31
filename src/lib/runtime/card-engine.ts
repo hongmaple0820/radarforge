@@ -72,6 +72,45 @@ export interface CardPlanItem {
   caption?: string // 画廊图注（≤ 30 字）
 }
 
+// ---------- LLM 文案规划宽容解析（纯函数，可离线单测） ----------
+
+/** 宽容解析 LLM 版式卡规划（模板/版系非法值回退默认，metrics 兜底裁剪） */
+export function parseCardPlan(raw: unknown, count: number): CardPlanItem[] {
+  const arr = Array.isArray(raw) ? raw : []
+  const templateOk = new Set(CARD_TEMPLATES.map((t) => t.id as string))
+  const familyOk = new Set(CARD_FAMILIES.map((f) => f.id as string))
+  const out: CardPlanItem[] = []
+  for (const it of arr) {
+    if (!it || typeof it !== "object") continue
+    const x = it as Record<string, unknown>
+    const title = typeof x.title === "string" ? x.title.trim() : ""
+    const quote = typeof x.quote === "string" ? x.quote.trim() : ""
+    if (!title && !quote) continue
+    const metrics = Array.isArray(x.metrics)
+      ? (x.metrics as Record<string, unknown>[])
+          .filter((m) => m && typeof m.value === "string" && String(m.value).trim())
+          .slice(0, 4)
+          .map((m) => ({ value: String(m.value).slice(0, 12), label: String(m.label ?? "").slice(0, 18) }))
+      : []
+    const template = templateOk.has(String(x.template)) ? (String(x.template) as CardPlanItem["template"]) : quote ? "quote" : metrics.length >= 2 ? "data" : "cover"
+    out.push({
+      template,
+      family: familyOk.has(String(x.family)) ? (String(x.family) as CardPlanItem["family"]) : "editorial",
+      palette: typeof x.palette === "string" ? x.palette : undefined,
+      eyebrow: typeof x.eyebrow === "string" ? x.eyebrow.slice(0, 16) : undefined,
+      title: (title || quote).slice(0, 24),
+      subtitle: typeof x.subtitle === "string" ? x.subtitle.slice(0, 36) : undefined,
+      quote: quote ? quote.slice(0, 66) : undefined,
+      attribution: typeof x.attribution === "string" ? x.attribution.slice(0, 26) : undefined,
+      metrics: metrics.length > 0 ? metrics : undefined,
+      footer: typeof x.footer === "string" ? x.footer.slice(0, 30) : undefined,
+      caption: typeof x.caption === "string" ? x.caption.slice(0, 20) : `${CARD_TEMPLATES.find((t) => t.id === template)?.label ?? "版式卡"}`,
+    })
+    if (out.length >= count) break
+  }
+  return out
+}
+
 // ---------- HTML 生成（纯函数，可离线单测） ----------
 
 function esc(s: string): string {
@@ -236,7 +275,7 @@ function swissData(p: CardPlanItem, accent: string, soft: string): string {
         <div class="eyebrow">${esc(clamp(p.eyebrow ?? "DATA BRIEFING", 16))}</div>
         <h2 style="font-size:6vmin; line-height:1.2; font-weight:900; letter-spacing:-0.03vmin; margin:1.6vmin 0 0;">${esc(clamp(p.title, 22))}</h2>
       </div>
-      <div style="flex:1; display:grid; grid-template-columns:repeat(${cols},1fr); gap:0; margin-top:4vmin; border-top:0.3vmin solid ${accent};">
+      <div style="flex:1; display:grid; grid-template-columns:repeat(${cols},1fr); grid-auto-rows:1fr; gap:0; margin-top:4vmin; border-top:0.3vmin solid ${accent};">
         ${metrics
           .map(
             (m, i) => `
