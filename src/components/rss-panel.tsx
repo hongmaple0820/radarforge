@@ -49,7 +49,7 @@ const STATUS_ICON: Record<string, { icon: typeof CircleDot; cls: string; label: 
   pending: { icon: CircleDashed, cls: "text-muted-foreground", label: "未拉取" },
 }
 
-export function RssPanel() {
+export function RssPanel({ onDataChange }: { onDataChange?: () => void }) {
   const { toast } = useToast()
   const [feeds, setFeeds] = useState<FeedInfo[]>([])
   const [items, setItems] = useState<FeedItemInfo[]>([])
@@ -106,6 +106,7 @@ export function RssPanel() {
       if (!res.ok) throw new Error(json.error)
       toast({ title: "已转选题池", description: json.message })
       await refresh()
+      onDataChange?.() // 通知父组件刷新选题池（转选题后立即可见，不再「看起来丢了」）
     } catch (e) {
       toast({ title: "转选题失败", description: (e as Error).message, variant: "destructive" })
     } finally {

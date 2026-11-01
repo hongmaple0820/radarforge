@@ -79,16 +79,18 @@ toolRegistry.register({
   name: "create_idea",
   description: "把一条选题写入选题池（ideas 表），可打分",
   builtin: true,
-  params: { title: "选题标题", angle: "切入角度", score: "0-10 评分", topicId: "关联话题 id（可选）" },
+  params: { title: "选题标题", angle: "切入角度", score: "0-10 评分", topicId: "关联话题 id（可选）", source: "入池渠道 manual|rss|search|report|ai（可选，默认 manual）" },
   async run(input) {
     const title = String(input.title ?? "")
     if (!title) throw new Error("create_idea 需要 title 参数")
+    const src = ["manual", "rss", "search", "report", "ai"].includes(String(input.source ?? "")) ? String(input.source) : "manual"
     return db.idea.create({
       data: {
         title: title.slice(0, 200),
         angle: String(input.angle ?? "").slice(0, 500),
         score: typeof input.score === "number" ? input.score : 0,
         topicId: input.topicId ? String(input.topicId) : null,
+        source: src,
       },
     })
   },

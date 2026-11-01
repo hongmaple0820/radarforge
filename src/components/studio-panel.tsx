@@ -28,10 +28,10 @@ interface ThemeInfo { id: string; label: string; category: string; description: 
 interface IdeaItem { id: string; title: string; angle: string; status: string }
 interface ExemplarItem { id: string; name: string; source: string; createdAt: string; words: number; fingerprint: { structure: string; rhythm: string; lexicon: string; rhetoric: string; voice: string; endings: string } }
 
-/** seed：情报中心「去创作」送来的选题（自动填入并聚焦）
+/** seed：情报中心「去创作」送来的选题（自动填入并聚焦；含 ideaId 闭环）
  *  wizardFocus：⌘K「新图文」自增信号 → 重置到向导第一步
  *  jumpRunId：⌘K「最近 Run」直达详情（确定性 props 传递） */
-export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { title: string; angle: string } | null; wizardFocus?: number; jumpRunId?: string | null }) {
+export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { title: string; angle: string; ideaId?: string } | null; wizardFocus?: number; jumpRunId?: string | null }) {
   const { toast } = useToast()
   const [runs, setRuns] = useState<RunItem[]>([])
   const [personas, setPersonas] = useState<PersonaInfo[]>([])
@@ -113,7 +113,7 @@ export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { tit
     return () => clearInterval(t)
   }, [runs, refresh])
 
-  const start = async (payload?: { ideaTitle: string; ideaAngle: string; persona: string; theme: string; exemplarId: string }) => {
+  const start = async (payload?: { ideaTitle: string; ideaAngle: string; persona: string; theme: string; exemplarId: string; ideaId?: string }) => {
     const t = payload?.ideaTitle ?? ideaTitle
     if (!t.trim()) return
     setStarting(true)
@@ -127,6 +127,7 @@ export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { tit
           persona: payload?.persona ?? persona,
           theme: payload?.theme ?? theme,
           exemplarId: payload?.exemplarId ?? exemplarId,
+          ideaId: payload?.ideaId,
         }),
       })
       const json = await res.json()

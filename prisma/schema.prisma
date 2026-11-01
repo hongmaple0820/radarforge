@@ -96,6 +96,7 @@ model Idea {
   angle      String   @default("")
   score      Float    @default(0)
   status     String   @default("new") // new | picked | done
+  source     String   @default("manual") // manual | rss | search | report | ai（入池渠道，选题池管理用）
   topicId    String?
   topic      Topic?   @relation(fields: [topicId], references: [id])
   runId      String?

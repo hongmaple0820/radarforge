@@ -3,8 +3,11 @@
 // ============================================================
 // intel-panel —— 情报中心（雷达 × 灵感池融合）
 // 一条动线：话题雷达 → AI 搜索（写前情报）→ 早报（claims 溯源）
-// → 选题池（AI 刷新 / 搜索一键转选题 / 早报转选题）→ 去创作
+// → 选题池（AI 刷新 / 搜索一键转选题 / 早报转选题 / RSS 转选题）→ 去创作
 // 融合理由：雷达产出情报、灵感池消费情报，本是上下游。
+// P2：RSS 转选题回调同步选题池；来源徽章/状态筛选/池统计；
+// 早报方向可选（留空 = AI 自主）；灵感刷新方向可选 + RSS 燃料；
+// 页面打开时 fire 自动化 tick（到期任务补跑）。
 // ============================================================
 
 import { useCallback, useEffect, useState } from "react"
@@ -17,13 +20,14 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { useToast } from "@/hooks/use-toast"
 import { MdView } from "./md-view"
 import { RssPanel } from "./rss-panel"
-import { Radar, Plus, Trash2, RefreshCw, ExternalLink, Newspaper, MessageSquarePlus, Loader2, Search, Lightbulb, Star, CircleDot, CheckCheck, Sparkles, Send } from "lucide-react"
+import { Radar, Plus, Trash2, RefreshCw, ExternalLink, Newspaper, MessageSquarePlus, Loader2, Search, Lightbulb, Star, CircleDot, CheckCheck, Sparkles, Send, FileCheck2 } from "lucide-react"
 
 interface Topic { id: string; name: string; keywords: string; description: string; createdAt: string; _count?: { reports: number; ideas: number } }
 interface Claim { id: string; idx: number; quote: string; sourceTitle: string; sourceUrl: string; sourceSite: string; sourceDate: string }
 interface Report { id: string; title: string; content: string; mode: string; provider: string; createdAt: string; topic?: { name: string } | null; claims: Claim[]; _count?: { claims: number } }
-interface Idea { id: string; title: string; angle: string; score: number; status: string; createdAt: string; topic?: { name: string } | null }
+interface Idea { id: string; title: string; angle: string; score: number; status: string; source: string; runId: string | null; createdAt: string; topic?: { name: string } | null }
 interface SearchHit { title: string; url: string; site: string; date: string; passage: string }
+interface IdeaStats { total: number; new: number; picked: number; done: number; bySource: Record<string, number> }
 
 const STATUS_META: Record<string, { label: string; icon: typeof Lightbulb; className: string }> = {
   new: { label: "新选题", icon: Lightbulb, className: "bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-300" },
@@ -31,8 +35,16 @@ const STATUS_META: Record<string, { label: string; icon: typeof Lightbulb; class
   done: { label: "已完成", icon: CheckCheck, className: "bg-muted text-muted-foreground border-border" },
 }
 
-/** 「去创作」回调：把选题送进图文线（由 page 层路由到创作台） */
-export function IntelPanel({ onGoCreate }: { onGoCreate?: (title: string, angle: string) => void }) {
+const SOURCE_META: Record<string, { label: string; className: string }> = {
+  manual: { label: "手动", className: "border-slate-300 text-slate-500 dark:text-slate-400" },
+  rss: { label: "RSS", className: "border-sky-300 text-sky-600 dark:text-sky-400" },
+  search: { label: "搜索", className: "border-violet-300 text-violet-600 dark:text-violet-400" },
+  report: { label: "早报", className: "border-rose-300 text-rose-600 dark:text-rose-400" },
+  ai: { label: "AI", className: "border-amber-300 text-amber-600 dark:text-amber-400" },
+}
+
+/** 「去创作」回调：把选题送进图文线（由 page 层路由到创作台；带 ideaId 闭环） */
+export function IntelPanel({ onGoCreate }: { onGoCreate?: (title: string, angle: string, ideaId?: string) => void }) {
   const { toast } = useToast()
   // 雷达区
   const [topics, setTopics] = useState<Topic[]>([])
@@ -49,8 +61,11 @@ export function IntelPanel({ onGoCreate }: { onGoCreate?: (title: string, angle:
   const [adopting, setAdopting] = useState<string | null>(null)
   // 灵感池区
   const [ideas, setIdeas] = useState<Idea[]>([])
+  const [ideaStats, setIdeaStats] = useState<IdeaStats | null>(null)
+  const [ideaFilter, setIdeaFilter] = useState<"" | "new" | "picked" | "done">("")
   const [newIdea, setNewIdea] = useState({ title: "", angle: "" })
   const [refreshing, setRefreshing] = useState(false)
+  const [refreshDir, setRefreshDir] = useState("")
 
   const refresh = useCallback(async () => {
     const [t, r, i] = await Promise.all([
@@ -61,12 +76,27 @@ export function IntelPanel({ onGoCreate }: { onGoCreate?: (title: string, angle:
     setTopics(t.topics ?? [])
     setReports(r.reports ?? [])
     setIdeas(i.ideas ?? [])
+    setIdeaStats(i.stats ?? null)
   }, [])
 
   useEffect(() => {
     const t = setTimeout(() => void refresh(), 0)
     return () => clearTimeout(t)
   }, [refresh])
+
+  // 自动化补跑（fire-and-forget）：打开情报中心时检查到期任务
+  // （沙箱进程不常驻 → 「打开应用即补跑」模型，详见设置中心 · 自动化）
+  useEffect(() => {
+    fetch("/api/automation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "tick" }) })
+      .then((x) => x.json())
+      .then((j: { ran?: string[] }) => {
+        if (j.ran?.length) {
+          toast({ title: `自动化补跑 ${j.ran.length} 个到期任务`, description: j.ran.join("、") })
+          void refresh()
+        }
+      })
+      .catch(() => {} /* 静默：补跑失败不干扰浏览 */)
+  }, [refresh, toast])
 
   // ---------- 雷达 ----------
   const addTopic = async () => {
@@ -92,15 +122,16 @@ export function IntelPanel({ onGoCreate }: { onGoCreate?: (title: string, angle:
       const body: Record<string, string> = {}
       const t = topics.find((x) => x.name === query)
       if (t) body.topicId = t.id
-      else body.query = query || "AI 大模型 最新进展"
+      else if (query.trim()) body.query = query.trim()
+      // 方向可选：留空不带 query/topicId → 后端 AI 自主链（雷达话题关键词 → RSS 热点 → 泛方向）
       const res = await fetch("/api/morning-report", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? "生成失败")
       await refresh()
       if (json.report) await openReport(json.report.id)
       toast({
-        title: `早报已生成（${json.searchMode === "REAL" ? "真实检索" : "演示模式"}）`,
-        description: `证据 ${json.evidenceCount} 条 · provider: ${json.provider}`,
+        title: `早报已生成（${json.searchMode === "REAL" ? "真实检索" : "演示模式"}${json.autonomous ? " · AI 自主选题" : ""}）`,
+        description: `${json.autonomous ? `自主方向：${json.query} · `: ""}证据 ${json.evidenceCount} 条 · provider: ${json.provider}`,
       })
     } catch (e) {
       toast({ title: "生成失败", description: (e as Error).message, variant: "destructive" })
@@ -153,7 +184,7 @@ export function IntelPanel({ onGoCreate }: { onGoCreate?: (title: string, angle:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: "create_idea",
-          input: { title: hit.title.slice(0, 100), angle: `信源：${hit.site}${hit.date ? `（${hit.date.slice(0, 10)}）` : ""}。${hit.passage.slice(0, 120)}` },
+          input: { title: hit.title.slice(0, 100), angle: `信源：${hit.site}${hit.date ? `（${hit.date.slice(0, 10)}）` : ""}。${hit.passage.slice(0, 120)}`, source: "search" },
         }),
       })
       if (!res.ok) throw new Error("入池失败")
@@ -174,7 +205,7 @@ export function IntelPanel({ onGoCreate }: { onGoCreate?: (title: string, angle:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: "create_idea",
-          input: { title: report.title.slice(0, 100), angle: `来自早报《${report.title.slice(0, 40)}》（${report._count?.claims ?? report.claims?.length ?? 0} 条证据）。${report.content.replace(/[#*\n]/g, " ").slice(0, 100)}` },
+          input: { title: report.title.slice(0, 100), angle: `来自早报《${report.title.slice(0, 40)}》（${report._count?.claims ?? report.claims?.length ?? 0} 条证据）。${report.content.replace(/[#*\n]/g, " ").slice(0, 100)}`, source: "report" },
         }),
       })
       if (!res.ok) throw new Error("入池失败")
@@ -212,10 +243,15 @@ export function IntelPanel({ onGoCreate }: { onGoCreate?: (title: string, angle:
   const refreshIdeas = async () => {
     setRefreshing(true)
     try {
-      const res = await fetch("/api/ideas/refresh", { method: "POST" })
+      const res = await fetch("/api/ideas/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(refreshDir.trim() ? { direction: refreshDir.trim() } : {}),
+      })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error)
       toast({ title: json.message ?? "刷新完成", description: json.created ? `新增 ${json.created} 条` : undefined })
+      setRefreshDir("")
       await refresh()
     } catch (e) {
       toast({ title: "刷新失败", description: (e as Error).message, variant: "destructive" })
@@ -226,8 +262,8 @@ export function IntelPanel({ onGoCreate }: { onGoCreate?: (title: string, angle:
 
   return (
     <div className="space-y-4">
-      {/* 顶部：RSS 信源（P1 p14：订阅式情报底座，先看见才谈生产） */}
-      <RssPanel />
+      {/* 顶部：RSS 信源（P1 p14：订阅式情报底座；P2：转选题后回调同步选题池） */}
+      <RssPanel onDataChange={() => void refresh()} />
 
       {/* 顶部：AI 搜索（写前情报，归位情报中心） */}
       <Card>
@@ -285,6 +321,9 @@ export function IntelPanel({ onGoCreate }: { onGoCreate?: (title: string, angle:
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-base"><Radar className="h-4 w-4 text-amber-500" />话题雷达</CardTitle>
+              <p className="text-[10px] text-muted-foreground leading-snug">
+                雷达 = 持续监测的「方向」：驱动早报检索词 + AI 灵感刷新的燃料，不直接入池；选题池里的条目是一次性「任务」，直接去创作。点话题名可定向生成早报
+              </p>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex gap-2">
@@ -294,14 +333,14 @@ export function IntelPanel({ onGoCreate }: { onGoCreate?: (title: string, angle:
               <Input placeholder="关键词（逗号分隔，可选）" value={newTopic.keywords} onChange={(e) => setNewTopic({ ...newTopic, keywords: e.target.value })} onKeyDown={(e) => e.key === "Enter" && addTopic()} />
               <ScrollArea className="max-h-48">
                 <div className="space-y-1.5">
-                  {topics.length === 0 && <p className="text-xs text-muted-foreground py-3 text-center">暂无话题，添加一个开始追踪</p>}
+                  {topics.length === 0 && <p className="text-xs text-muted-foreground py-3 text-center">暂无话题，添加一个开始追踪（早报与灵感刷新会围绕它）</p>}
                   {topics.map((t) => (
                     <motion.div key={t.id} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between group rounded-md border px-2.5 py-2 hover:border-amber-300 transition-colors">
-                      <button className="text-left flex-1 min-w-0" onClick={() => setQuery(t.name)}>
+                      <button className="text-left flex-1 min-w-0" onClick={() => setQuery(t.name)} title="点话题名 → 用它生成早报">
                         <div className="text-sm font-medium truncate">{t.name}</div>
                         {t.keywords && <div className="text-[11px] text-muted-foreground truncate">{t.keywords}</div>}
                       </button>
-                      <span className="text-[10px] text-muted-foreground mr-1.5 shrink-0">{t._count?.reports ?? 0} 期</span>
+                      <span className="text-[10px] text-muted-foreground mr-1.5 shrink-0" title="该话题产出的早报期数 / 入池选题数">{t._count?.reports ?? 0} 期报 · {t._count?.ideas ?? 0} 选题</span>
                       <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100" onClick={() => removeTopic(t.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
                     </motion.div>
                   ))}
@@ -313,13 +352,13 @@ export function IntelPanel({ onGoCreate }: { onGoCreate?: (title: string, angle:
           <Card>
             <CardContent className="pt-4 space-y-2">
               <div className="flex gap-2">
-                <Input placeholder="检索词或点击上方话题" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && generate()} />
+                <Input placeholder="方向（可选）：留空则 AI 自主选题；也可点上方话题定向" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && generate()} />
                 <Button onClick={generate} disabled={generating} className="bg-amber-500 hover:bg-amber-600 text-white shrink-0">
                   {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Newspaper className="h-4 w-4" />}
-                  早报
+                  出早报
                 </Button>
               </div>
-              <p className="text-[11px] text-muted-foreground">真实检索（元宝 SearchPro）→ LLM 撰写 → [n] 逐条溯源落账</p>
+              <p className="text-[11px] text-muted-foreground">真实检索（元宝 SearchPro）→ LLM 撰写 → [n] 逐条溯源落账；定时生成可在「设置中心 → 自动化」配置</p>
             </CardContent>
           </Card>
 
@@ -405,33 +444,55 @@ export function IntelPanel({ onGoCreate }: { onGoCreate?: (title: string, angle:
           </CardContent>
         </Card>
 
-        {/* 右列：选题池（灵感池，融合完成） */}
+        {/* 右列：选题池（灵感池，融合完成；P2：来源徽章 + 状态筛选 + 统计 + Run 闭环） */}
         <Card className="min-h-[560px]">
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base"><Lightbulb className="h-4 w-4 text-amber-500" />选题池</CardTitle>
-            <p className="text-[11px] text-muted-foreground">雷达情报 → 选题 → 创作台执行（一条动线）</p>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Lightbulb className="h-4 w-4 text-amber-500" />选题池
+              {ideaStats && <span className="text-[10px] font-normal text-muted-foreground">共 {ideaStats.total} · 新 {ideaStats.new} · 采纳 {ideaStats.picked} · 完成 {ideaStats.done}</span>}
+            </CardTitle>
+            <p className="text-[11px] text-muted-foreground">五路入池（手动/RSS/搜索/早报/AI）→ 采纳 → 去创作 → Run 完成自动置「已完成」</p>
           </CardHeader>
           <CardContent className="space-y-2">
             <div className="flex gap-2">
-              <Input placeholder="选题标题" value={newIdea.title} onChange={(e) => setNewIdea({ ...newIdea, title: e.target.value })} onKeyDown={(e) => e.key === "Enter" && add()} />
+              <Input placeholder="手动加一条选题标题" value={newIdea.title} onChange={(e) => setNewIdea({ ...newIdea, title: e.target.value })} onKeyDown={(e) => e.key === "Enter" && add()} />
               <Button size="icon" onClick={add} disabled={!newIdea.title.trim()}><Plus className="h-4 w-4" /></Button>
             </div>
-            <Button onClick={refreshIdeas} disabled={refreshing} variant="outline" className="w-full">
-              {refreshing ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Sparkles className="h-4 w-4 mr-1 text-amber-500" />}
-              AI 刷新灵感
-            </Button>
-            <p className="text-[10px] text-muted-foreground leading-snug">基于雷达话题 + 近期早报 + 风格定位自动生成；与近 7 天池内选题自动去重</p>
+            <div className="flex gap-2">
+              <Input placeholder="AI 刷新方向（可选）：留空则综合雷达/早报/RSS 自主" value={refreshDir} onChange={(e) => setRefreshDir(e.target.value)} onKeyDown={(e) => e.key === "Enter" && refreshIdeas()} />
+              <Button onClick={refreshIdeas} disabled={refreshing} variant="outline" className="shrink-0">
+                {refreshing ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Sparkles className="h-4 w-4 mr-1 text-amber-500" />}
+                AI 刷新
+              </Button>
+            </div>
+            <p className="text-[10px] text-muted-foreground leading-snug">只新增不覆盖：7 天内同题自动去重，你手选/历史的选题永不被动过</p>
+            {/* 状态筛选 */}
+            <div className="flex items-center gap-1">
+              {([["", "全部"], ["new", "新选题"], ["picked", "已采纳"], ["done", "已完成"]] as const).map(([v, label]) => (
+                <button
+                  key={v || "all"}
+                  onClick={() => setIdeaFilter(v)}
+                  className={`text-[10px] rounded-full px-2 py-0.5 border transition-colors ${ideaFilter === v ? "border-amber-400 bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 font-medium" : "text-muted-foreground hover:border-amber-300"}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             <ScrollArea className="max-h-[420px]">
               <div className="space-y-2 pr-2">
                 {ideas.length === 0 && (
-                  <div className="flex flex-col items-center py-10 text-muted-foreground">
+                  <div className="flex flex-col items-center py-10 text-muted-foreground text-center">
                     <Lightbulb className="h-7 w-7 mb-2 opacity-30" />
-                    <p className="text-xs">池子为空：AI 刷新 / 搜索转选题 / 早报转选题</p>
+                    <p className="text-xs">{ideaFilter ? "该状态下暂无选题" : "池子为空，五路任选其一入池："}</p>
+                    {!ideaFilter && <p className="text-[10px] mt-1 leading-relaxed">① 上方手动加 · ② RSS 条目「转选题」· ③ 搜索结果「转选题」· ④ 早报「转选题」· ⑤ AI 刷新<br />（若此前转过但现在为空：沙箱回收会重置数据库，选题/早报/话题等业务数据会丢失，密钥与调优态由 boot-restore 自动恢复）</p>}
                   </div>
                 )}
-                {ideas.map((idea) => {
+                {ideas
+                  .filter((x) => !ideaFilter || x.status === ideaFilter)
+                  .map((idea) => {
                   const meta = STATUS_META[idea.status] ?? STATUS_META.new
                   const Icon = meta.icon
+                  const srcMeta = SOURCE_META[idea.source] ?? SOURCE_META.manual
                   return (
                     <motion.div key={idea.id} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} className="group rounded-lg border p-2.5 space-y-1.5 hover:border-amber-300 transition-colors">
                       <div className="flex items-start justify-between gap-2">
@@ -447,17 +508,25 @@ export function IntelPanel({ onGoCreate }: { onGoCreate?: (title: string, angle:
                       </div>
                       {idea.angle && <p className="text-[10px] text-muted-foreground line-clamp-2">{idea.angle}</p>}
                       <div className="flex items-center justify-between gap-1.5">
-                        <Badge variant="outline" className={`text-[9px] gap-1 ${meta.className}`}>
-                          <Icon className="h-3 w-3" />
-                          {meta.label}
-                        </Badge>
+                        <div className="flex items-center gap-1 flex-wrap">
+                          <Badge variant="outline" className={`text-[9px] gap-1 ${meta.className}`}>
+                            <Icon className="h-3 w-3" />
+                            {meta.label}
+                          </Badge>
+                          <Badge variant="outline" className={`text-[9px] px-1 py-0 ${srcMeta.className}`}>{srcMeta.label}</Badge>
+                          {idea.runId && (
+                            <Badge variant="outline" className="text-[9px] px-1 py-0 border-emerald-400 text-emerald-600 dark:text-emerald-400" title="该选题已启动创作流水线">
+                              <FileCheck2 className="h-2.5 w-2.5" />已出稿线
+                            </Badge>
+                          )}
+                        </div>
                         <div className="flex items-center gap-1">
                           {onGoCreate && (
-                            <Button size="sm" variant="outline" className="h-5 text-[9px] px-1.5" onClick={() => onGoCreate(idea.title, idea.angle)}>
+                            <Button size="sm" variant="outline" className="h-5 text-[9px] px-1.5" onClick={() => onGoCreate(idea.title, idea.angle, idea.id)}>
                               <Send className="h-2.5 w-2.5 mr-0.5" />去创作
                             </Button>
                           )}
-                          <Button size="sm" variant="outline" className="h-5 text-[9px] px-1.5" onClick={() => advance(idea)}>
+                          <Button size="sm" variant="outline" className="h-5 text-[9px] px-1.5" onClick={() => advance(idea)} title={idea.runId ? "已关联 Run，状态由流水线自动推进" : "手动推进状态：新选题 → 已采纳 → 已完成"}>
                             {idea.status === "new" ? "采纳" : idea.status === "picked" ? "完成" : "重开"}
                           </Button>
                         </div>

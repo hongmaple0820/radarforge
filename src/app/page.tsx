@@ -13,10 +13,10 @@ import { CommandPalette } from "@/components/command-palette"
 import { Radar, PenLine, Clapperboard, Puzzle, Settings2, FileText, ImageIcon, Command } from "lucide-react"
 
 export default function Home() {
-  // 情报中心「去创作」动线：选题种子 → 主 Tab 创作台 → 内层图文线自动填入
+  // 情报中心「去创作」动线：选题种子 → 主 Tab 创作台 → 内层图文线自动填入（含 ideaId 闭环）
   const [mainTab, setMainTab] = useState("intel")
   const [lineTab, setLineTab] = useState("article")
-  const [createSeed, setCreateSeed] = useState<{ title: string; angle: string } | null>(null)
+  const [createSeed, setCreateSeed] = useState<{ title: string; angle: string; ideaId?: string } | null>(null)
   // ⌘K 命令面板（P1：跨线快捷动作 + 最近 Run 直达）
   const [paletteOpen, setPaletteOpen] = useState(false)
   // 面板 → 创作台的确定性联动（props 传递，不依赖 window 事件时序）：
@@ -24,8 +24,8 @@ export default function Home() {
   const [wizardFocus, setWizardFocus] = useState(0)
   const [jumpRunId, setJumpRunId] = useState<string | null>(null)
 
-  const goCreate = (title: string, angle: string) => {
-    setCreateSeed({ title, angle })
+  const goCreate = (title: string, angle: string, ideaId?: string) => {
+    setCreateSeed({ title, angle, ideaId })
     setLineTab("article")
     setMainTab("studio")
   }

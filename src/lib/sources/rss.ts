@@ -329,9 +329,10 @@ export async function promoteItemToIdea(itemId: string): Promise<{ ideaId: strin
   const idea = await db.idea.create({
     data: {
       title: item.title.slice(0, 200),
-      angle: item.summary.slice(0, 300),
+      angle: `信源 ${item.feed.name}${item.publishedAt ? `（${new Date(item.publishedAt).toISOString().slice(0, 10)}）` : ""}：${item.summary.slice(0, 260)}`,
       score: 0,
       status: "new",
+      source: "rss",
     },
   })
   await db.feedItem.update({ where: { id: itemId }, data: { status: "promoted", ideaId: idea.id } })

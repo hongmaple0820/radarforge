@@ -1,9 +1,27 @@
 import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
 
-export async function GET() {
-  const ideas = await db.idea.findMany({ orderBy: { createdAt: "desc" }, take: 50, include: { topic: { select: { name: true } } } })
-  return NextResponse.json({ ideas })
+// GET /api/ideas?status=new|picked|done&limit=50 —— 列表（默认全部）+ 池统计
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url)
+  const status = ["new", "picked", "done"].includes(searchParams.get("status") ?? "") ? searchParams.get("status")! : undefined
+  const limit = Math.min(200, Math.max(1, Number(searchParams.get("limit")) || 50))
+  const [ideas, total, byStatus, bySource] = await Promise.all([
+    db.idea.findMany({ where: status ? { status } : undefined, orderBy: { createdAt: "desc" }, take: limit, include: { topic: { select: { name: true } } } }),
+    db.idea.count(),
+    db.idea.groupBy({ by: ["status"], _count: { _all: true } }),
+    db.idea.groupBy({ by: ["source"], _count: { _all: true } }),
+  ])
+  return NextResponse.json({
+    ideas,
+    stats: {
+      total,
+      new: byStatus.find((s) => s.status === "new")?._count._all ?? 0,
+      picked: byStatus.find((s) => s.status === "picked")?._count._all ?? 0,
+      done: byStatus.find((s) => s.status === "done")?._count._all ?? 0,
+      bySource: Object.fromEntries(bySource.map((s) => [s.source, s._count._all])),
+    },
+  })
 }
 
 export async function PATCH(req: Request) {

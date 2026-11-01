@@ -67,6 +67,7 @@ export interface CreateArticleRunArgs {
   persona?: string
   theme?: string
   exemplarId?: string // 文风校准档案（style-exemplars；空=不校准）
+  ideaId?: string // 关联选题池条目（空=自由输入）；启动后回填 runId + status=picked
 }
 
 export async function createArticleRun(args: CreateArticleRunArgs): Promise<string> {
@@ -83,6 +84,12 @@ export async function createArticleRun(args: CreateArticleRunArgs): Promise<stri
       steps: JSON.stringify(initialSteps()),
     },
   })
+  // 选题闭环：从选题池启动的 Run 回填关联（采纳后去向可追）
+  if (args.ideaId) {
+    await db.idea
+      .update({ where: { id: args.ideaId }, data: { runId: run.id, status: "picked" } })
+      .catch(() => {} /* 坏 id 不阻断启动 */)
+  }
   return run.id
 }
 
@@ -654,6 +661,8 @@ async function executeArticleRun(runId: string): Promise<void> {
         finishedAt: new Date(),
       },
     })
+    // 选题闭环：成稿后关联选题置 done（采纳→创作→完成全链路闭环）
+    await db.idea.updateMany({ where: { runId }, data: { status: "done" } }).catch(() => {})
   } catch (e) {
     await db.agentRun
       .update({

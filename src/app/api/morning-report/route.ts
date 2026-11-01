@@ -20,6 +20,8 @@ export async function GET(req: Request) {
 }
 
 // ---------- POST: 生成早报 ----------
+// 方向三选一：topicId（点话题）> query（自由方向）> 都空 → AI 自主链
+// 自主链：雷达话题关键词聚合 → RSS 近期热点作补充证据 → 泛方向兜底
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as { topicId?: string; query?: string; count?: number }
@@ -36,12 +38,37 @@ export async function POST(req: Request) {
         query = (topic.keywords || topic.name).split(/[，,、\s]+/).slice(0, 3).join(" ")
       }
     }
-    if (!query) return NextResponse.json({ error: "请提供 topicId 或 query" }, { status: 400 })
 
-    // 2) 检索（网关降级链）
+    // 2) AI 自主模式（无 topicId 且无 query）
+    let autonomous = false
+    let rssHits: { title: string; site: string; date: string; summary: string }[] = []
+    if (!query) {
+      autonomous = true
+      const activeTopics = await db.topic.findMany({ where: { active: true }, take: 5 })
+      if (activeTopics.length > 0) {
+        // 雷达话题关键词聚合（创作者兴趣即方向）
+        topicName = activeTopics.map((t) => t.name).join("、").slice(0, 60)
+        query = activeTopics
+          .flatMap((t) => (t.keywords || t.name).split(/[，,、\s]+/).filter(Boolean))
+          .slice(0, 4)
+          .join(" ")
+      } else {
+        query = "AI 大模型 最新进展"
+      }
+      // RSS 近期热点作为补充证据（真实动态喂给编辑，不额外耗 LLM）
+      const items = await db.feedItem.findMany({
+        where: { createdAt: { gte: new Date(Date.now() - 2 * 864e5) } },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        include: { feed: { select: { name: true } } },
+      })
+      rssHits = items.map((i) => ({ title: i.title, site: i.feed.name, date: i.publishedAt ? new Date(i.publishedAt).toISOString().slice(0, 10) : "", summary: i.summary.slice(0, 160) }))
+    }
+
+    // 3) 检索（网关降级链）
     const search = await searchWithFallback({ query, count: body.count ?? 8 })
 
-    // 3) LLM 生成早报（[n] 引用契约）
+    // 4) LLM 生成早报（[n] 引用契约）
     const evidence = search.results
       .map((r, i) => `[${i + 1}] ${r.title}｜${r.site}｜${r.date}\n    ${r.passage.slice(0, 220)}`)
       .join("\n")
@@ -59,11 +86,18 @@ export async function POST(req: Request) {
       `- mode=DEMO 时在文末加一行说明「⚠ 本期基于演示数据生成（上游检索降级）」`,
     ].join("\n")
     const user = [
-      `话题：${topicName || query}`,
+      autonomous ? `本期为 AI 自主选题（未指定方向）：从证据里挑最有信息量的角度组织早报` : `话题：${topicName || query}`,
       `检索词：${query}（provider=${search.provider}，mode=${search.mode}）`,
       ``,
       `检索证据：`,
       evidence,
+      ...(rssHits.length > 0
+        ? [
+            ``,
+            `RSS 近期热点（选题氛围参考，不作为 [n] 证据）：`,
+            rssHits.map((h) => `- ${h.title}（${h.site}${h.date ? ` · ${h.date}` : ""}）`).join("\n"),
+          ]
+        : []),
     ].join("\n")
 
     const content = await chatRetry(
@@ -107,8 +141,21 @@ export async function POST(req: Request) {
     }
 
     const full = await db.report.findUnique({ where: { id: report.id }, include: { claims: true } })
-    return NextResponse.json({ report: full, searchMode: search.mode, provider: search.provider, evidenceCount: search.results.length })
+    return NextResponse.json({
+      report: full,
+      searchMode: search.mode,
+      provider: search.provider,
+      evidenceCount: search.results.length,
+      autonomous,
+      query,
+      message: autonomous ? `AI 自主选题（方向：${query}）` : undefined,
+    })
   } catch (e) {
-    return NextResponse.json({ error: (e as Error).message }, { status: 502 })
+    const msg = (e as Error).message ?? ""
+    // 429 → 人话（配额边界不裸抛）
+    if (/429|Too many requests/i.test(msg)) {
+      return NextResponse.json({ error: "LLM 配额受限（429）：稍后重试即可——检索与证据链路正常，仅撰写这步在等配额" }, { status: 503 })
+    }
+    return NextResponse.json({ error: msg }, { status: 502 })
   }
 }

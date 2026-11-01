@@ -27,6 +27,7 @@ export interface WizardPayload {
   persona: string
   theme: string
   exemplarId: string
+  ideaId?: string // 关联选题池条目（选题池直达/情报中心送入时携带，闭环回写状态）
 }
 
 const STEP_META = [
@@ -68,7 +69,7 @@ export function Wizard({
   starting,
   onStart,
 }: {
-  seed?: { title: string; angle: string } | null
+  seed?: { title: string; angle: string; ideaId?: string } | null
   personas: PersonaInfo[]
   themes: ThemeInfo[]
   ideas: IdeaItem[]
@@ -82,15 +83,22 @@ export function Wizard({
   const [persona, setPersona] = useState("cold-analyst")
   const [theme, setTheme] = useState("professional-clean")
   const [exemplarId, setExemplarId] = useState("")
+  const [ideaId, setIdeaId] = useState<string | undefined>(undefined)
 
   // 选题种子（情报中心「去创作」/ ⌘K「新图文」）→ 回第一步并填入；
-  // 空标题种子也响应（重置到第一步聚焦输入）
+  // 空标题种子也响应（重置到第一步聚焦输入）；手动改写标题时解绑选题关联
   useEffect(() => {
     if (!seed) return
     setIdeaTitle(seed.title ?? "")
     setIdeaAngle(seed.angle ?? "")
+    setIdeaId(seed.ideaId)
     setStep(0)
   }, [seed])
+
+  const onTitleChange = (v: string) => {
+    setIdeaTitle(v)
+    if (ideaId && v.trim() !== ideaTitle.trim()) setIdeaId(undefined) // 改题即解绑，避免误推进池内状态
+  }
 
   const newIdeas = useMemo(() => ideas.filter((i) => i.status === "new").slice(0, 6), [ideas])
   const themeGroups = useMemo(() => {
@@ -137,7 +145,7 @@ export function Wizard({
                   autoFocus
                   placeholder="一句话说清要写什么，如：具身智能融资观察"
                   value={ideaTitle}
-                  onChange={(e) => setIdeaTitle(e.target.value)}
+                  onChange={(e) => onTitleChange(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && canNext && setStep(1)}
                   className="h-11 text-sm"
                 />
@@ -155,7 +163,7 @@ export function Wizard({
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="text-[10px] text-muted-foreground flex items-center gap-0.5"><Lightbulb className="h-3 w-3" />选题池直达：</span>
                   {newIdeas.map((i) => (
-                    <button key={i.id} onClick={() => { setIdeaTitle(i.title); setIdeaAngle(i.angle ?? "") }} className="text-[10px] border rounded-full px-2 py-0.5 hover:border-amber-400 hover:text-amber-600 transition-colors truncate max-w-[220px]">
+                    <button key={i.id} onClick={() => { setIdeaTitle(i.title); setIdeaAngle(i.angle ?? ""); setIdeaId(i.id) }} className="text-[10px] border rounded-full px-2 py-0.5 hover:border-amber-400 hover:text-amber-600 transition-colors truncate max-w-[220px]">
                       {i.title}
                     </button>
                   ))}
@@ -275,7 +283,7 @@ export function Wizard({
               下一步<ArrowRight className="h-3.5 w-3.5 ml-1" />
             </Button>
           ) : (
-            <Button size="sm" onClick={() => onStart({ ideaTitle, ideaAngle, persona, theme, exemplarId })} disabled={!ideaTitle.trim() || starting} className="bg-amber-500 hover:bg-amber-600 text-white">
+            <Button size="sm" onClick={() => onStart({ ideaTitle, ideaAngle, persona, theme, exemplarId, ideaId })} disabled={!ideaTitle.trim() || starting} className="bg-amber-500 hover:bg-amber-600 text-white">
               {starting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Play className="h-4 w-4 mr-1" />}
               启动九步流水线
             </Button>

@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/hooks/use-toast"
-import { Settings2, Bot, Search, ImageIcon, Compass, Loader2, CheckCircle2, XCircle, KeyRound, Users, Video, Plus, Trash2, Zap, Download, Upload } from "lucide-react"
+import { Settings2, Bot, Search, ImageIcon, Compass, Loader2, CheckCircle2, XCircle, KeyRound, Users, Video, Plus, Trash2, Zap, Download, Upload, Timer, Play, ScrollText, Newspaper, Rss, Lightbulb } from "lucide-react"
 
 type AgnesSite = "cn" | "intl" | "custom"
 interface AgnesAccountForm {
@@ -49,6 +49,18 @@ interface SettingsData {
 
 type TestResult = { ok: boolean; detail?: string; error?: string; latencyMs?: number; results?: { id: string; label: string; ok: boolean; latencyMs: number; detail: string }[] } | null
 
+// 自动化任务（P2：定时早报 / RSS 刷新 / 灵感刷新）
+interface AutomationState {
+  config: {
+    morningReport: { enabled: boolean; time: string; direction: string }
+    rssRefresh: { enabled: boolean; intervalHours: number }
+    ideaRefresh: { enabled: boolean; time: string; direction: string }
+  }
+  log: { task: string; at: string; ok: boolean; message: string; trigger: string }[]
+  last: Record<string, string>
+  due: Record<string, boolean>
+}
+
 const AGNES_CHAT_MODELS = ["agnes-2.5-flash", "agnes-3.0-flash"]
 const AGNES_IMAGE_MODELS = ["agnes-image-2.1-flash", "agnes-image-2.5-flash"]
 const AGNES_VIDEO_MODELS = ["agnes-video-2.5-flash"]
@@ -78,6 +90,10 @@ export function SettingsPanel() {
   }>({ enabled: false, accounts: [], chatModel: "agnes-2.5-flash", imageModel: "agnes-image-2.1-flash", videoModel: "agnes-video-2.5-flash", strategy: "round-robin", rpmImage: 20, rpmVideo: 1 })
   const [agnesKeyDrafts, setAgnesKeyDrafts] = useState<Record<string, string>>({})
   const [videoForm, setVideoForm] = useState<{ channel: "local" | "agnes" | "auto" | "hybrid"; secondsPerScene: number }>({ channel: "local", secondsPerScene: 8 })
+  // 自动化任务（P2）
+  const [automation, setAutomation] = useState<AutomationState | null>(null)
+  const [autoSaving, setAutoSaving] = useState(false)
+  const [autoRunning, setAutoRunning] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     const json = await fetch("/api/settings").then((x) => x.json())
@@ -105,6 +121,74 @@ export function SettingsPanel() {
     const t = setTimeout(() => void load(), 0)
     return () => clearTimeout(t)
   }, [load])
+
+  // ---------- 自动化任务（P2：配置 / 立即运行 / 日志） ----------
+  const loadAutomation = useCallback(async () => {
+    const j = (await fetch("/api/automation").then((x) => x.json())) as AutomationState
+    setAutomation(j)
+  }, [])
+
+  useEffect(() => {
+    const t = setTimeout(() => void loadAutomation(), 0)
+    return () => clearTimeout(t)
+  }, [loadAutomation])
+
+  const saveAutomation = async () => {
+    if (!automation) return
+    setAutoSaving(true)
+    try {
+      const res = await fetch("/api/automation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "save", config: automation.config }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      toast({ title: "自动化配置已保存", description: "到期任务会在打开应用时自动补跑" })
+      await loadAutomation()
+    } catch (e) {
+      toast({ title: "保存失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setAutoSaving(false)
+    }
+  }
+
+  const runAutomationNow = async (task: "morningReport" | "rssRefresh" | "ideaRefresh") => {
+    setAutoRunning(task)
+    try {
+      // 先静默保存当前编辑（立即运行用最新配置）
+      if (automation) {
+        await fetch("/api/automation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "save", config: automation.config }),
+        })
+      }
+      const res = await fetch("/api/automation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "run", task }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      const r = json.result as { ok: boolean; message: string }
+      toast({ title: r.ok ? "任务执行完成" : "任务执行失败", description: r.message, variant: r.ok ? undefined : "destructive" })
+      await loadAutomation()
+    } catch (e) {
+      toast({ title: "执行失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setAutoRunning(null)
+    }
+  }
+
+  const clearAutoLog = async () => {
+    try {
+      await fetch("/api/automation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "clearLog" }) })
+      await loadAutomation()
+    } catch {
+      /* 静默 */
+    }
+  }
 
   // silent：探活前的自动落库（不弹保存 toast，失败仍弹）
   const save = async (scope: "llm" | "search" | "image" | "style", clearKey = false, silent = false): Promise<boolean> => {
@@ -755,6 +839,124 @@ export function SettingsPanel() {
             </Button>
             {(data.style.positioning || data.style.tone) && <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-600">当前 Run 已生效</Badge>}
           </div>
+        </CardContent>
+      </Card>
+
+      {/* 自动化任务（P2：定时早报 / RSS 刷新 / 灵感刷新） */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-1.5 text-sm"><Timer className="h-4 w-4 text-amber-500" />自动化任务</CardTitle>
+          <p className="text-[11px] text-muted-foreground">
+            定时早报 / RSS 信源刷新 / AI 灵感刷新。到期任务在打开应用（情报中心）时自动补跑；也可随时「立即运行」。部署到常驻环境后可用外部 cron 调 tick 接口实现无人值守
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {!automation && <p className="text-xs text-muted-foreground py-2 text-center">加载中…</p>}
+          {automation && (
+            <>
+              {/* 早报 */}
+              <div className="rounded-lg border p-2.5 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold flex items-center gap-1"><Newspaper className="h-3.5 w-3.5 text-amber-500" />每日 AI 早报</span>
+                  <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-muted-foreground">
+                    <input type="checkbox" checked={automation.config.morningReport.enabled} onChange={(e) => setAutomation((s) => (s ? { ...s, config: { ...s.config, morningReport: { ...s.config.morningReport, enabled: e.target.checked } } } : s))} className="accent-amber-500" />
+                    {automation.config.morningReport.enabled ? "已启用" : "未启用"}
+                  </label>
+                </div>
+                <div className="flex gap-2 items-center">
+                  <span className="text-[10px] text-muted-foreground shrink-0 w-14">触发时间</span>
+                  <Input value={automation.config.morningReport.time} onChange={(e) => setAutomation((s) => (s ? { ...s, config: { ...s.config, morningReport: { ...s.config.morningReport, time: e.target.value } } } : s))} placeholder="08:30" className="h-7 text-[11px] w-24 font-mono" />
+                  <span className="text-[10px] text-muted-foreground">（每日，错过则打开应用时补跑）</span>
+                </div>
+                <div className="flex gap-2 items-center">
+                  <span className="text-[10px] text-muted-foreground shrink-0 w-14">方向</span>
+                  <Input value={automation.config.morningReport.direction} onChange={(e) => setAutomation((s) => (s ? { ...s, config: { ...s.config, morningReport: { ...s.config.morningReport, direction: e.target.value } } } : s))} placeholder="留空 = AI 自主（雷达话题 → RSS 热点）" className="h-7 text-[11px] flex-1" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => void runAutomationNow("morningReport")} disabled={autoRunning === "morningReport"}>
+                    {autoRunning === "morningReport" ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Play className="h-3 w-3 mr-1" />}立即出一份早报
+                  </Button>
+                  {automation.last.morningReport && <span className="text-[9px] text-muted-foreground">上次：{new Date(automation.last.morningReport).toLocaleString("zh-CN")}</span>}
+                </div>
+              </div>
+
+              {/* RSS 刷新 */}
+              <div className="rounded-lg border p-2.5 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold flex items-center gap-1"><Rss className="h-3.5 w-3.5 text-sky-500" />RSS 信源定时刷新</span>
+                  <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-muted-foreground">
+                    <input type="checkbox" checked={automation.config.rssRefresh.enabled} onChange={(e) => setAutomation((s) => (s ? { ...s, config: { ...s.config, rssRefresh: { ...s.config.rssRefresh, enabled: e.target.checked } } } : s))} className="accent-amber-500" />
+                    {automation.config.rssRefresh.enabled ? "已启用" : "未启用"}
+                  </label>
+                </div>
+                <div className="flex gap-2 items-center">
+                  <span className="text-[10px] text-muted-foreground shrink-0 w-14">刷新间隔</span>
+                  <Input type="number" min={1} max={48} value={automation.config.rssRefresh.intervalHours} onChange={(e) => setAutomation((s) => (s ? { ...s, config: { ...s.config, rssRefresh: { ...s.config.rssRefresh, intervalHours: Number(e.target.value) || 6 } } } : s))} className="h-7 text-[11px] w-20 font-mono" />
+                  <span className="text-[10px] text-muted-foreground">小时一次</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => void runAutomationNow("rssRefresh")} disabled={autoRunning === "rssRefresh"}>
+                    {autoRunning === "rssRefresh" ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Play className="h-3 w-3 mr-1" />}立即刷新全部源
+                  </Button>
+                  {automation.last.rssRefresh && <span className="text-[9px] text-muted-foreground">上次：{new Date(automation.last.rssRefresh).toLocaleString("zh-CN")}</span>}
+                </div>
+              </div>
+
+              {/* 灵感刷新 */}
+              <div className="rounded-lg border p-2.5 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold flex items-center gap-1"><Lightbulb className="h-3.5 w-3.5 text-amber-500" />每日 AI 灵感刷新（选题池）</span>
+                  <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-muted-foreground">
+                    <input type="checkbox" checked={automation.config.ideaRefresh.enabled} onChange={(e) => setAutomation((s) => (s ? { ...s, config: { ...s.config, ideaRefresh: { ...s.config.ideaRefresh, enabled: e.target.checked } } } : s))} className="accent-amber-500" />
+                    {automation.config.ideaRefresh.enabled ? "已启用" : "未启用"}
+                  </label>
+                </div>
+                <div className="flex gap-2 items-center">
+                  <span className="text-[10px] text-muted-foreground shrink-0 w-14">触发时间</span>
+                  <Input value={automation.config.ideaRefresh.time} onChange={(e) => setAutomation((s) => (s ? { ...s, config: { ...s.config, ideaRefresh: { ...s.config.ideaRefresh, time: e.target.value } } } : s))} placeholder="09:00" className="h-7 text-[11px] w-24 font-mono" />
+                  <span className="text-[10px] text-muted-foreground">（只新增选题，不覆盖池内既有）</span>
+                </div>
+                <div className="flex gap-2 items-center">
+                  <span className="text-[10px] text-muted-foreground shrink-0 w-14">方向</span>
+                  <Input value={automation.config.ideaRefresh.direction} onChange={(e) => setAutomation((s) => (s ? { ...s, config: { ...s.config, ideaRefresh: { ...s.config.ideaRefresh, direction: e.target.value } } } : s))} placeholder="留空 = 综合雷达/早报/RSS 自主" className="h-7 text-[11px] flex-1" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => void runAutomationNow("ideaRefresh")} disabled={autoRunning === "ideaRefresh"}>
+                    {autoRunning === "ideaRefresh" ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Play className="h-3 w-3 mr-1" />}立即刷新灵感
+                  </Button>
+                  {automation.last.ideaRefresh && <span className="text-[9px] text-muted-foreground">上次：{new Date(automation.last.ideaRefresh).toLocaleString("zh-CN")}</span>}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={() => void saveAutomation()} disabled={autoSaving} className="bg-amber-500 hover:bg-amber-600 text-white">
+                  {autoSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}保存自动化配置
+                </Button>
+                {Object.values(automation.due).some(Boolean) && <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-600">有到期任务待补跑</Badge>}
+              </div>
+
+              {/* 运行日志 */}
+              {automation.log.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold flex items-center gap-1"><ScrollText className="h-3.5 w-3.5" />运行日志（近 30 条）</span>
+                    <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1.5 text-muted-foreground" onClick={() => void clearAutoLog()}>清空</Button>
+                  </div>
+                  <div className="rounded-lg border bg-muted/30 max-h-40 overflow-y-auto p-2 space-y-1">
+                    {automation.log.map((l, i) => (
+                      <div key={i} className="flex items-start gap-1.5 text-[10px] leading-snug">
+                        <span className={l.ok ? "text-emerald-600 shrink-0" : "text-red-500 shrink-0"}>{l.ok ? "✓" : "✗"}</span>
+                        <span className="text-muted-foreground shrink-0 font-mono">{new Date(l.at).toLocaleString("zh-CN")}</span>
+                        <span className="font-medium shrink-0">{l.task}</span>
+                        <span className="text-muted-foreground truncate" title={l.message}>{l.message}</span>
+                        <Badge variant="outline" className="text-[8px] px-1 py-0 shrink-0 ml-auto">{l.trigger === "auto" ? "补跑" : "手动"}</Badge>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </CardContent>
       </Card>
     </div>

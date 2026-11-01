@@ -732,3 +732,30 @@ Stage Summary:
 - **痛点 2**：download/ 被 gitignore 且沙箱回滚会清空——sweep/eval50 两份报告原件丢失，仅 worklog 数字幸存
 - **方案**：sweep-step / eval-step 落盘改双写（download/ 给用户 + `reports/` 进 git）；两份报告已按 worklog 数字重建（reconstructedFrom 字段如实标注「原件被沙箱回滚清除后重建」）；`db/tune-state.json` 记录 v3 推荐态与依据，随代码走
 - 回归：tsc / eslint 双零；test-sweep-step 11/11 / test-eval-step 9/9 / test-tune 28/28（含防污染断言）
+
+---
+## 2026-11-01（下午）· P2 用户答疑驱动批次：选题池全链路修复 + 自动化任务上线
+
+### 用户三问 → 诊断结论（全部代码级定位）
+1. **「RSS/AI 搜索转选题后选题池没数据」**：API 层实测正常（create_idea/promote 均入库）；根因有二——
+   - 【真实缺陷】RssPanel 是 IntelPanel 内嵌卡片，转选题后**无回调通知父组件**，选题池 UI 不刷新（数据在库里、界面看不见）；叠加【环境因素】沙箱回收重置 DB（实测当时 ideas/topics/reports=0 而 RSS 235 条幸存），上一会话转的选题被清
+   - 修复：RssPanel 加 onDataChange 回调；空态文案明示五路入池 + 沙箱回收会清业务数据的诚实说明
+2. **「AI 刷新会覆盖我选的吗」**：不会——刷新只做 createMany 新增 + 7 天标题去重，从不 update/delete；UI 补「只新增不覆盖」明示
+3. **「雷达有什么用 / 和手动加选题区别」**：雷达=持续监测方向（驱动早报检索词 + 灵感燃料），选题=一次性任务；原 UI 零解释 → 话题卡加说明文案 + 每话题产出统计（N 期报 · N 选题）
+
+### 本批落地（9 文件新增/修改，1 schema 变更）
+- **Idea.source 来源字段**（schema + db push）：五路入池全标记（manual/rss/search/report/ai）；/api/ideas 返回 bySource/byStatus 统计；选题池卡加来源徽章 + 状态筛选 tabs + 池统计行
+- **灵感刷新解耦**（ideas/refresh 重写）：燃料=方向(可选) > 雷达话题 > 早报标题 > **RSS 近 3 天 15 条**（原来硬依赖雷达+早报，DB 有 235 条 RSS 却不用）；全空才 400
+- **早报方向可选 + AI 自主**（morning-report）：空方向 → 自主链（雷达关键词聚合 → RSS 热点作补充证据 → 泛方向兜底），返回 autonomous 标记；去掉硬塞默认检索词
+- **自动化任务配置管理**（新功能，用户点名）：`src/lib/automation.ts`（配置/日志/到期判定/任务执行）+ `/api/automation`（save/run/tick/clearLog）+ 设置中心「自动化任务」卡（三任务：每日早报[方向可配]/RSS 定时刷新[间隔]/每日灵感刷新[方向可配] + 立即运行 + 运行日志 30 条）
+  - 沙箱诚实模型：进程不常驻 → 「打开应用即补跑」（情报中心挂载 fire tick）+ 手动立即运行 + 外部 cron 可打 tick 端点；到期判定含「今日已跑不重复、错过窗口只补一次」
+- **Idea↔Run 闭环**（schema 里 Idea.runId 一直存在但从未使用）：createArticleRun 接受 ideaId → 回填 runId + status=picked；Run done → 选题自动置 done；「去创作」全程携带 ideaId（page→studio→wizard 链路打通）；选题卡显示「已出稿线」徽章——**「采纳后去哪了」从此可追**
+- **429 友好降级**：ideas/refresh 与 morning-report 把配额报错翻译成人话（503 + 「链路正常仅生成在等配额」）
+- 测试资产：scripts/test-p2-intel.mjs（17 断言在线回归）+ scripts/test-p2-browser.sh（11 断言浏览器实测）
+
+### 验证
+- tsc / eslint（src + 新脚本）双零
+- 在线回归 16/17 过（唯一 fail 是 LLM 日级配额 429 未恢复——链路验证已到 LLM 调用层，燃料聚合/入库/状态机全过；配额恢复后自动可用）
+- **浏览器实测 11/11 全绿**：完整复现用户报障场景（空池 → RSS 转选题 → 不刷新页面池内立即出现 + RSS 徽章）+ 自动化卡渲染 + 双方向输入 + 控制台零错误；截图 22.9% 非白像素
+- 离线回归不回归：section-rewrite 28/28、card-engine 33/33、sweep-step 11/11、eval-step 9/9、rss 37/37、tune 28/28、claim-match 全过
+- 诚实边界：早报自主/灵感刷新的 LLM 生成段因日级池耗尽未跑通端到端（搜索段已验证）；剩余 45 题基线同样等配额
