@@ -49,6 +49,8 @@ ok("draftMessages：无指令零侵入", !draftMessages(draftIn)[0].content.incl
 
 // ---------- ③ SettingKV 读写与回滚 ----------
 console.log("── ③ SettingKV 读写 ──")
+// 先备份线上真实状态（测试不得污染：结束时恢复原值而非清空）
+const __prevTune = await db.settingKV.findUnique({ where: { key: "tune:draft" } })
 try { await clearTune() } catch { /* 首次可能无记录 */ }
 let t0 = await resolveTuneInstruction()
 ok("无记录 → v0 基线空指令", t0.variant === "v0" && t0.instruction === "")
@@ -85,8 +87,15 @@ ok("topics 回写", rep4.topics.join(",") === "m01,m02")
 const rep5 = aggregateTuneReport({ topics: [], scores: [] })
 ok("空输入不崩", rep5.variants.length === 0 && rep5.recommended === null)
 
-// ---------- 收尾 ----------
-await clearTune()
+// ---------- 收尾：恢复测试前真实状态（防测试污染）----------
+if (__prevTune) {
+  await db.settingKV.upsert({ where: { key: "tune:draft" }, update: { value: __prevTune.value }, create: { key: "tune:draft", value: __prevTune.value } })
+  const restored = await resolveTuneInstruction()
+  ok("测试污染防护：原调优状态已恢复", restored.variant !== "v0" || restored.instruction === "")
+} else {
+  await clearTune()
+  ok("测试污染防护：原本无调优 → 保持干净", true)
+}
 await db.$disconnect()
 console.log("")
 console.log(`━━━ 结果：${pass} 通过 / ${fail} 失败 ━━━`)

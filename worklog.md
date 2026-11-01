@@ -700,3 +700,21 @@ Stage Summary:
 - **验证**：起服务器 → POST /api/search → HTTP 200 · REAL 模式 · yuanbao-search · 10 条 · 2.5s（密钥重落生效）
 - 顺带：本轮沙箱回收又清了 DB → 密钥重落流程 3 分钟完成（generate→push→set-search-key）
 - 诚实边界：沙箱闲置回收仍会杀服务器进程并重置 DB——预览冷启动首批请求可能偶发 502（网关层），页面刷新即恢复；这是沙箱基建特性，代码侧已把可控因素全部消除
+
+---
+## 2026-11-01 · 全面测试轮：七套离线全绿 + 浏览器/API/RSS/搜索实测 + 抓出两个真实缺陷并修复
+
+### 测试矩阵（LLM 配额受限下可全测的部分）
+- **七套离线回归全绿**：claim-match 全过 / section-rewrite 28/28 / rss 37/37 / tune 28/28（含新增防污染断言）/ card-engine 33/33 / sweep-step 11/11 / eval-step 9/9
+- **tsc / eslint 双零**：eslint 从 23 error 修复归零（见下）
+- **浏览器实测**（agent-browser）：首页/情报中心/创作台/设置中心四 tab 零 console 错误；⌘K 命令面板完整（⌘1 图文 ⌘2 视频 ⌘3 图组/早报/RSS/导航/最近 Run）
+- **RSS 真实外网刷新**：24 源注册 → 18 ok / 6 失败诚实留痕 / **235 条真实入库** / 84 超龄跳过 / SimHash 去 1 重
+- **搜索真实模式**：POST /api/search → 200 · REAL · yuanbao-search · 10 条 · 2.5s
+- **18 条 API 路由健康检查**：200×16 / search 405(GET 不支持,设计如此) / agent 404(子路由型)；eval 题库 50 题 · 10 类完整
+
+### 抓出并修复的两个真实缺陷
+1. **eslint ignores 漏 public/engine**：y4 三方引擎库（three.min.js 等打包产物）入库后 `eslint .` 全量扫描误报 23 error 1450 warning——修：ignores 增 `public/engine/**` `public/assets/**` `download/**` + 顺手修 test-export-regression.mjs 的 unused-expression warning → 全量零输出。此前「双零」结论都来自限定范围调用（src/scripts），未暴露此问题
+2. **test-tune.mjs 测试污染 live DB**（本轮实证）：③ 节 SettingKV 测试直接操作真实库且收尾 `clearTune()`——把 sweep 落库的 v3 推荐清掉了（apply v3 → 跑测试 → tune=draft 消失）。修：测试前备份原值，收尾恢复而非清空 + 新增「测试污染防护」断言（28/28）；修复后实证 v3 在测试跑完后存活
+
+### LLM 相关在线测试（诚实边界）
+- 九步管线 E2E / G-Eval 评分 / 视频线渲染 / full-regression 主段——均需 LLM 配额，本轮探测仍 429 受限未跑；待配额恢复后跑（与剩余 45 题基线同批）

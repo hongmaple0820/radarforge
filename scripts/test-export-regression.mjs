@@ -3,7 +3,7 @@ const BASE = "http://localhost:3000"
 const runId = process.argv[2]
 if (!runId) { console.error("用法：bun scripts/test-export-regression.mjs <runId>"); process.exit(1) }
 let pass = 0, fail = 0
-const ok = (name, p, detail = "") => { console.log(`  ${p ? "✅" : "❌"} ${name}  ${detail}`); p ? pass++ : fail++ }
+const ok = (name, p, detail = "") => { console.log(`  ${p ? "✅" : "❌"} ${name}  ${detail}`); if (p) pass += 1; else fail += 1 }
 const EXPECT = {
   wechat: { kind: "html", probe: (c) => c.includes("<section") && c.includes("参考来源") },
   markdown: { kind: "markdown", probe: (c) => c.startsWith("#") && c.includes("**参考来源**") && c.includes("[1]:") },
