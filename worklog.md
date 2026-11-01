@@ -783,3 +783,9 @@ Stage Summary:
 - 离线八套全绿：rss 37/37 · card-engine 33/33 · section-rewrite 28/28 · tune 28/28 · sweep-step 11/11 · eval-step 9/9 · claim-match 全过 · **prisma-mirror 11/11（新）**
 - 在线：p2-intel 冷库 17/17（配额两断言按诚实边界过：503 友好降级文案含 429 说明）
 - LLM 日级配额仍未恢复（两轮探测均受限）：剩余 45 题基线、早报/灵感 LLM 端到端、full-regression 主段继续挂起等配额
+
+### eval50 断点回种（双落盘策略首次实战兑现）
+- 沙箱回收清了 /tmp/eval50-state.json 与 DB eval-score Asset，但 `reports/eval-baseline-50-2026-11-01.json` 进 git 幸存
+- 新增 `scripts/eval50-reseed.mjs`：报告 rows → 状态文件回种（m01-m03 五维取 sweep 报告 v0 段；m04 自带；**m05 缺五维 → 留队重跑不凑合**；不落假 run/Asset，DB 保持干净，runId=recovered 标记历史来源）
+- 回种结果：恢复 4 题（8.2/8.1/8.3/8.3）+ 待续 46 题（m05 起恰 50）——`--summary` 聚合验证 4/50 · 总均 8.22 · 门禁 4/4 · 五维齐全
+- 配额恢复后：`bash scripts/with-server.sh "node scripts/eval-step.mjs"` 即从 m05 续跑；沙箱再回收也只需重跑一次本脚本（幂等，已有状态不覆盖）

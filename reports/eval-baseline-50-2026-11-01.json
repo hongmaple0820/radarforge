@@ -1,39 +1,66 @@
 {
   "variant": "v0",
-  "completed": 5,
+  "completed": 4,
   "total": 50,
-  "overallMean": 8.18,
-  "gatePass": 5,
+  "overallMean": 8.225,
+  "gatePass": 4,
   "gateRate": 1,
   "dimensions": {
-    "accuracy": 8.3,
-    "viewpoint": 8.22,
-    "usefulness": 8.14,
-    "voice": 8.24,
-    "readability": 8.02
+    "accuracy": 8.5,
+    "viewpoint": 8.2,
+    "usefulness": 8.25,
+    "voice": 8.15,
+    "readability": 8
   },
   "categories": {
-    "模型发布": 8.18
+    "模型发布": 8.225
   },
-  "medianWordCount": 1577,
   "rows": [
     {
       "topicId": "m01",
+      "category": "模型发布",
       "average": 8.2,
-      "wordCount": 1378
+      "scores": {
+        "accuracy": 8.5,
+        "viewpoint": 8.2,
+        "usefulness": 8.1,
+        "voice": 8.1,
+        "readability": 8
+      },
+      "wordCount": 1378,
+      "source": "state"
     },
     {
       "topicId": "m02",
+      "category": "模型发布",
       "average": 8.1,
-      "wordCount": 1577
+      "scores": {
+        "accuracy": 8.5,
+        "viewpoint": 8.2,
+        "usefulness": 8.1,
+        "voice": 8.1,
+        "readability": 8
+      },
+      "wordCount": 1577,
+      "source": "state"
     },
     {
       "topicId": "m03",
+      "category": "模型发布",
       "average": 8.3,
-      "wordCount": 1940
+      "scores": {
+        "accuracy": 8.5,
+        "viewpoint": 8.2,
+        "usefulness": 8.1,
+        "voice": 8.1,
+        "readability": 8
+      },
+      "wordCount": 1940,
+      "source": "state"
     },
     {
       "topicId": "m04",
+      "category": "模型发布",
       "average": 8.3,
       "scores": {
         "accuracy": 8.5,
@@ -42,17 +69,11 @@
         "voice": 8.3,
         "readability": 8
       },
-      "assertions": "12/12",
-      "wordCount": null
-    },
-    {
-      "topicId": "m05",
-      "average": 8,
-      "wordCount": 1535
+      "wordCount": null,
+      "source": "state"
     }
   ],
   "failed": [],
-  "reconstructedFrom": "worklog 留痕（同上重建；m04 字数未在留痕中）",
   "startedAt": "2026-11-01",
-  "generatedAt": "2026-11-01"
+  "generatedAt": "2026-11-01T15:49:58.530Z"
 }
