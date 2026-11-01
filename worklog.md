@@ -689,3 +689,14 @@ Stage Summary:
 - 报告：download/eval-baseline-50-2026-11-01.json
 - **再次撞日级池**：eval50 第 6 题（o01）两轮 429 + 探针 3 分钟受限 + 静默 22 分钟仍受限——今日 sweep 12 题 + eval50 5 题 ≈ 220+ 次调用又把池子打空；剩 45 题明日续跑
 - `scripts/test-eval-step.mjs`（新）：状态机离线自测 **9/9**（50 题队列同序/往返/坏 JSON/retry 语义）；tsc / eslint 双零
+
+---
+## 2026-11-01 · 预览 502 排障：dev 脚本固化内存上限（OOM 崩溃循环根因）
+
+### 用户报障：预览页 502（POST /api/search + CSS 资源 + HMR 反复重连）
+- 排障链：① `demo-search` 纯静态兜底（无 LLM 依赖）→ 排除配额炸链；② `recordCall` 已有 try/catch → 排除遥测炸链；③ `route.ts` catch-all 返回 502 但 DB KV=0 时应走 DEMO 返回 200 → 排除应用层
+- **根因锁定**：package.json `dev` 脚本无内存上限——预览自动启动走 `npm run dev`，Turbopack 编译期内存尖峰 → OOM 崩溃循环 → 请求撞上死/重启中的服务器 → 网关 502（CSS 502 + HMR 反复重连 + API 502 的完整模式吻合）；with-server.sh 一直带 `--max-old-space-size=1536` 所以回归从未复现
+- **修复**：`NODE_OPTIONS=--max-old-space-size=1536` 固化进 dev 脚本（任何启动路径同享保护）
+- **验证**：起服务器 → POST /api/search → HTTP 200 · REAL 模式 · yuanbao-search · 10 条 · 2.5s（密钥重落生效）
+- 顺带：本轮沙箱回收又清了 DB → 密钥重落流程 3 分钟完成（generate→push→set-search-key）
+- 诚实边界：沙箱闲置回收仍会杀服务器进程并重置 DB——预览冷启动首批请求可能偶发 502（网关层），页面刷新即恢复；这是沙箱基建特性，代码侧已把可控因素全部消除
