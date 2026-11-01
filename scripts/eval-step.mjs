@@ -11,7 +11,7 @@
 // 429 → 留队首下轮重试；其他失败 → retryCount<2 留队，≥2 标 failed 消费
 // ============================================================
 import { PrismaClient } from "@prisma/client"
-import { writeFileSync, readFileSync, existsSync, copyFileSync } from "fs"
+import { writeFileSync, readFileSync, existsSync, copyFileSync, mkdirSync } from "fs"
 
 const BASE = "http://localhost:3000"
 const STATE = "/tmp/eval50-state.json"
@@ -143,14 +143,17 @@ async function summarize(state) {
   // 状态源 vs DB 源
   console.log(`  数据源：state ${rows.filter((r) => r.source === "state").length} / db ${rows.filter((r) => r.source === "db").length}｜失败 ${state.failed.length}：${state.failed.map((f) => f.topicId).join(" ") || "无"}`)
 
-  const path = `download/eval-baseline-50-${new Date().toISOString().slice(0, 10)}.json`
-  writeFileSync(path, JSON.stringify({
+  const payload = JSON.stringify({
     variant: "v0", completed: n, total: 50, overallMean: +overall.toFixed(3), gatePass, gateRate: +(gatePass / n).toFixed(3),
     dimensions: Object.fromEntries(Object.entries(dimAgg).map(([k, arr]) => [k, +mean(arr).toFixed(3)])),
     categories: Object.fromEntries(Object.entries(cats).map(([c, arr]) => [c, +mean(arr).toFixed(3)])),
     rows, failed: state.failed, startedAt: state.startedAt, generatedAt: new Date().toISOString(),
-  }, null, 2))
-  console.log(`  📄 报告：${path}`)
+  }, null, 2)
+  const path = `download/eval-baseline-50-${new Date().toISOString().slice(0, 10)}.json`
+  writeFileSync(path, payload)
+  // 双落盘：reports/ 进 git（抗沙箱回滚），download/ 给用户
+  try { mkdirSync("reports", { recursive: true }); writeFileSync(`reports/eval-baseline-50-${new Date().toISOString().slice(0, 10)}.json`, payload) } catch {}
+  console.log(`  📄 报告：${path}（副本 reports/，git 跟踪）`)
 }
 
 // ---------- 单步 ----------

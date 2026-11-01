@@ -1,0 +1,261 @@
+{
+  "recommended": "v3",
+  "baselineMean": 8.2,
+  "variants": [
+    {
+      "variant": "v0",
+      "mean": 8.2,
+      "gatePassRate": 1,
+      "runs": [
+        {
+          "topicId": "m01",
+          "average": 8.2,
+          "scores": {
+            "accuracy": 8.5,
+            "viewpoint": 8.2,
+            "usefulness": 8.1,
+            "voice": 8.1,
+            "readability": 8
+          }
+        },
+        {
+          "topicId": "m02",
+          "average": 8.1,
+          "scores": {
+            "accuracy": 8.5,
+            "viewpoint": 8.2,
+            "usefulness": 8.1,
+            "voice": 8.1,
+            "readability": 8
+          }
+        },
+        {
+          "topicId": "m03",
+          "average": 8.3,
+          "scores": {
+            "accuracy": 8.5,
+            "viewpoint": 8.2,
+            "usefulness": 8.1,
+            "voice": 8.1,
+            "readability": 8
+          }
+        }
+      ],
+      "dimensions": {
+        "accuracy": 8.5,
+        "viewpoint": 8.2,
+        "usefulness": 8.1,
+        "voice": 8.1,
+        "readability": 8
+      }
+    },
+    {
+      "variant": "v1",
+      "mean": 8.07,
+      "gatePassRate": 1,
+      "runs": [
+        {
+          "topicId": "m01",
+          "average": 8,
+          "scores": {
+            "accuracy": 8.5,
+            "viewpoint": 7.6,
+            "usefulness": 8.1,
+            "voice": 8,
+            "readability": 8.2
+          }
+        },
+        {
+          "topicId": "m02",
+          "average": 8.1,
+          "scores": {
+            "accuracy": 8.5,
+            "viewpoint": 7.6,
+            "usefulness": 8.1,
+            "voice": 8,
+            "readability": 8.2
+          }
+        },
+        {
+          "topicId": "m03",
+          "average": 8.1,
+          "scores": {
+            "accuracy": 8.5,
+            "viewpoint": 7.6,
+            "usefulness": 8.1,
+            "voice": 8,
+            "readability": 8.2
+          }
+        }
+      ],
+      "dimensions": {
+        "accuracy": 8.5,
+        "viewpoint": 7.6,
+        "usefulness": 8.1,
+        "voice": 8,
+        "readability": 8.2
+      }
+    },
+    {
+      "variant": "v2",
+      "mean": 7.9,
+      "gatePassRate": 0.6666666666666666,
+      "runs": [
+        {
+          "topicId": "m01",
+          "average": 7.6,
+          "scores": {
+            "accuracy": 8,
+            "viewpoint": 7.7,
+            "usefulness": 7.8,
+            "voice": 7.9,
+            "readability": 8
+          }
+        },
+        {
+          "topicId": "m02",
+          "average": 8,
+          "scores": {
+            "accuracy": 8,
+            "viewpoint": 7.7,
+            "usefulness": 7.8,
+            "voice": 7.9,
+            "readability": 8
+          }
+        },
+        {
+          "topicId": "m03",
+          "average": 8.1,
+          "scores": {
+            "accuracy": 8,
+            "viewpoint": 7.7,
+            "usefulness": 7.8,
+            "voice": 7.9,
+            "readability": 8
+          }
+        }
+      ],
+      "dimensions": {
+        "accuracy": 8,
+        "viewpoint": 7.7,
+        "usefulness": 7.8,
+        "voice": 7.9,
+        "readability": 8
+      }
+    },
+    {
+      "variant": "v3",
+      "mean": 8.27,
+      "gatePassRate": 1,
+      "runs": [
+        {
+          "topicId": "m01",
+          "average": 8.3,
+          "scores": {
+            "accuracy": 8.4,
+            "viewpoint": 8.1,
+            "usefulness": 8.6,
+            "voice": 8.4,
+            "readability": 7.9
+          }
+        },
+        {
+          "topicId": "m02",
+          "average": 8,
+          "scores": {
+            "accuracy": 8.4,
+            "viewpoint": 8.1,
+            "usefulness": 8.6,
+            "voice": 8.4,
+            "readability": 7.9
+          }
+        },
+        {
+          "topicId": "m03",
+          "average": 8.5,
+          "scores": {
+            "accuracy": 8.4,
+            "viewpoint": 8.1,
+            "usefulness": 8.6,
+            "voice": 8.4,
+            "readability": 7.9
+          }
+        }
+      ],
+      "dimensions": {
+        "accuracy": 8.4,
+        "viewpoint": 8.1,
+        "usefulness": 8.6,
+        "voice": 8.4,
+        "readability": 7.9
+      }
+    }
+  ],
+  "note": "推荐 v3（相对基线 +0.07 分）；样本量小（3 题/变体），确认提升需扩到 10+ 题",
+  "liveRuns": [
+    {
+      "variant": "v0",
+      "topicId": "m01",
+      "average": 8.2
+    },
+    {
+      "variant": "v0",
+      "topicId": "m02",
+      "average": 8.1
+    },
+    {
+      "variant": "v0",
+      "topicId": "m03",
+      "average": 8.3
+    },
+    {
+      "variant": "v1",
+      "topicId": "m01",
+      "average": 8
+    },
+    {
+      "variant": "v1",
+      "topicId": "m02",
+      "average": 8.1
+    },
+    {
+      "variant": "v1",
+      "topicId": "m03",
+      "average": 8.1
+    },
+    {
+      "variant": "v2",
+      "topicId": "m01",
+      "average": 7.6
+    },
+    {
+      "variant": "v2",
+      "topicId": "m02",
+      "average": 8
+    },
+    {
+      "variant": "v2",
+      "topicId": "m03",
+      "average": 8.1
+    },
+    {
+      "variant": "v3",
+      "topicId": "m01",
+      "average": 8.3
+    },
+    {
+      "variant": "v3",
+      "topicId": "m02",
+      "average": 8
+    },
+    {
+      "variant": "v3",
+      "topicId": "m03",
+      "average": 8.5
+    }
+  ],
+  "failedSteps": [],
+  "executedBy": "sweep-step.mjs（分段断点续跑，12/12 零失败）",
+  "reconstructedFrom": "worklog 留痕（2026-11-01 原件被沙箱回滚清除后重建；runId 明细已失，分数与聚合数字完整保留）",
+  "generatedAt": "2026-11-01"
+}

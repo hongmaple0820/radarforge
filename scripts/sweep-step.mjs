@@ -8,7 +8,7 @@
 // 队列：v0×(m01,m02,m03) + v1/v2/v3 ×(m01,m02,m03) = 12 步 + 聚合 1 步
 // ============================================================
 import { PrismaClient } from "@prisma/client"
-import { writeFileSync, readFileSync, existsSync, copyFileSync } from "fs"
+import { writeFileSync, readFileSync, existsSync, copyFileSync, mkdirSync } from "fs"
 
 const BASE = "http://localhost:3000"
 const STATE = "/tmp/sweep-state.json"
@@ -116,9 +116,12 @@ async function main() {
       await post("/api/eval", { action: "tune-clear" })
       console.log(`  ↩️ 已回 v0 基线`)
     }
+    const payload = JSON.stringify({ ...report, liveRuns: scores, failedSteps: failed, executedBy: "sweep-step.mjs（分段断点续跑）" }, null, 2)
     const path = `download/tune-report-${new Date().toISOString().slice(0, 10)}.json`
-    writeFileSync(path, JSON.stringify({ ...report, liveRuns: scores, failedSteps: failed, executedBy: "sweep-step.mjs（分段断点续跑）" }, null, 2))
-    console.log(`  📄 报告：${path}`)
+    writeFileSync(path, payload)
+    // 双落盘：reports/ 进 git（抗沙箱回滚），download/ 给用户
+    try { mkdirSync("reports", { recursive: true }); writeFileSync(`reports/tune-report-${new Date().toISOString().slice(0, 10)}.json`, payload) } catch {}
+    console.log(`  📄 报告：${path}（副本 reports/，git 跟踪）`)
     await db.$disconnect()
     return
   }

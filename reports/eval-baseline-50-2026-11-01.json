@@ -1,0 +1,58 @@
+{
+  "variant": "v0",
+  "completed": 5,
+  "total": 50,
+  "overallMean": 8.18,
+  "gatePass": 5,
+  "gateRate": 1,
+  "dimensions": {
+    "accuracy": 8.3,
+    "viewpoint": 8.22,
+    "usefulness": 8.14,
+    "voice": 8.24,
+    "readability": 8.02
+  },
+  "categories": {
+    "模型发布": 8.18
+  },
+  "medianWordCount": 1577,
+  "rows": [
+    {
+      "topicId": "m01",
+      "average": 8.2,
+      "wordCount": 1378
+    },
+    {
+      "topicId": "m02",
+      "average": 8.1,
+      "wordCount": 1577
+    },
+    {
+      "topicId": "m03",
+      "average": 8.3,
+      "wordCount": 1940
+    },
+    {
+      "topicId": "m04",
+      "average": 8.3,
+      "scores": {
+        "accuracy": 8.5,
+        "viewpoint": 8.2,
+        "usefulness": 8.7,
+        "voice": 8.3,
+        "readability": 8
+      },
+      "assertions": "12/12",
+      "wordCount": null
+    },
+    {
+      "topicId": "m05",
+      "average": 8,
+      "wordCount": 1535
+    }
+  ],
+  "failed": [],
+  "reconstructedFrom": "worklog 留痕（同上重建；m04 字数未在留痕中）",
+  "startedAt": "2026-11-01",
+  "generatedAt": "2026-11-01"
+}

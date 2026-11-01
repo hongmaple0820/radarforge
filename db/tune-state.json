@@ -1,0 +1,5 @@
+{
+  "variant": "v3",
+  "note": "sweep 2026-11-01 推荐：12/12 live 对比，v3 口语节奏均分 8.27 > v0 基线 8.20 > v1 8.07 > v2 7.90",
+  "source": "scripts/sweep-step.mjs 全量分段回归（download/tune-report-2026-11-01.json）"
+}

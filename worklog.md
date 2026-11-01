@@ -718,3 +718,17 @@ Stage Summary:
 
 ### LLM 相关在线测试（诚实边界）
 - 九步管线 E2E / G-Eval 评分 / 视频线渲染 / full-regression 主段——均需 LLM 配额，本轮探测仍 429 受限未跑；待配额恢复后跑（与剩余 45 题基线同批）
+
+---
+## 2026-11-01 · 工程韧性优化：一键环境自愈 + 报告双落盘（根治沙箱回收两大重复痛点）
+
+### 痛点 → 方案（本轮三次手工恢复的教训固化）
+- **痛点 1**：沙箱回收清 DB/密钥/调优态 → 每次会话手工 prisma generate → db push → set-search-key → tune-apply，约 5 分钟且易漏（v3 曾被静默清掉）
+- **方案**：`scripts/boot-restore.mjs` 一键自愈（幂等）：①Prisma client 缺则 generate（3 次重试抗出网抖动）②schema 同步 db push ③provider:search 缺则从 env/.env 的 SEARCH_KEY 重落（不打印明文；.env 已确认 gitignored）④tune:draft 缺则从 `db/tune-state.json`（git 跟踪推荐态）重应用 ⑤RSS 默认源 ensureDefaultFeeds；`--check` 只读体检 / `--quiet` 静默
+- **接线全覆盖**：with-server.sh 起服务器前自动自愈（失败不阻断）+ package.json dev 脚本链式自愈——**预览冷启动自动恢复，不再空态**
+- **验证**：正常路径 4/4 健康；破坏性验证（删 provider:search + tune:draft 两条 KV）→ 一键补齐（密钥=sk-b45…，tune=v3）；with-server 端到端 API 200
+
+### 报告持久化：reports/ 双落盘
+- **痛点 2**：download/ 被 gitignore 且沙箱回滚会清空——sweep/eval50 两份报告原件丢失，仅 worklog 数字幸存
+- **方案**：sweep-step / eval-step 落盘改双写（download/ 给用户 + `reports/` 进 git）；两份报告已按 worklog 数字重建（reconstructedFrom 字段如实标注「原件被沙箱回滚清除后重建」）；`db/tune-state.json` 记录 v3 推荐态与依据，随代码走
+- 回归：tsc / eslint 双零；test-sweep-step 11/11 / test-eval-step 9/9 / test-tune 28/28（含防污染断言）

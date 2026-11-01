@@ -8,16 +8,19 @@ cd /home/z/my-project
 TEST="$1"
 shift || true
 
-# 1) 清理可能残留的 server
+# 1) 环境自愈（沙箱回收可能清了 DB/密钥/调优态；幂等秒级，失败不阻断）
+node scripts/boot-restore.mjs --quiet 2>/dev/null
+
+# 2) 清理可能残留的 server
 pkill -f "next dev" 2>/dev/null
 pkill -f "next-server" 2>/dev/null
 sleep 1
 
-# 2) 启动（直接 node 跳过 npm 父进程；堆上限防 OOM）
+# 3) 启动（直接 node 跳过 npm 父进程；堆上限防 OOM）
 NODE_OPTIONS="--max-old-space-size=1536" setsid node node_modules/next/dist/bin/next dev > dev.log 2>&1 < /dev/null &
 SRV=$!
 
-# 3) 等 ready（最长 90s）
+# 4) 等 ready（最长 90s）
 READY=0
 for i in $(seq 45); do
   code=$(curl -s -m 3 -o /dev/null -w "%{http_code}" http://localhost:3000/api/runs 2>/dev/null)
@@ -32,7 +35,7 @@ if [ "$READY" != "1" ]; then
 fi
 echo "[with-server] server ready (pid $SRV)"
 
-# 4) 执行测试
+# 5) 执行测试
 case "$TEST" in
   *.py) python3 "$TEST" "$@" ;;
   *.sh) bash "$TEST" "$@" ;;
@@ -40,7 +43,7 @@ case "$TEST" in
 esac
 RC=$?
 
-# 5) 收尾（此调用结束后沙箱也会清理，这里显式 kill 保险）
+# 6) 收尾（此调用结束后沙箱也会清理，这里显式 kill 保险）
 kill $SRV 2>/dev/null
 pkill -f "next-server" 2>/dev/null
 exit $RC
