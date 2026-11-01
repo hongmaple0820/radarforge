@@ -5,8 +5,9 @@
 // 本脚本把全流程固化，并接进 with-server.sh 与 npm run dev：
 //       任何启动路径都自动自愈，预览冷启动不再 502/空态。
 // 行为（每步幂等、有则跳过、缺则补齐）：
-//   1) Prisma client 缺失 → npx prisma generate（3 次重试抗出网抖动）
-//   2) schema 未同步 → npx prisma db push --skip-generate（SQLite 毫秒级）
+//   1) Prisma client 缺失 → npx prisma generate（2 次重试抗网抖，仍败走
+//      本地引擎镜像兜底——Node fetch 撞死路 IP 而 curl 可达的场景）
+//   2) schema 未同步 → npx prisma db push --skip-generate（失败同走镜像兜底）
 //   3) provider:search 缺失 → 从环境变量/.env 的 SEARCH_KEY 重落（不打印明文）
 //   4) tune:draft 缺失 → 从 db/tune-state.json（git 跟踪的推荐态）重应用
 //   5) RSS 默认源 → ensureDefaultFeeds()
@@ -40,15 +41,34 @@ console.log("━━━ boot-restore：环境自愈 ━━━")
 // ---------- ① Prisma client ----------
 const clientOK = existsSync("node_modules/.prisma/client/schema.prisma")
 if (!clientOK && !CHECK_ONLY) {
-  for (let i = 1; i <= 3; i++) {
+  let genOK = false
+  for (let i = 1; i <= 2; i++) {
     try {
       execSync("npx prisma generate", { stdio: QUIET ? "pipe" : "inherit" })
+      genOK = true
       break
-    } catch (e) {
-      if (i === 3) console.log(`  ⚠️ prisma generate 三次失败（出网抖动）：${String(e.message).slice(0, 60)}`)
-      else await new Promise((r) => setTimeout(r, 5000))
+    } catch {
+      await new Promise((r) => setTimeout(r, 5000))
     }
   }
+  // 2026-11-01 实证的新故障模式：DNS 双 A 记录，Node fetch 撞死路 → ETIMEDOUT，
+  // 同一文件 curl 却能下。引擎下载走镜像兜底（curl 预热 + 127.0.0.1 临时静态服务）。
+  if (!genOK) {
+    try {
+      const { withEngineMirror } = await import("./prisma-mirror.mjs")
+      process.env.PRISMA_MIRROR_QUIET = "1"
+      await withEngineMirror(async (env) => {
+        execSync("npx prisma generate", { env: { ...process.env, ...env }, stdio: QUIET ? "pipe" : "inherit" })
+      }, { label: "prisma generate" })
+      genOK = true
+      if (!QUIET) console.log("  · prisma generate 已走本地引擎镜像兜底")
+    } catch (e) {
+      console.log(`  ⚠️ 镜像兜底也失败：${String(e.message).slice(0, 70)}`)
+    } finally {
+      delete process.env.PRISMA_MIRROR_QUIET
+    }
+  }
+  if (!genOK && !QUIET) console.log("  ⚠️ prisma generate 常规与镜像两条路均失败")
 }
 ok("Prisma client", existsSync("node_modules/.prisma/client/schema.prisma"))
 
@@ -56,8 +76,20 @@ ok("Prisma client", existsSync("node_modules/.prisma/client/schema.prisma"))
 if (!CHECK_ONLY) {
   try {
     execSync("npx prisma db push --skip-generate", { stdio: QUIET ? "pipe" : "inherit" })
-  } catch (e) {
-    console.log(`  ⚠️ db push 失败：${String(e.message).slice(0, 80)}`)
+  } catch {
+    // db push 同样会拉 schema-engine；Node fetch 死路场景走镜像兜底
+    try {
+      const { withEngineMirror } = await import("./prisma-mirror.mjs")
+      process.env.PRISMA_MIRROR_QUIET = "1"
+      await withEngineMirror(async (env) => {
+        execSync("npx prisma db push --skip-generate", { env: { ...process.env, ...env }, stdio: QUIET ? "pipe" : "inherit" })
+      }, { label: "prisma db push" })
+      if (!QUIET) console.log("  · prisma db push 已走本地引擎镜像兜底")
+    } catch (e) {
+      console.log(`  ⚠️ db push 失败（含镜像兜底）：${String(e.message).slice(0, 80)}`)
+    } finally {
+      delete process.env.PRISMA_MIRROR_QUIET
+    }
   }
 }
 

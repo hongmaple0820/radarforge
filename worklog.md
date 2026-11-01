@@ -759,3 +759,27 @@ Stage Summary:
 - **浏览器实测 11/11 全绿**：完整复现用户报障场景（空池 → RSS 转选题 → 不刷新页面池内立即出现 + RSS 徽章）+ 自动化卡渲染 + 双方向输入 + 控制台零错误；截图 22.9% 非白像素
 - 离线回归不回归：section-rewrite 28/28、card-engine 33/33、sweep-step 11/11、eval-step 9/9、rss 37/37、tune 28/28、claim-match 全过
 - 诚实边界：早报自主/灵感刷新的 LLM 生成段因日级池耗尽未跑通端到端（搜索段已验证）；剩余 45 题基线同样等配额
+
+---
+## 2026-11-01（傍晚）· 接力轮：远端推送 + Prisma 引擎镜像兜底 + 在线回归冷启动自洽
+
+### 远端推送
+- `push-retry.sh final` 推 `1943b3c..d460867`（P2 答疑驱动批次整批上远端，第 2 次尝试过网抖）；远端 main = 本地 HEAD
+
+### 新故障模式实证与固化：Prisma 引擎下载的 Node fetch 死路（本轮核心工程产出）
+- **现象**：沙箱回收清掉 Prisma client 后，boot-restore 的 generate/db push 反复失败（binaries.prisma.sh 请求 ETIMEDOUT），而同一文件 curl 能下（8MB/36s）
+- **根因**：DNS 对 binaries.prisma.sh 解析双 A 记录（104.20.43.103 活 / 172.66.156.100 死），Node fetch（undici）撞死路、curl 走活路；且该问题是**间歇性**的（本轮晚些时候 Node fetch 又通了）——解释了历次「出网抖动重试即过」的真相
+- **对策固化** `scripts/prisma-mirror.mjs`：curl 预热引擎+校验文件到 /tmp/prisma-mirror（幂等跳过已有、`--fail` 拒 404 错误页）→ 解压二进制入 ~/.cache/prisma（belt-and-suspenders，复刻实证成功组合）→ 起 127.0.0.1 临时静态服务（防路径穿越）→ `PRISMA_ENGINES_MIRROR` 指过去，服务与 prisma 命令同调用完成（进程不跨调用铁律）
+- **接线**：boot-restore ①generate ②db push 双点兜底（常规 2 次重试 → 失败走镜像）；`--prepare` CLI 可单独预热
+- **顺手抓出并修复一个真实缺陷**：curl 不带 `--fail` 时 404 错误页会被当成引擎写盘（离线自测 11 断言中 1 挂暴露，已修）
+- 验证：`test-prisma-mirror.mjs` 离线 11/11（解析/幂等/404/穿越防护）；`withEngineMirror` 直调端到端实证（镜像 fetch 200 内容一致）；tsc/eslint 双零
+
+### test-p2-intel 冷启动自洽（第二个测试质量缺陷）
+- 首跑 10/13 三挂：全因「冷库序依赖」——断言 RSS 燃料时库里还没条目（刷新排在测试后段），暖库复跑 17/17 证实非代码缺陷
+- 修：空库自动补刷一轮 RSS（24 源约 30-60s）再断言；**清空 177 条 FeedItem 模拟真冷库复跑 17/17**——从此不依赖历史数据
+
+### 环境与回归快照（本轮）
+- 沙箱回收两次：DB/client 又被清 → generate（撞新故障）→ 镜像方案手工恢复 → 固化为脚本（下轮起 boot-restore 一键含兜底）
+- 离线八套全绿：rss 37/37 · card-engine 33/33 · section-rewrite 28/28 · tune 28/28 · sweep-step 11/11 · eval-step 9/9 · claim-match 全过 · **prisma-mirror 11/11（新）**
+- 在线：p2-intel 冷库 17/17（配额两断言按诚实边界过：503 友好降级文案含 429 说明）
+- LLM 日级配额仍未恢复（两轮探测均受限）：剩余 45 题基线、早报/灵感 LLM 端到端、full-regression 主段继续挂起等配额

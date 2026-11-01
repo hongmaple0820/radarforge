@@ -39,9 +39,17 @@ async function main() {
   check("automation save（含非法间隔→钳到48）", r.status === 200 && r.json?.config?.rssRefresh?.intervalHours === 48 && r.json?.config?.morningReport?.direction === "测试方向A", `interval=${r.json?.config?.rssRefresh?.intervalHours}`)
 
   // ---------- ② RSS 转选题 → 池内可见 + source=rss ----------
-  const items = await j("GET", "/api/sources")
+  // 冷启动自洽：沙箱回收清库后 RSS 条目为空 → 先刷一轮（网络正常约 30-60s），
+  // 让后续 ⑥「RSS 燃料解耦」与 ④「stats bySource.rss≥1」不再依赖历史数据
+  let items = await j("GET", "/api/sources")
+  let preRefreshed = false
+  if (!(items.json?.items ?? []).length) {
+    await j("POST", "/api/automation", { action: "run", task: "rssRefresh" })
+    items = await j("GET", "/api/sources")
+    preRefreshed = true
+  }
   const firstItem = items.json?.items?.[0]
-  check("RSS 条目存在（前期已刷 235 条）", Boolean(firstItem), firstItem?.title?.slice(0, 40))
+  check("RSS 条目存在（冷库自动补刷）", Boolean(firstItem), preRefreshed ? `本轮补刷后获得条目` : firstItem?.title?.slice(0, 40))
   if (firstItem) {
     r = await j("POST", "/api/sources", { action: "promote", itemId: firstItem.id })
     check("RSS promote 转选题", r.status === 200 && r.json?.ideaId, r.json?.message)
