@@ -789,3 +789,29 @@ Stage Summary:
 - 新增 `scripts/eval50-reseed.mjs`：报告 rows → 状态文件回种（m01-m03 五维取 sweep 报告 v0 段；m04 自带；**m05 缺五维 → 留队重跑不凑合**；不落假 run/Asset，DB 保持干净，runId=recovered 标记历史来源）
 - 回种结果：恢复 4 题（8.2/8.1/8.3/8.3）+ 待续 46 题（m05 起恰 50）——`--summary` 聚合验证 4/50 · 总均 8.22 · 门禁 4/4 · 五维齐全
 - 配额恢复后：`bash scripts/with-server.sh "node scripts/eval-step.mjs"` 即从 m05 续跑；沙箱再回收也只需重跑一次本脚本（幂等，已有状态不覆盖）
+
+---
+## 2026-11-02 · 七问体检轮：全量代码级取证 + 整固方案（方案先行，不动业务代码）
+
+### 本轮性质（用户选定：方案先行 / PDF 深度版 / dsh 补完+实测 / MCP 完整对齐 / Skills 对齐标准 / 图文主视频辅）
+- 只读排查七问，零 LLM 配额消耗；交付《RadarForge七问体检与整固方案.pdf》（19 页，折算字数 13180）+ docs/q7-consolidation-plan.md 镜像
+- 定性总表：六问成立、一问（工具注册表）为定位争议；三类系统性病灶——依赖治理缺失 / 资产权错位 / 生态只展示不接通
+
+### 七问取证结论（全部可复核，证据清单在方案附录 B）
+- **Q1 RSS**：sources API 仅 add/启停/删除（无 update）；fetchAndParse 裸 fetch 无代理；SourceFeed 无代理字段 → P0-2 补 PATCH 子集更新 + proxyUrl 按源代理 + undici ProxyAgent
+- **Q2 Skills（架构性根因 + 不可逆损失）**：技能扫描根 = `<project>/skills/` = 沙箱平台 69 个 agent 技能；产品自有 12 技能（wewrite 十件套 + huashu 双件）被平台目录覆盖丢失，且 /skills/ 在 .gitignore → 从未入库无法恢复；UI 占位符硬编码「搜索 69 个技能」→ P0-3 目录主权迁 db/skills/ + P2 安装管理（对齐 agentskills.io 官方规范）
+- **Q3 工具注册表**：5 内置工具实测全部真实可调用；「单独运行」= 调试/契约验证价值，缺「诊断」心智标注 → P1-6 重定位为工具测试台 + MCP 联调面板
+- **Q4 dsh（关键澄清）**：dsh = DeepSeek Harness（深度求索 2026-08-13 开源，Cordis 内核，一切皆插件），官方插件指南真实存在（deepseekai.works/plugins）；插件包已产出且 5 文件已推 GitHub；差距 7 项（defineTool parameters/Config Schemastery/name 导出/engines.dsh/inject 服务名未验/无宿主实测/无 Release 分发）→ P1-1/2/3 四步补完 + 沙箱真实宿主实测（npm 已验证 @deepseek-ai/dsh@0.2.1-rc.5 可达）+ GitHub Release tgz 分发
+- **Q5 MCP（最实质缺陷）**：两套互不相通客户端（stdio '2024-11-05' config/mcp.json 自定义 servers 格式 vs HTTP '2025-06-18' DB McpServer 表）；HTTP 套无 Mcp-Session-Id 会话管理、parseSseBody 等全文结束才解析（流式 hang）；**发现的工具从不 registerTool，Agent 无法调用（纯展示）**；UI 无 stdio command 输入、无标准 mcpServers 导入 → P0-4 入口统一 + P1-4 完整标准化（schema 扩展/导入导出/工具接入注册表，命名 mcp__服务器__工具）
+- **Q6 视频（报错根因铁证）**：「ffmpeg 不可用：Executable not found in $PATH」为 **Bun 运行时报错格式**（对照实验：Node 报 spawn ENOENT、Bun 报该文案逐字一致）——预览生产模式 `bun .next/standalone/server.js` + 16 处裸命令名调用 + 受限 PATH 必然复现；「检查视频模型」按钮在 local 通道实际探测 ffmpeg（语义错位）；AGNES_VIDEO_MODELS 硬编码单一选项 → P0-1 binaries.ts 解析链（env→which→常见路径→ffmpeg-static 兜底）+ 按钮拆分（模型探活/依赖自检）+ P1-5 视频模型配置轻量化
+- **Q7 割裂感**：闭环断点清单 6 条（生态与主流程零关联/设置分散/展示多于可用/错误口径不一/命名无解释/信息架构头重）→ 三接线 + 设置三分区 + 全局健康中心 + 术语治理表（方案表 7-2）
+
+### 交付物与工程产物
+- download/RadarForge七问体检与整固方案.pdf：Template 07 Crystal Blue 封面 + 自动 TOC + 8 章 + 4 附录（含逐文件改动清单与接口草案）；pdf_qa PASS（0 错误）、toc_validate pass、font.check 0 issue、19 页无空白页
+- docs/q7-consolidation-plan.md：同源内容块生成（gen-q7-plan-md.py），进 git 抗回收
+- scripts/gen-q7-plan-pdf.py + q7_plan_content.py + q7-cover.html + merge-q7-pdf.py + gen-q7-plan-md.py：文档生成流水线（内容块单源，PDF/MD 双出）
+- 排期：P0 四项（约一轮）/ P1 六项（约两轮）/ P2 三项（约两轮）；与既有路线图合并——p23 扩展为双向 MCP、p24 建议顺延一轮、P0/P1 插队 p21/p22 之前
+
+### 待用户评审后执行
+- 方案获批即按表 8-1 顺序开工（P0-1 依赖解析链为第一刀）；用户可直接对 13 行排期表做增删调序
+- LLM 配额恢复后并行续跑：eval50 剩余 46 题 + 在线回归补测（与本轮方案互不阻塞）

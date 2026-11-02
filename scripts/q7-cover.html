@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700;900&family=Noto+Sans+SC:wght@300;400;500;700&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+  <style>
+    @page { size: 794px 1123px; margin: 0; }
+    :root {
+      --c-bg: #0a1628;
+      --c-accent: #4da8da;
+      --c-text: #e8f0f8;
+      --c-muted: #7a9bb8;
+      --c-glow: #2d7ab3;
+    }
+    html, body { margin: 0; padding: 0; width: 794px; height: 1123px; background: var(--c-bg); color: var(--c-text); font-family: 'Noto Sans SC', 'Inter', sans-serif; }
+    @media screen {
+      html { height: auto; display: flex; justify-content: center; min-height: 100vh; background: var(--c-bg); }
+      body { transform-origin: top center; scale: min(1, calc(100vw / 794), calc(100vh / 1123)); margin: 0 auto; box-shadow: 0 0 60px rgba(0,0,0,0.4); }
+    }
+    .cover { width: 794px; height: 1123px; position: relative; box-sizing: border-box; border: none; outline: none; box-shadow: none; }
+    /* Layer 1 背景：两处微光（裁剪于页面内） */
+    .bg-layer { position: absolute; inset: 0; overflow: hidden; z-index: 1; }
+    .glow-a { position: absolute; left: 40px; top: 60px; width: 420px; height: 420px;
+      background: radial-gradient(circle, rgba(45,122,179,0.10) 0%, rgba(45,122,179,0.0) 62%); }
+    .glow-b { position: absolute; right: 30px; bottom: 90px; width: 480px; height: 480px;
+      background: radial-gradient(circle, rgba(77,168,218,0.08) 0%, rgba(77,168,218,0.0) 60%); }
+    /* Layer 2 结构：发光矩形边框 */
+    .frame { position: absolute; left: 60px; right: 60px; top: 80px; bottom: 80px;
+      border: 2px solid var(--c-accent); z-index: 2; }
+    /* Layer 3 内容 */
+    .content { position: absolute; inset: 0; z-index: 3; }
+    .kicker { position: absolute; left: 104px; top: 135px; font-size: 11pt; color: var(--c-accent);
+      letter-spacing: 5px; text-transform: uppercase; font-weight: 300;
+      font-family: 'Inter', 'Noto Sans SC', sans-serif; }
+    .title { position: absolute; left: 104px; top: 228px; font-size: 55pt; font-weight: 900;
+      line-height: 1.15; font-family: 'Noto Serif SC', serif; color: var(--c-text);
+      max-width: 600px; text-shadow: 0 0 24px rgba(77,168,218,0.35); }
+    .summary { position: absolute; left: 104px; top: 505px; font-size: 15px; line-height: 1.7;
+      color: var(--c-muted); max-width: 520px; }
+    .org { position: absolute; left: 104px; top: 719px; font-size: 18pt; color: var(--c-text);
+      font-weight: 500; }
+    .org-sub { position: absolute; left: 104px; top: 762px; font-size: 11px; color: var(--c-muted);
+      letter-spacing: 1px; }
+    .date { position: absolute; left: 104px; bottom: 122px; font-size: 10pt; color: var(--c-muted);
+      letter-spacing: 3px; font-family: 'Inter', 'Noto Sans SC', sans-serif; }
+  </style>
+</head>
+<body>
+  <div class="cover">
+    <div class="bg-layer">
+      <div class="glow-a"></div>
+      <div class="glow-b"></div>
+    </div>
+    <div class="frame"></div>
+    <div class="content">
+      <div class="kicker">RADARFORGE 2.0 · ENGINEERING REVIEW</div>
+      <div class="title">七问体检<br>与整固方案</div>
+      <div class="summary">针对 RSS 编辑与代理、社区技能加载、工具注册表定位、dsh 插件形态、MCP 标准化、视频依赖治理与产品闭环七个问题，逐项给出代码级取证、根因分析与带验收标准的整固路线。全部证据可复核，排期分三批十二项。</div>
+      <div class="org">RadarForge 工程组</div>
+      <div class="org-sub">只读排查 · 零配额消耗 · 证据可复核</div>
+      <div class="date">2026-11-02 · BASE CB0C3</div>
+    </div>
+  </div>
+</body>
+</html>
