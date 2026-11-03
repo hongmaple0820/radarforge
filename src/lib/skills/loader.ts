@@ -3,7 +3,7 @@
  *
  * 遵循 Agent Skills 开放标准（agentskills.io，SKILL.md 声明式技能）：
  *  - 扫描两级目录：产品库 db/skills/*（git 跟踪，随仓库分发）与
- *    用户自装位 ~/.radarforge/skills/*（P2 安装管理的落点）
+ *    用户自装位 ~/.radarforge/skills/*（P2-1 安装管理的落点）
  *  - 解析 SKILL.md 的 YAML frontmatter（name / description / allowed-tools 等）
  *  - 平台把这些技能作为「工作流步骤模板」的候选池（write / review / publish / motion…）
  *
@@ -11,11 +11,20 @@
  * 与内容创作无关且不受本产品控制）迁至 db/skills/——历史教训：产品首批 12 技能
  * （wewrite 十件套 + huashu 双件）寄生在平台目录下被整批覆盖且因 .gitignore
  * 从未入库，造成不可逆损失（q7 方案第三章取证）。db/skills 版本已按官方规范重建。
+ *
+ * P2-1 安装管理：每张卡附合规校验结果（checkSkillCompliance）与启停态
+ * （SettingKV skills:disabled）——停用技能仍被加载（可管理/可再启用），
+ * 但不进入 Agent 运行时候选池（agent/skill-loader 过滤）。
  */
 
 import { promises as fs } from 'fs'
 import path from 'path'
 import os from 'os'
+import { checkSkillCompliance, type ComplianceReport } from './compliance'
+import { getDisabledSkills } from './state'
+import { parseFrontmatter, stripFrontmatter } from './frontmatter'
+
+export { parseFrontmatter, stripFrontmatter } from './frontmatter'
 
 export interface SkillCard {
   /** 目录名（全局唯一键） */
@@ -28,6 +37,14 @@ export interface SkillCard {
   dir: string
   entry: string
   allowedTools: string[]
+  /** P2-1：官方规范合规校验结果 */
+  compliance: ComplianceReport
+  /** P2-1：是否停用（停用 = 不进 Agent 候选池，文件保留） */
+  disabled: boolean
+  /** P2-1：正文预览（渐进披露第一层之后的第二层入口） */
+  bodyPreview: string
+  /** frontmatter 全部键（详情抽屉展示用） */
+  frontmatterKeys: string[]
 }
 
 interface SkillRoot {
@@ -43,70 +60,14 @@ export function skillRoots(): SkillRoot[] {
   ]
 }
 
-/**
- * 精简 YAML frontmatter 解析（不引入 gray-matter 依赖）：
- * 覆盖 SKILL.md 常见形态——顶层标量、`|` 多行块标量（折叠为一行）、`- item` 列表。
- */
-export function parseFrontmatter(raw: string): Record<string, string | string[]> {
-  const meta: Record<string, string | string[]> = {}
-  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw)
-  if (!m) return meta
-
-  const lines = m[1].split(/\r?\n/)
-  let i = 0
-  while (i < lines.length) {
-    const kv = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(lines[i])
-    if (!kv) {
-      i++
-      continue
-    }
-    const key = kv[1]
-    const value = kv[2].trim()
-
-    if (value === '|' || value === '>') {
-      // 块标量：收集后续缩进行，折叠为单行
-      const buf: string[] = []
-      i++
-      while (i < lines.length && (/^\s+\S/.test(lines[i]) || lines[i].trim() === '')) {
-        if (lines[i].trim()) buf.push(lines[i].trim())
-        i++
-      }
-      meta[key] = buf.join(' ')
-      continue
-    }
-
-    if (value === '') {
-      // 空值：向后看是否是 `- item` 列表
-      const arr: string[] = []
-      let j = i + 1
-      while (j < lines.length) {
-        const item = /^\s+-\s+(.*)$/.exec(lines[j])
-        if (!item) break
-        arr.push(item[1].trim())
-        j++
-      }
-      if (arr.length > 0) {
-        meta[key] = arr
-        i = j
-      } else {
-        meta[key] = ''
-        i++
-      }
-      continue
-    }
-
-    // 普通标量（去掉成对引号）
-    meta[key] = value.replace(/^["']|["']$/g, '')
-    i++
-  }
-  return meta
-}
 
 /** 加载全部技能（产品库 + 用户自装位），出错的单个技能跳过不影响整体；
- *  同 id 目录产品库优先（用户位视为待装覆盖位，P2 安装管理接入） */
+ *  同 id 目录产品库优先（用户位重复不生效）；停用技能照常返回（带 disabled
+ *  标记），由消费方决定过滤——/api/agent/skills 过滤，/api/skills 全量展示 */
 export async function loadSkills(): Promise<SkillCard[]> {
   const cards: SkillCard[] = []
   const seen = new Set<string>()
+  const disabledIds = await getDisabledSkills()
   for (const root of skillRoots()) {
     let entries: string[] = []
     try {
@@ -124,6 +85,7 @@ export async function loadSkills(): Promise<SkillCard[]> {
         const name = typeof meta['name'] === 'string' ? meta['name'].trim() : entry
         const desc = typeof meta['description'] === 'string' ? meta['description'].trim() : ''
         const tools = Array.isArray(meta['allowed-tools']) ? meta['allowed-tools'] : []
+        const body = stripFrontmatter(raw)
         cards.push({
           id: entry,
           name: name || entry,
@@ -132,6 +94,10 @@ export async function loadSkills(): Promise<SkillCard[]> {
           dir: skillDir,
           entry: entryFile,
           allowedTools: tools,
+          compliance: checkSkillCompliance(entry, meta),
+          disabled: disabledIds.has(entry),
+          bodyPreview: body.replace(/[#*`>-]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160),
+          frontmatterKeys: Object.keys(meta),
         })
         seen.add(entry)
       } catch {
@@ -141,3 +107,4 @@ export async function loadSkills(): Promise<SkillCard[]> {
   }
   return cards
 }
+

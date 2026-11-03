@@ -9,11 +9,14 @@
 // 扫描根（P0-3 目录主权）：产品库 db/skills（git 跟踪随仓库分发）
 // + 用户自装位 ~/.radarforge/skills；平台 skills/ 已移出（宿主运维
 // 技能与内容创作无关，且曾整批覆盖产品技能——不可逆损失根因）。
+// P2-1：候选池过滤停用技能（SettingKV skills:disabled）——停用 =
+// 不进 Agent 候选池但文件保留；loadSkillBody 不拦（详情/回读仍可）。
 // ============================================================
 
 import { readFile, readdir, stat } from "fs/promises"
 import path from "path"
 import os from "os"
+import { getDisabledSkills } from "@/lib/skills/state"
 
 export interface LoadedSkill {
   id: string // 目录名
@@ -53,6 +56,7 @@ export async function loadSkills(extraDirs: string[] = [], force = false): Promi
   if (!force && cache && Date.now() - cache.at < CACHE_TTL) return cache.skills
   const dirs = [...DEFAULT_SKILL_DIRS, ...extraDirs]
   const skills: LoadedSkill[] = []
+  const disabled = await getDisabledSkills()
   for (const dir of dirs) {
     let entries: string[] = []
     try {
@@ -61,6 +65,7 @@ export async function loadSkills(extraDirs: string[] = [], force = false): Promi
       continue
     }
     for (const entry of entries) {
+      if (disabled.has(entry)) continue // P2-1：停用技能不进候选池
       const skillPath = path.join(dir, entry, "SKILL.md")
       try {
         const st = await stat(skillPath)
