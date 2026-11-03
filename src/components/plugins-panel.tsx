@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useToast } from "@/hooks/use-toast"
-import { Puzzle, Wrench, Cable, RefreshCw, Play, Plus, Trash2, Loader2, ServerCog, Activity, Power, Terminal, Download, Upload, Zap, Stethoscope } from "lucide-react"
+import { Puzzle, Wrench, Cable, RefreshCw, Play, Plus, Trash2, Loader2, ServerCog, Activity, Power, Terminal, Download, Upload, Zap, Stethoscope, Radio, KeyRound, Copy } from "lucide-react"
 
 interface ProviderInfo {
   kind: string
@@ -26,6 +26,12 @@ interface ProviderInfo {
 }
 interface ToolInfo { name: string; description: string; builtin: boolean; params: Record<string, string> }
 interface McpInfo { id: string; name: string; transport: string; url: string; command: string; enabled: boolean; status: string; discoveredTools: string; lastError: string; source?: "db" | "file" }
+interface McpServerState {
+  enabled: boolean
+  hasToken: boolean
+  tools: { name: string; description: string }[]
+  protocol: string
+}
 
 const STATUS_COLOR: Record<string, string> = {
   healthy: "bg-emerald-600",
@@ -53,6 +59,10 @@ export function PluginsPanel() {
   const [importText, setImportText] = useState("")
   const [showImport, setShowImport] = useState(false)
   const [importing, setImporting] = useState(false)
+  // P2-3：MCP 服务端开放（双向 MCP 的服务端半边）
+  const [serverState, setServerState] = useState<McpServerState | null>(null)
+  const [tokenDraft, setTokenDraft] = useState("")
+  const [serverBusy, setServerBusy] = useState(false)
 
   const refreshProviders = useCallback(async () => {
     setChecking(true)
@@ -75,11 +85,51 @@ export function PluginsPanel() {
     setRegisteredMcpTools(json.registeredMcpTools ?? [])
   }, [])
 
+  // ---------- P2-3：MCP 服务端开放（配置 / 令牌 / 复制接入 JSON） ----------
+  const refreshMcpServer = useCallback(async () => {
+    try {
+      const json = await fetch("/api/mcp-server/config").then((x) => x.json())
+      if (json.ok) setServerState({ enabled: json.config.enabled, hasToken: json.config.hasToken, tools: json.tools ?? [], protocol: json.protocol })
+    } catch {
+      /* 静默 */
+    }
+  }, [])
+
+  const putMcpServer = async (patch: { enabled?: boolean; token?: string; clearToken?: boolean }) => {
+    setServerBusy(true)
+    try {
+      const res = await fetch("/api/mcp-server/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) })
+      const json = await res.json()
+      if (!res.ok || !json.ok) throw new Error(json.message)
+      toast({ title: "已更新", description: json.message })
+      setTokenDraft("")
+      void refreshMcpServer()
+    } catch (e) {
+      toast({ title: "操作失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setServerBusy(false)
+    }
+  }
+
+  const copyServerJson = async () => {
+    const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost:3000"
+    const entry: Record<string, unknown> = { url: `${origin}/api/mcp-server` }
+    if (serverState?.hasToken) entry.headers = { Authorization: "Bearer <你的令牌>" }
+    const json = JSON.stringify({ mcpServers: { radarforge: entry } }, null, 2)
+    try {
+      await navigator.clipboard.writeText(json)
+      toast({ title: "已复制 mcpServers JSON", description: "粘贴进 Cursor（.cursor/mcp.json）/ Claude Desktop / VS Code 即可接入本平台能力" })
+    } catch {
+      toast({ title: "剪贴板不可用", description: json, variant: "destructive" })
+    }
+  }
+
   useEffect(() => {
     void refreshProviders()
     void refreshTools()
     void refreshServers()
-  }, [refreshProviders, refreshTools, refreshServers])
+    void refreshMcpServer()
+  }, [refreshProviders, refreshTools, refreshServers, refreshMcpServer])
 
   const runTool = async () => {
     setRunning(true)
@@ -474,6 +524,70 @@ export function PluginsPanel() {
           </CardContent>
         </Card>
       </div>
+
+      {/* P2-3：MCP 服务端开放（双向 MCP 的服务端半边） */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center justify-between text-base">
+            <span className="flex items-center gap-2"><Radio className="h-4 w-4 text-amber-500" />MCP 服务端开放 · 双向 MCP</span>
+            <span className="flex items-center gap-1.5 shrink-0">
+              {serverState && (
+                <Badge variant={serverState.enabled ? "secondary" : "outline"} className={`text-[9px] px-1.5 ${serverState.enabled ? "bg-emerald-600 text-white" : ""}`}>
+                  {serverState.enabled ? "对外提供服务" : "已停用"}
+                </Badge>
+              )}
+              {serverState?.hasToken && <Badge variant="outline" className="text-[9px] px-1.5 text-amber-600 border-amber-300"><KeyRound className="h-2.5 w-2.5 mr-0.5" />令牌保护</Badge>}
+            </span>
+          </CardTitle>
+          <p className="text-[11px] text-muted-foreground break-words">
+            本平台作为 MCP server 对外开放：选题池 / 图文九步流水线 / 技能库 / 联网检索 → Cursor / Claude Desktop / VS Code 配一份 JSON 即可调用（Streamable HTTP · 协议 {serverState?.protocol ?? "2025-06-18"}）
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {/* 接入地址与复制 */}
+          <div className="space-y-1.5">
+            <div className="text-[10px] text-muted-foreground">接入端点（标准 mcpServers JSON 一键复制）：</div>
+            <div className="flex gap-1.5">
+              <code className="flex-1 min-w-0 text-[11px] font-mono rounded border bg-muted/50 px-2 py-1.5 truncate">{typeof window !== "undefined" ? window.location.origin : "http://localhost:3000"}/api/mcp-server</code>
+              <Button size="sm" variant="outline" className="h-8 text-[10px] shrink-0" onClick={() => void copyServerJson()}>
+                <Copy className="h-3 w-3 mr-1" />复制接入 JSON
+              </Button>
+            </div>
+          </div>
+
+          {/* 启停 + 令牌 */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button size="sm" variant="outline" className="h-7 text-[10px]" disabled={serverBusy} onClick={() => void putMcpServer({ enabled: !(serverState?.enabled ?? true) })}>
+              <Power className="h-3 w-3 mr-1" />{serverState?.enabled ? "停用服务端" : "启用服务端"}
+            </Button>
+            <div className="flex items-center gap-1.5 flex-1 min-w-[220px]">
+              <Input placeholder={serverState?.hasToken ? "令牌已设置（输入新值替换）" : "访问令牌（可选；暴露到非本机网络时建议设置）"} value={tokenDraft} onChange={(e) => setTokenDraft(e.target.value)} className="h-7 text-[11px] font-mono" />
+              <Button size="sm" className="h-7 px-2.5 text-[10px] bg-amber-500 hover:bg-amber-600 text-white shrink-0" disabled={serverBusy || !tokenDraft.trim()} onClick={() => void putMcpServer({ token: tokenDraft.trim() })}>
+                {serverBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <KeyRound className="h-3 w-3" />}
+              </Button>
+              <Button size="sm" variant="ghost" className="h-7 px-2 text-[10px] shrink-0" disabled={serverBusy} onClick={() => setTokenDraft(Array.from({ length: 24 }, () => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789".charAt(Math.floor(Math.random() * 62))).join(""))} title="生成 24 位随机令牌">随机</Button>
+              {serverState?.hasToken && (
+                <Button size="sm" variant="ghost" className="h-7 px-2 text-[10px] text-red-500 shrink-0" disabled={serverBusy} onClick={() => void putMcpServer({ clearToken: true })}>清除</Button>
+              )}
+            </div>
+          </div>
+
+          {/* 工具清单 */}
+          <div className="space-y-1">
+            <div className="text-[10px] text-muted-foreground">对外工具 {serverState?.tools.length ?? 0} 个（外部客户端可调）：</div>
+            <div className="flex flex-wrap gap-1">
+              {(serverState?.tools ?? []).map((t) => (
+                <span key={t.name} title={t.description} className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50/50 dark:bg-amber-950/20 px-2 py-0.5 font-mono text-[10px] text-amber-700 dark:text-amber-400">{t.name}</span>
+              ))}
+            </div>
+          </div>
+
+          <div className="text-[10px] text-muted-foreground rounded bg-muted/40 px-2 py-1.5 flex items-start gap-1.5">
+            <Radio className="h-3 w-3 mt-0.5 shrink-0" />
+            <span>与 dsh 插件出口的分工（方案 5.4）：纯文本回传的工具走 MCP（一次实现处处可用——Cursor/Claude/VS Code 生态）；富产物（成片播放卡、会话卡片）留在 dsh 插件。异步出稿：radar_start_article 返回 runId，radar_run_status 轮询，radar_run_output 取成稿。</span>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

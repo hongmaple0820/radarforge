@@ -1,13 +1,13 @@
 "use client"
 
 // ============================================================
-// 设置中心 —— 供应商中枢（六卡）
-// LLM：内置 / Agnes 免费池 / 自定义 OpenAI 兼容
-// 搜索：元宝 SearchPro key
-// 生图：内置 SDK / 自定义端点 / Agnes 免费生图
-// Agnes 账号池：多账号管理（学 dsh-agnes-multimodal 配置页）
-// 视频通道：本地双风格 / Agnes AI 模型 / 自动
-// 风格定位：注入每篇文章的任务书与初稿
+// 设置中心 —— 三分区信息架构（P2-2）+ 供应商中枢
+// 分区（q7 方案 7.2，把分散的卡收进三个心智抽屉）：
+//   ① 模型与密钥：LLM / 搜索 / 生图 / Agnes 池 / 视频通道（全套参数）
+//   ② 运行时依赖：渲染依赖自检（ffmpeg/ffprobe 解析链） / 网络代理
+//   ③ 内容策略：风格定位 / 自动化任务
+// 健康中心（首屏状态条）异常项可跳转对应卡：jump 属性驱动
+//   分区切换 + 卡片锚点滚动（settings-card-<key>）。
 // ============================================================
 
 import { useCallback, useEffect, useState } from "react"
@@ -15,8 +15,16 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
-import { Settings2, Bot, Search, ImageIcon, Compass, Loader2, CheckCircle2, XCircle, KeyRound, Users, Video, Plus, Trash2, Zap, Download, Upload, Timer, Play, ScrollText, Newspaper, Rss, Lightbulb, Globe } from "lucide-react"
+import { Settings2, Bot, Search, ImageIcon, Compass, Loader2, CheckCircle2, XCircle, KeyRound, Users, Video, Plus, Trash2, Zap, Download, Upload, Timer, Play, ScrollText, Newspaper, Rss, Lightbulb, Globe, HardDrive } from "lucide-react"
+
+/** 健康中心跳转目标（P2-2，由 page 层下发） */
+export interface SettingsJumpTarget {
+  partition: "models" | "runtime" | "content"
+  card: string
+  seq: number
+}
 
 type AgnesSite = "cn" | "intl" | "custom"
 interface AgnesAccountForm {
@@ -72,12 +80,17 @@ interface AutomationState {
 const AGNES_CHAT_MODELS = ["agnes-2.5-flash", "agnes-3.0-flash"]
 const AGNES_IMAGE_MODELS = ["agnes-image-2.1-flash", "agnes-image-2.5-flash"]
 
-export function SettingsPanel() {
+export function SettingsPanel({ jump }: { jump?: SettingsJumpTarget | null }) {
   const { toast } = useToast()
   const [data, setData] = useState<SettingsData | null>(null)
   const [saving, setSaving] = useState<string | null>(null)
   const [testing, setTesting] = useState<string | null>(null)
   const [tests, setTests] = useState<Record<string, TestResult>>({})
+  // P2-2 三分区 + 健康中心跳转驱动
+  const [partition, setPartition] = useState<"models" | "runtime" | "content">("models")
+  // P2-2 渲染依赖自检报告（runtime 分区卡；GET /api/settings/dependencies）
+  const [depsReport, setDepsReport] = useState<{ items: { name: string; resolved: boolean; path: string | null; source: string | null; version: string | null; hint: string | null }[] } | null>(null)
+  const [depsLoading, setDepsLoading] = useState(false)
 
   // 编辑态（apiKey 留空 = 不修改）
   const [llmForm, setLlmForm] = useState({ mode: "builtin" as "builtin" | "custom" | "agnes" | "pi-ai", baseUrl: "", apiKey: "", model: "", piProvider: "openai" })
@@ -145,6 +158,33 @@ export function SettingsPanel() {
     const t = setTimeout(() => void load(), 0)
     return () => clearTimeout(t)
   }, [load])
+
+  // ---------- P2-2：渲染依赖自检（runtime 分区） ----------
+  const loadDeps = useCallback(async () => {
+    setDepsLoading(true)
+    try {
+      const json = await fetch("/api/settings/dependencies").then((x) => x.json())
+      setDepsReport({ items: json.items ?? [] })
+    } catch {
+      setDepsReport({ items: [] })
+    } finally {
+      setDepsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadDeps()
+  }, [loadDeps])
+
+  // ---------- P2-2：健康中心跳转（分区切换 + 卡片锚点滚动） ----------
+  useEffect(() => {
+    if (!jump) return
+    setPartition(jump.partition)
+    const t = setTimeout(() => {
+      document.getElementById(`settings-card-${jump.card}`)?.scrollIntoView({ behavior: "smooth", block: "start" })
+    }, 350) // 等分区内容挂载
+    return () => clearTimeout(t)
+  }, [jump])
 
   // ---------- 自动化任务（P2：配置 / 立即运行 / 日志） ----------
   const loadAutomation = useCallback(async () => {
@@ -409,7 +449,7 @@ export function SettingsPanel() {
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base"><Settings2 className="h-4 w-4 text-amber-500" />设置中心 · 供应商中枢</CardTitle>
-          <p className="text-[11px] text-muted-foreground">模型密钥与创作风格集中配置；保存即生效，不需要重启。密钥仅存本机数据库，页面回显已脱敏。</p>
+          <p className="text-[11px] text-muted-foreground">三分区：模型与密钥 / 运行时依赖 / 内容策略。保存即生效，不需要重启；密钥仅存本机数据库，页面回显已脱敏。</p>
         </CardHeader>
         <CardContent>
           <div className="flex items-center gap-1.5 flex-wrap text-[10px]">
@@ -435,8 +475,24 @@ export function SettingsPanel() {
         </CardContent>
       </Card>
 
+      {/* P2-2 三分区：模型与密钥 / 运行时依赖 / 内容策略 */}
+      <Tabs value={partition} onValueChange={(v) => setPartition(v as typeof partition)}>
+        <TabsList className="grid grid-cols-3 w-full max-w-md h-9">
+          <TabsTrigger value="models" className="gap-1.5 text-xs">
+            <KeyRound className="h-3.5 w-3.5" />模型与密钥
+          </TabsTrigger>
+          <TabsTrigger value="runtime" className="gap-1.5 text-xs">
+            <HardDrive className="h-3.5 w-3.5" />运行时依赖
+          </TabsTrigger>
+          <TabsTrigger value="content" className="gap-1.5 text-xs">
+            <ScrollText className="h-3.5 w-3.5" />内容策略
+          </TabsTrigger>
+        </TabsList>
+
+        {/* ========== 分区①：模型与密钥 ========== */}
+        <TabsContent value="models" className="mt-3 space-y-4">
       {/* LLM */}
-      <Card>
+      <Card id="settings-card-llm">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center justify-between text-sm">
             <span className="flex items-center gap-1.5"><Bot className="h-4 w-4 text-emerald-600" />AI 大模型</span>
@@ -532,47 +588,8 @@ export function SettingsPanel() {
         </CardContent>
       </Card>
 
-      {/* 网络代理（P0-2 全局配置；RSS 抓取按「按源 > 全局 > 直连」） */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center justify-between text-sm">
-            <span className="flex items-center gap-1.5"><Globe className="h-4 w-4 text-cyan-600" />网络代理</span>
-            {data.network?.proxyUrl && <Badge variant="outline" className="text-[9px] text-cyan-600 border-cyan-300">已启用</Badge>}
-          </CardTitle>
-          <p className="text-[11px] text-muted-foreground">
-            RSS 信源抓取的统一出口（沙箱外网受限或区域不可达时的第二通路）。优先级：源级代理（信源卡片铅笔设置）&gt; 此处全局代理 &gt; 直连——与 Feedly / Folo 等阅读器「全局代理 + 源级例外」通行做法一致
-          </p>
-        </CardHeader>
-        <CardContent className="space-y-2.5">
-          <div className="flex items-center gap-2">
-            <Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-            <Input
-              placeholder="http://127.0.0.1:7890（留空 = 直连；仅作用于 RSS 抓取，不影响搜索/LLM 通道）"
-              value={networkForm.proxyUrl}
-              onChange={(e) => setNetworkForm({ proxyUrl: e.target.value })}
-              className="font-mono text-xs"
-            />
-          </div>
-          <p className="text-[10px] text-muted-foreground">
-            {data.network?.proxyUrl
-              ? `当前全局代理：${data.network.proxyUrl}——经代理失败会在源卡留痕「经代理」标记，便于区分源故障与代理故障`
-              : "未配置全局代理（全部直连）。仅个别源需要代理时，建议用源级代理而非全局开启"}
-          </p>
-          <div className="flex gap-2 pt-1">
-            <Button size="sm" onClick={() => save("network")} disabled={saving === "network"} className="bg-amber-500 hover:bg-amber-600 text-white">
-              {saving === "network" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}保存
-            </Button>
-            {data.network?.proxyUrl && (
-              <Button size="sm" variant="ghost" onClick={() => { setNetworkForm({ proxyUrl: "" }); void save("network") }} disabled={saving === "network"} className="text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30">
-                <XCircle className="h-3.5 w-3.5 mr-1" />清除（恢复直连）
-              </Button>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
       {/* 搜索 */}
-      <Card>
+      <Card id="settings-card-search">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center justify-between text-sm">
             <span className="flex items-center gap-1.5"><Search className="h-4 w-4 text-sky-600" />AI 搜索（元宝 SearchPro）</span>
@@ -608,7 +625,7 @@ export function SettingsPanel() {
       </Card>
 
       {/* 生图 */}
-      <Card>
+      <Card id="settings-card-image">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center justify-between text-sm">
             <span className="flex items-center gap-1.5"><ImageIcon className="h-4 w-4 text-violet-600" />生图模型</span>
@@ -652,7 +669,7 @@ export function SettingsPanel() {
       </Card>
 
       {/* Agnes 账号池 */}
-      <Card>
+      <Card id="settings-card-agnes">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center justify-between text-sm">
             <span className="flex items-center gap-1.5"><Users className="h-4 w-4 text-emerald-600" />Agnes 账号池（免费多模态）</span>
@@ -822,11 +839,11 @@ export function SettingsPanel() {
       </Card>
 
       {/* 视频通道 */}
-      <Card>
+      <Card id="settings-card-video">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center justify-between text-sm">
             <span className="flex items-center gap-1.5"><Video className="h-4 w-4 text-rose-500" />视频通道</span>
-            <span className="flex items-center gap-2"><TestBadge scope="video" /><TestBadge scope="dependencies" /></span>
+            <TestBadge scope="video" />
           </CardTitle>
           <p className="text-[11px] text-muted-foreground">
             四通道：本地双风格渲染（motion 商业片 / art 艺术动画，Playwright+ffmpeg 出片）/ Agnes AI 视频模型（720P · 4-12s）/ 自动（优先 AI，失败回退本地）/ 混合通道（分镜按 render 标注分发：数据/字排→代码动画，实景/情绪→AI 模型 5~10s 插播，成本 ≈ 纯模型 1/3）
@@ -946,18 +963,96 @@ export function SettingsPanel() {
             <Button size="sm" onClick={() => void saveVideo()} disabled={saving === "video"} className="bg-amber-500 hover:bg-amber-600 text-white">
               {saving === "video" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}保存
             </Button>
-            <Button size="sm" variant="outline" onClick={() => void probeScope("video")} disabled={testing === "video" || saving === "video"} title="探活 AI 视频模型通道（Agnes）；本地渲染通道无需模型">
+            <Button size="sm" variant="outline" onClick={() => void probeScope("video")} disabled={testing === "video" || saving === "video"} title="探活 AI 视频模型通道（Agnes）；本地渲染依赖自检在「运行时依赖」分区">
               {(testing === "video" || saving === "video") ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}AI 模型探活
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => void probeScope("dependencies")} disabled={testing === "dependencies"} title="自检本地渲染依赖（ffmpeg/ffprobe）：解析路径 + 版本 + 修复指引">
-              {testing === "dependencies" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}渲染依赖自检
             </Button>
           </div>
         </CardContent>
       </Card>
+        </TabsContent>
 
+        {/* ========== 分区②：运行时依赖 ========== */}
+        <TabsContent value="runtime" className="mt-3 space-y-4">
+          {/* 渲染依赖自检（P0-1 解析链，P2-2 归位运行时分区） */}
+          <Card id="settings-card-deps">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center justify-between text-sm">
+                <span className="flex items-center gap-1.5"><HardDrive className="h-4 w-4 text-cyan-600" />渲染依赖自检</span>
+                <Button size="sm" variant="outline" onClick={() => void loadDeps()} disabled={depsLoading}>
+                  {depsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}重新自检
+                </Button>
+              </CardTitle>
+              <p className="text-[11px] text-muted-foreground">
+                ffmpeg / ffprobe 四层解析链（环境变量 → PATH → 常见路径 → ffmpeg-static 兜底）逐项报告；缺失项给修复指引而非原始报错——根治「Executable not found in $PATH」
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {(depsReport?.items ?? []).map((d) => (
+                <div key={d.name} className="rounded-lg border px-3 py-2 space-y-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-semibold font-mono">{d.name}</span>
+                    {d.resolved && d.version ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-600"><CheckCircle2 className="h-3 w-3" />就绪</span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-medium text-red-600"><XCircle className="h-3 w-3" />未解析</span>
+                    )}
+                    {d.source && <Badge variant="outline" className="text-[9px] px-1 py-0">来源：{d.source}</Badge>}
+                    {d.version && <span className="text-[10px] text-muted-foreground font-mono ml-auto hidden sm:inline max-w-[220px] truncate">{d.version}</span>}
+                  </div>
+                  {d.path && <div className="text-[10px] font-mono text-muted-foreground truncate" title={d.path}>{d.path}</div>}
+                  {d.hint && <div className="text-[10px] text-amber-600 leading-relaxed rounded bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 px-2 py-1.5">{d.hint}</div>}
+                </div>
+              ))}
+              {depsReport && depsReport.items.length === 0 && (
+                <p className="text-xs text-muted-foreground py-2">自检报告为空（接口异常或未挂载）——点「重新自检」重试</p>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* 网络代理（P0-2 全局配置；RSS 抓取按「按源 > 全局 > 直连」） */}
+          <Card id="settings-card-network">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center justify-between text-sm">
+                <span className="flex items-center gap-1.5"><Globe className="h-4 w-4 text-cyan-600" />网络代理</span>
+                {data.network?.proxyUrl && <Badge variant="outline" className="text-[9px] text-cyan-600 border-cyan-300">已启用</Badge>}
+              </CardTitle>
+              <p className="text-[11px] text-muted-foreground">
+                RSS 信源抓取的统一出口（沙箱外网受限或区域不可达时的第二通路）。优先级：源级代理（信源卡片铅笔设置）&gt; 此处全局代理 &gt; 直连——与 Feedly / Folo 等阅读器「全局代理 + 源级例外」通行做法一致
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-2.5">
+              <div className="flex items-center gap-2">
+                <Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <Input
+                  placeholder="http://127.0.0.1:7890（留空 = 直连；仅作用于 RSS 抓取，不影响搜索/LLM 通道）"
+                  value={networkForm.proxyUrl}
+                  onChange={(e) => setNetworkForm({ proxyUrl: e.target.value })}
+                  className="font-mono text-xs"
+                />
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                {data.network?.proxyUrl
+                  ? `当前全局代理：${data.network.proxyUrl}——经代理失败会在源卡留痕「经代理」标记，便于区分源故障与代理故障`
+                  : "未配置全局代理（全部直连）。仅个别源需要代理时，建议用源级代理而非全局开启"}
+              </p>
+              <div className="flex gap-2 pt-1">
+                <Button size="sm" onClick={() => save("network")} disabled={saving === "network"} className="bg-amber-500 hover:bg-amber-600 text-white">
+                  {saving === "network" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}保存
+                </Button>
+                {data.network?.proxyUrl && (
+                  <Button size="sm" variant="ghost" onClick={() => { setNetworkForm({ proxyUrl: "" }); void save("network") }} disabled={saving === "network"} className="text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30">
+                    <XCircle className="h-3.5 w-3.5 mr-1" />清除（恢复直连）
+                  </Button>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ========== 分区③：内容策略 ========== */}
+        <TabsContent value="content" className="mt-3 space-y-4">
       {/* 风格定位 */}
-      <Card>
+      <Card id="settings-card-style">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-1.5 text-sm"><Compass className="h-4 w-4 text-amber-500" />创作方向 · 风格定位</CardTitle>
           <p className="text-[11px] text-muted-foreground">填写后注入每一篇文章的任务书与初稿（与七人格叠加生效），也用于 AI 刷新灵感的选题方向</p>
@@ -984,7 +1079,7 @@ export function SettingsPanel() {
       </Card>
 
       {/* 自动化任务（P2：定时早报 / RSS 刷新 / 灵感刷新） */}
-      <Card>
+      <Card id="settings-card-automation">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-1.5 text-sm"><Timer className="h-4 w-4 text-amber-500" />自动化任务</CardTitle>
           <p className="text-[11px] text-muted-foreground">
@@ -1100,6 +1195,8 @@ export function SettingsPanel() {
           )}
         </CardContent>
       </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

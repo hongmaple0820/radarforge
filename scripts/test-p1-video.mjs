@@ -86,7 +86,22 @@ console.log("── ④ 配置下发 ──")
   // 更直接的断言：创建一个 run 后用假 storyboard 调 render-video，校验错误
   // 信息不含「画幅」类错误即可说明 aspect 默认链路没炸；此处用响应链验证路由可读配置
   const runs = await j("GET", "/api/runs")
-  const run = (runs.json?.runs ?? [])[0]
+  let run = (runs.json?.runs ?? [])[0]
+  if (!run) {
+    // 冷库自洽：无历史 run 时直接落一条最小 AgentRun（不经流水线，零 LLM 消耗）
+    // ——沙箱回收后 DB 重置，测试不应依赖暖库状态（test-p2-intel 同样教训）
+    try {
+      const { PrismaClient } = await import("@prisma/client")
+      const db = new PrismaClient()
+      const created = await db.agentRun.create({
+        data: { kind: "article", ideaTitle: "p1-video 路由验证用最小 run", status: "done", mode: "DEMO" },
+      })
+      await db.$disconnect()
+      run = created
+    } catch (e) {
+      ok("冷库自建最小 run", false, String(e).slice(0, 60))
+    }
+  }
   if (run) {
     const r = await j("POST", `/api/runs/${run.id}/actions`, {
       action: "render-video",

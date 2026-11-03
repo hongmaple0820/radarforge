@@ -9,8 +9,16 @@ import { VideoPanel } from "@/components/video-panel"
 import { ImagePanel } from "@/components/image-panel"
 import { EcoPanel } from "@/components/eco-panel"
 import { SettingsPanel } from "@/components/settings-panel"
+import { HealthBar } from "@/components/health-bar"
 import { CommandPalette } from "@/components/command-palette"
 import { Radar, PenLine, Clapperboard, Puzzle, Settings2, FileText, ImageIcon, Command } from "lucide-react"
+
+/** 健康中心跳转目标（P2-2）：分区 + 卡片锚点 + 自增序号（同目标重复点击也生效） */
+interface SettingsJump {
+  partition: "models" | "runtime" | "content"
+  card: string
+  seq: number
+}
 
 export default function Home() {
   // 情报中心「去创作」动线：选题种子 → 主 Tab 创作台 → 内层图文线自动填入（含 ideaId 闭环）
@@ -23,6 +31,17 @@ export default function Home() {
   // wizardFocus 自增 → 新图文聚焦向导；jumpRunId → 直达 run 详情
   const [wizardFocus, setWizardFocus] = useState(0)
   const [jumpRunId, setJumpRunId] = useState<string | null>(null)
+  // P2-2：健康中心 → 设置中心跳转（分区 + 卡片锚点）
+  const [settingsJump, setSettingsJump] = useState<SettingsJump | null>(null)
+
+  const onHealthJump = useCallback((jump: { tab: "settings" | "intel"; partition?: string; card?: string }) => {
+    if (jump.tab === "intel") {
+      setMainTab("intel")
+      return
+    }
+    setSettingsJump({ partition: (jump.partition as SettingsJump["partition"]) ?? "models", card: jump.card ?? "llm", seq: Date.now() })
+    setMainTab("settings")
+  }, [])
 
   const goCreate = (title: string, angle: string, ideaId?: string) => {
     setCreateSeed({ title, angle, ideaId })
@@ -91,6 +110,10 @@ export default function Home() {
 
       {/* Main */}
       <main className="flex-1 max-w-[1440px] w-full mx-auto px-4 py-4">
+        {/* P2-2 全局健康中心：首屏状态条（四项一览，异常可跳转对应设置卡） */}
+        <div className="mb-3">
+          <HealthBar onJump={onHealthJump} />
+        </div>
         <Tabs value={mainTab} onValueChange={setMainTab} className="space-y-4">
           <TabsList className="grid grid-cols-2 sm:grid-cols-4 w-full max-w-2xl h-10">
             <TabsTrigger value="intel" className="gap-1.5 text-xs sm:text-sm">
@@ -147,7 +170,7 @@ export default function Home() {
           </TabsContent>
 
           <TabsContent value="settings" className="mt-0">
-            <SettingsPanel />
+            <SettingsPanel jump={settingsJump} />
           </TabsContent>
         </Tabs>
       </main>
