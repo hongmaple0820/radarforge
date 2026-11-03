@@ -64,6 +64,14 @@ export interface VideoSettings {
   channel: "local" | "agnes" | "auto" | "hybrid"
   /** Agnes 视频生成时每镜秒数（4-12s） */
   secondsPerScene: number
+  /** P1-5 轻量化：视频模型配置收敛单卡——当前选用模型 id（可手填自定义，预置项见 models） */
+  model: string
+  /** 可编辑模型清单（预置 + 用户自添；不维护远端目录拉取） */
+  models: string[]
+  /** 分辨率预设（720P 起步；1080P 视模型支持，Agnes 上传时透传 size 字段） */
+  resolution: "720P" | "1080P"
+  /** 默认画幅（render-video 请求未指定时采用） */
+  aspect: "9:16" | "16:9"
 }
 
 /** 网络代理（P0-2）：全局 http/https 代理地址，空 = 直连。
@@ -102,7 +110,14 @@ const DEFAULTS: AppSettings = {
     rpmImage: 20,
     rpmVideo: 1,
   },
-  video: { channel: "local", secondsPerScene: 8 },
+  video: {
+    channel: "local",
+    secondsPerScene: 8,
+    model: "agnes-video-2.5-flash",
+    models: ["agnes-video-2.5-flash"],
+    resolution: "720P",
+    aspect: "9:16",
+  },
   style: { positioning: "", audience: "", domains: "", tone: "", taboos: "" },
   exemplars: { items: [] },
   network: { proxyUrl: "" },

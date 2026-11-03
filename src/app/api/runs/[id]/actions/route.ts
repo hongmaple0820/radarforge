@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { chatRetry } from "@/lib/gateway"
+import { getSettings } from "@/lib/settings"
 import { generateCoverImage } from "@/lib/gateway/providers/zai-image"
 import { extractJson } from "@/lib/runtime/json"
 import { relayoutForRun, loadRenderClaims } from "@/lib/runtime/relayout"
@@ -222,7 +223,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         return NextResponse.json({ error: "分镜数据不完整（至少 3 个分镜），请先生成视频分镜" }, { status: 400 })
       }
       const voice = TTS_VOICES.some((v) => v.id === body.voice) ? body.voice! : "xiaochen"
-      const aspect: VideoAspect = body.aspect === "16:9" ? "16:9" : "9:16"
+      // P1-5：画幅缺省取视频通道卡配置（settings.video.aspect），请求可覆盖
+      const settingsVideo = (await getSettings(true)).video
+      const aspect: VideoAspect = body.aspect === "16:9" ? "16:9" : body.aspect === "9:16" ? "9:16" : settingsVideo.aspect === "16:9" ? "16:9" : "9:16"
       const style: VideoStyle = body.style === "art" ? "art" : "motion"
       const channel: VideoChannel | undefined =
         body.channel === "agnes" || body.channel === "auto" || body.channel === "local" || body.channel === "hybrid" ? body.channel : undefined

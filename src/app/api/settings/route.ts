@@ -77,12 +77,23 @@ export async function PUT(req: Request) {
       })
     }
 
-    // ---------- 视频通道 ----------
+    // ---------- 视频通道（P1-5：模型/分辨率/画幅/秒数收敛单卡） ----------
     if (scope === "video") {
       const v = (body.value ?? {}) as Partial<VideoSettings>
       const patch: Partial<VideoSettings> = {}
-      if (v.channel === "local" || v.channel === "agnes" || v.channel === "auto") patch.channel = v.channel
+      if (v.channel === "local" || v.channel === "agnes" || v.channel === "auto" || v.channel === "hybrid") patch.channel = v.channel
       if (typeof v.secondsPerScene === "number") patch.secondsPerScene = Math.min(12, Math.max(4, Math.round(v.secondsPerScene)))
+      // 模型可编辑清单：当前选用 + 自定义手填（预置项 + 用户自添，不维护远端目录）
+      if (typeof v.model === "string") patch.model = v.model.trim().slice(0, 100)
+      if (Array.isArray(v.models)) {
+        patch.models = [...new Set(
+          v.models
+            .filter((m) => typeof m === "string" && m.trim())
+            .map((m) => m.trim().slice(0, 100)),
+        )].slice(0, 12)
+      }
+      if (v.resolution === "720P" || v.resolution === "1080P") patch.resolution = v.resolution
+      if (v.aspect === "9:16" || v.aspect === "16:9") patch.aspect = v.aspect
       await saveSetting("video", patch)
       const fresh = await getSettings(true)
       return NextResponse.json({
@@ -94,7 +105,9 @@ export async function PUT(req: Request) {
               ? "视频通道：优先 Agnes AI 模型，失败自动回退本地渲染"
               : patch.channel === "local"
                 ? "视频通道：本地双风格渲染（motion 商业片 / art 艺术动画）"
-                : "视频配置已保存",
+                : patch.model !== undefined || patch.resolution !== undefined || patch.aspect !== undefined
+                  ? "视频配置已保存（模型 / 分辨率 / 画幅 / 秒数全套，下一次生成请求即携带）"
+                  : "视频配置已保存",
       })
     }
 

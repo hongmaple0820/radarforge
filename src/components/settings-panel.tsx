@@ -42,7 +42,14 @@ interface SettingsData {
     rpmImage: number
     rpmVideo: number
   }
-  video: { channel: "local" | "agnes" | "auto" | "hybrid"; secondsPerScene: number }
+  video: {
+    channel: "local" | "agnes" | "auto" | "hybrid"
+    secondsPerScene: number
+    model?: string
+    models?: string[]
+    resolution?: "720P" | "1080P"
+    aspect?: "9:16" | "16:9"
+  }
   style: { positioning: string; audience: string; domains: string; tone: string; taboos: string }
   network: { proxyUrl: string }
   _meta: Record<string, { hasKey: boolean; envFallback: boolean }>
@@ -64,7 +71,6 @@ interface AutomationState {
 
 const AGNES_CHAT_MODELS = ["agnes-2.5-flash", "agnes-3.0-flash"]
 const AGNES_IMAGE_MODELS = ["agnes-image-2.1-flash", "agnes-image-2.5-flash"]
-const AGNES_VIDEO_MODELS = ["agnes-video-2.5-flash"]
 
 export function SettingsPanel() {
   const { toast } = useToast()
@@ -92,7 +98,14 @@ export function SettingsPanel() {
     rpmVideo: number
   }>({ enabled: false, accounts: [], chatModel: "agnes-2.5-flash", imageModel: "agnes-image-2.1-flash", videoModel: "agnes-video-2.5-flash", strategy: "round-robin", rpmImage: 20, rpmVideo: 1 })
   const [agnesKeyDrafts, setAgnesKeyDrafts] = useState<Record<string, string>>({})
-  const [videoForm, setVideoForm] = useState<{ channel: "local" | "agnes" | "auto" | "hybrid"; secondsPerScene: number }>({ channel: "local", secondsPerScene: 8 })
+  const [videoForm, setVideoForm] = useState<{
+    channel: "local" | "agnes" | "auto" | "hybrid"
+    secondsPerScene: number
+    model: string
+    models: string[]
+    resolution: "720P" | "1080P"
+    aspect: "9:16" | "16:9"
+  }>({ channel: "local", secondsPerScene: 8, model: "agnes-video-2.5-flash", models: ["agnes-video-2.5-flash"], resolution: "720P", aspect: "9:16" })
   // 自动化任务（P2）
   const [automation, setAutomation] = useState<AutomationState | null>(null)
   const [autoSaving, setAutoSaving] = useState(false)
@@ -118,7 +131,14 @@ export function SettingsPanel() {
       rpmVideo: s.agnes.rpmVideo,
     })
     setAgnesKeyDrafts({})
-    setVideoForm({ ...s.video })
+    setVideoForm({
+      channel: s.video.channel,
+      secondsPerScene: s.video.secondsPerScene,
+      model: s.video.model ?? "agnes-video-2.5-flash",
+      models: s.video.models?.length ? s.video.models : ["agnes-video-2.5-flash"],
+      resolution: s.video.resolution ?? "720P",
+      aspect: s.video.aspect ?? "9:16",
+    })
   }, [])
 
   useEffect(() => {
@@ -756,12 +776,11 @@ export function SettingsPanel() {
             </Button>
           </div>
 
-          {/* 模型与策略 */}
-          <div className="grid sm:grid-cols-3 gap-2">
+          {/* 模型与策略（P1-5：视频模型已收敛到「视频通道」卡；此处只管文本/生图模型与配额） */}
+          <div className="grid sm:grid-cols-2 gap-2">
             {([
               ["chatModel", "文本模型", AGNES_CHAT_MODELS],
               ["imageModel", "生图模型", AGNES_IMAGE_MODELS],
-              ["videoModel", "视频模型", AGNES_VIDEO_MODELS],
             ] as const).map(([key, label, list]) => (
               <label key={key} className="space-y-1">
                 <span className="text-[10px] text-muted-foreground">{label}</span>
@@ -825,27 +844,103 @@ export function SettingsPanel() {
               </button>
             ))}
           </div>
-          {(videoForm.channel === "agnes" || videoForm.channel === "auto") && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] text-muted-foreground shrink-0">每镜秒数（4-12s）</span>
+
+          {/* P1-5：模型 / 分辨率 / 画幅 / 秒数全套配置收敛单卡（成本估算、批量出片等重功能明确不做） */}
+          <div className="rounded-lg border bg-muted/30 p-2.5 space-y-2.5">
+            <div className="text-[10px] font-medium flex items-center gap-1.5"><Video className="h-3 w-3 text-rose-500" />生成参数（模型 / 分辨率 / 画幅 / 秒数——下一次生成请求全套携带）</div>
+            {/* 模型：可编辑清单（datalist 预置 + 自由手填） */}
+            <div className="space-y-1">
+              <span className="text-[10px] text-muted-foreground">视频模型（预置项可下拉，也可手填自定义 id）</span>
+              <div className="flex gap-1.5">
                 <input
-                  type="range"
-                  min={4}
-                  max={12}
-                  step={1}
-                  value={videoForm.secondsPerScene}
-                  onChange={(e) => setVideoForm((f) => ({ ...f, secondsPerScene: Number(e.target.value) }))}
-                  className="flex-1"
+                  className="h-8 flex-1 text-xs font-mono border rounded-md bg-background px-2"
+                  list="video-model-options"
+                  value={videoForm.model}
+                  onChange={(e) => setVideoForm((f) => ({ ...f, model: e.target.value }))}
+                  placeholder="agnes-video-2.5-flash 或自定义模型 id"
                 />
-                <span className="text-xs font-semibold w-6 text-right">{videoForm.secondsPerScene}s</span>
+                <datalist id="video-model-options">
+                  {(videoForm.models.length > 0 ? videoForm.models : ["agnes-video-2.5-flash"]).map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+                <Button
+                  size="sm" variant="outline" className="h-8 text-[10px] shrink-0"
+                  disabled={!videoForm.model.trim() || videoForm.models.includes(videoForm.model.trim())}
+                  onClick={() => setVideoForm((f) => ({ ...f, models: [...new Set([...f.models, f.model.trim()])].slice(0, 12) }))}
+                  title="把当前输入的模型 id 加入清单（最多 12 个）"
+                >
+                  +加入清单
+                </Button>
               </div>
-              {!agnesEnabled && (
-                <p className="text-[10px] text-amber-600 rounded bg-amber-50 dark:bg-amber-950/20 border border-amber-200 px-2 py-1.5">
-                  Agnes 池未启用——auto 模式会自动回退本地渲染；要用 AI 模型请先在上方账号池启用账号
-                </p>
+              {videoForm.models.length > 1 && (
+                <div className="flex flex-wrap gap-1">
+                  {videoForm.models.map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => setVideoForm((f) => {
+                        const models = f.models.filter((x) => x !== m)
+                        return { ...f, models, model: f.model === m ? (models[0] ?? "") : f.model }
+                      })}
+                      className={`text-[9px] border rounded-full px-1.5 py-0.5 transition-colors ${videoForm.model === m ? "border-rose-400 bg-rose-50 dark:bg-rose-950/30 text-rose-600" : "hover:border-red-300 hover:text-red-500"}`}
+                      title={videoForm.model === m ? "当前选用（点其它清单项切换）" : "点选为当前模型 / 再点右侧删除态移除"}
+                    >
+                      {m} ×
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
+            {/* 分辨率 + 画幅 */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <span className="text-[10px] text-muted-foreground">分辨率预设</span>
+                <div className="flex gap-1.5">
+                  {(["720P", "1080P"] as const).map((r) => (
+                    <button
+                      key={r}
+                      onClick={() => setVideoForm((f) => ({ ...f, resolution: r }))}
+                      className={`text-[10px] border rounded-full px-2 py-0.5 transition-colors ${videoForm.resolution === r ? "border-rose-400 bg-rose-50 dark:bg-rose-950/30 text-rose-600 font-semibold" : "hover:border-rose-300 text-muted-foreground"}`}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-1">
+                <span className="text-[10px] text-muted-foreground">默认画幅（竖屏/横屏）</span>
+                <div className="flex gap-1.5">
+                  {(["9:16", "16:9"] as const).map((a) => (
+                    <button
+                      key={a}
+                      onClick={() => setVideoForm((f) => ({ ...f, aspect: a }))}
+                      className={`text-[10px] border rounded-full px-2 py-0.5 transition-colors ${videoForm.aspect === a ? "border-rose-400 bg-rose-50 dark:bg-rose-950/30 text-rose-600 font-semibold" : "hover:border-rose-300 text-muted-foreground"}`}
+                    >
+                      {a === "9:16" ? "9:16 竖屏" : "16:9 横屏"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            {/* 每镜秒数（Agnes / auto / hybrid 通道用） */}
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground shrink-0">每镜秒数（4-12s，AI 模型通道）</span>
+              <input
+                type="range"
+                min={4}
+                max={12}
+                step={1}
+                value={videoForm.secondsPerScene}
+                onChange={(e) => setVideoForm((f) => ({ ...f, secondsPerScene: Number(e.target.value) }))}
+                className="flex-1"
+              />
+              <span className="text-xs font-semibold w-6 text-right">{videoForm.secondsPerScene}s</span>
+            </div>
+          </div>
+          {(videoForm.channel === "agnes" || videoForm.channel === "auto") && !agnesEnabled && (
+            <p className="text-[10px] text-amber-600 rounded bg-amber-50 dark:bg-amber-950/20 border border-amber-200 px-2 py-1.5">
+              Agnes 池未启用——auto 模式会自动回退本地渲染；要用 AI 模型请先在上方账号池启用账号
+            </p>
           )}
           <div className="flex flex-wrap gap-2 pt-1">
             <Button size="sm" onClick={() => void saveVideo()} disabled={saving === "video"} className="bg-amber-500 hover:bg-amber-600 text-white">

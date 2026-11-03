@@ -68,11 +68,12 @@ export const agnesVideo: VideoProvider = {
     }
     try {
       const body: Record<string, unknown> = {
-        model: s.agnes.videoModel,
+        // P1-5：模型从视频通道卡收敛配置（回退 Agnes 池旧字段保兼容）
+        model: s.video.model || s.agnes.videoModel,
         prompt: req.prompt,
         mode: req.mode,
         seconds: String(Math.min(12, Math.max(4, Math.round(req.seconds)))),
-        size: "720P",
+        size: s.video.resolution === "1080P" ? "1080P" : "720P",
       }
       if (req.aspectRatio) body.aspect_ratio = req.aspectRatio
       if (req.firstFrame) body.first_frame = req.firstFrame
