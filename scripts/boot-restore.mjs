@@ -138,6 +138,16 @@ try {
   }
   ok("RSS 默认源", feedCount > 0, `${feedCount} 个${feedCount === 0 && CHECK_ONLY ? "（--check 只读未播种）" : ""}`)
 
+  // MCP 工具注册表同步（P1-4：已启用+已握过手的服务器，工具以 mcp__服务器__工具
+  // 接入注册表；服务器/进程重启后自动恢复，Agent 运行时与工具测试台立即可用）
+  if (!CHECK_ONLY) {
+    try {
+      const { syncMcpToolsToRegistry } = await import("../src/lib/agent/mcp-client.ts")
+      const r = await syncMcpToolsToRegistry()
+      if (r.tools > 0) ok("MCP 工具注册表", true, `已接入 ${r.tools} 个外部工具（${r.servers} 个服务器）`)
+    } catch { /* mcp-client 依赖 Next 运行时别名时静默跳过（dev 起服后首请求会同步） */ }
+  }
+
   // 概览统计（顺便验证核心表可读）
   const [runs, ideas, assets] = [await db.agentRun.count(), await db.idea.count(), await db.asset.count()]
   if (!QUIET) console.log(`  · 数据概览：runs=${runs} ideas=${ideas} assets=${assets}`)

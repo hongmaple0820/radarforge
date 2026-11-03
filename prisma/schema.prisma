@@ -189,12 +189,15 @@ model ProviderRecord {
 model McpServer {
   id              String   @id @default(cuid())
   name            String
-  transport       String   @default("http") // http | sse | stdio
-  url             String   @default("") // http/sse 用
-  command         String   @default("") // stdio 用
+  transport       String   @default("http") // http | stdio（P1-4：收口双传输）
+  url             String   @default("") // http 用：JSON-RPC endpoint
+  command         String   @default("") // stdio 用：可执行命令（npx/node/uvx…）
+  args            String   @default("[]") // P1-4：JSON 数组，stdio 命令行参数（如 ["-y","mcp-server-github"]）
+  env             String   @default("{}") // P1-4：JSON 对象，stdio 子进程环境变量（如 {"GITHUB_TOKEN":"…"}）
+  headers         String   @default("{}") // P1-4：JSON 对象，http 远程服务器鉴权头（如 {"Authorization":"Bearer …"}）
   enabled         Boolean  @default(true)
   status          String   @default("unknown") // connected | error | unknown
-  discoveredTools String   @default("[]") // JSON: [{name, description}]
+  discoveredTools String   @default("[]") // JSON: [{name, description, inputSchema?}]
   lastError       String   @default("")
   createdAt       DateTime @default(now())
   lastCheckedAt   DateTime?

@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useToast } from "@/hooks/use-toast"
-import { Puzzle, Wrench, Cable, RefreshCw, Play, Plus, Trash2, Loader2, ServerCog, Activity, Power, Terminal } from "lucide-react"
+import { Puzzle, Wrench, Cable, RefreshCw, Play, Plus, Trash2, Loader2, ServerCog, Activity, Power, Terminal, Download, Upload, Zap, Stethoscope } from "lucide-react"
 
 interface ProviderInfo {
   kind: string
@@ -47,6 +47,12 @@ export function PluginsPanel() {
   const [servers, setServers] = useState<McpInfo[]>([])
   const [newServer, setNewServer] = useState({ name: "", url: "", command: "", transport: "http" as "http" | "stdio" })
   const [testing, setTesting] = useState<string | null>(null)
+  // P1-4：已接入注册表的 MCP 工具（生态页显示接入数；测试台可调）
+  const [registeredMcpTools, setRegisteredMcpTools] = useState<{ name: string; serverId: string }[]>([])
+  const [syncing, setSyncing] = useState(false)
+  const [importText, setImportText] = useState("")
+  const [showImport, setShowImport] = useState(false)
+  const [importing, setImporting] = useState(false)
 
   const refreshProviders = useCallback(async () => {
     setChecking(true)
@@ -66,6 +72,7 @@ export function PluginsPanel() {
   const refreshServers = useCallback(async () => {
     const json = await fetch("/api/agent/mcp").then((x) => x.json())
     setServers(json.servers ?? [])
+    setRegisteredMcpTools(json.registeredMcpTools ?? [])
   }, [])
 
   useEffect(() => {
@@ -77,6 +84,7 @@ export function PluginsPanel() {
   const runTool = async () => {
     setRunning(true)
     setToolResult("")
+    const t0 = Date.now()
     try {
       const input = JSON.parse(toolInput.json || "{}")
       const res = await fetch("/api/agent/tools", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: toolInput.name, input }) })
@@ -119,6 +127,71 @@ export function PluginsPanel() {
     const json = await res.json()
     if (!res.ok) toast({ title: "启停失败", description: json.error, variant: "destructive" })
     void refreshServers()
+    void refreshTools() // 启停会同步注册表（停用即摘除工具）
+  }
+
+  // ---------- P1-4：mcpServers 导入 / 导出 / 同步注册表 ----------
+  const doImport = async () => {
+    setImporting(true)
+    try {
+      const res = await fetch("/api/agent/mcp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "import", json: importText }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      toast({ title: "导入完成", description: json.message })
+      setImportText("")
+      setShowImport(false)
+      void refreshServers()
+    } catch (e) {
+      toast({ title: "导入失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const doExport = async () => {
+    try {
+      const res = await fetch("/api/agent/mcp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "export" }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      try {
+        await navigator.clipboard.writeText(json.json)
+        toast({ title: "已导出并复制到剪贴板", description: "标准 mcpServers JSON——可直接粘贴进 Cursor（.cursor/mcp.json）或 Claude Desktop 配置" })
+      } catch {
+        toast({ title: "已导出（剪贴板不可用）", description: "JSON 已在文本框展示，可手动复制" })
+      }
+      setShowImport(true)
+      setImportText(json.json)
+    } catch (e) {
+      toast({ title: "导出失败", description: (e as Error).message, variant: "destructive" })
+    }
+  }
+
+  const doSyncTools = async () => {
+    setSyncing(true)
+    try {
+      const res = await fetch("/api/agent/mcp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "sync-tools" }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      toast({ title: "注册表同步", description: json.message })
+      void refreshServers()
+      void refreshTools()
+    } catch (e) {
+      toast({ title: "同步失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setSyncing(false)
+    }
   }
 
   const testServer = async (id: string) => {
@@ -184,34 +257,44 @@ export function PluginsPanel() {
       </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 min-w-0">
-        {/* 工具注册表 */}
+        {/* 工具测试台（P1-6 重定位：原「工具注册表」——价值在调试与联调，不是产品能力本身） */}
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base"><Wrench className="h-4 w-4 text-amber-500" />工具注册表</CardTitle>
-            <p className="text-[11px] text-muted-foreground break-words">Agent 可调用工具 · toolRegistry.register() 开放注册 · 未识别工具明确报错</p>
+            <CardTitle className="flex items-center justify-between text-base">
+              <span className="flex items-center gap-2"><Stethoscope className="h-4 w-4 text-amber-500" />工具测试台</span>
+              <Badge variant="outline" className="text-[9px] px-1.5 shrink-0">诊断用途</Badge>
+            </CardTitle>
+            <p className="text-[11px] text-muted-foreground break-words">改工具参数 schema 后立即冒烟 · 验证降级链真实行为 · MCP 外部工具联调（发现即接入，选中即测）</p>
           </CardHeader>
           <CardContent className="space-y-3">
+            <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-muted-foreground">
+              <span>已注册 {tools.length} 个</span>
+              <Badge variant="secondary" className="text-[9px] px-1 py-0">内置 {tools.filter((t) => t.builtin).length}</Badge>
+              {registeredMcpTools.length > 0 && (
+                <Badge className="bg-violet-600 text-[9px] px-1 py-0 text-white">MCP 接入 {registeredMcpTools.length}</Badge>
+              )}
+            </div>
             <div className="space-y-1">
               {tools.map((t) => (
                 <button
                   key={t.name}
                   onClick={() => {
                     const sample: Record<string, string> = {}
-                    for (const k of Object.keys(t.params)) sample[k] = k === "count" ? "5" : k === "score" ? "8" : k.includes("id") ? "" : "示例输入"
+                    for (const k of Object.keys(t.params)) sample[k] = k === "count" ? "5" : k === "score" ? "8" : k.includes("id") ? "" : k.includes("text") ? "你好，链路验证" : "示例输入"
                     setToolInput({ name: t.name, json: JSON.stringify(sample, null, 2) })
                   }}
-                  className={`w-full text-left rounded-md border px-2.5 py-2 transition-colors ${toolInput.name === t.name ? "border-amber-400 bg-amber-50 dark:bg-amber-950/30" : "hover:border-amber-200"}`}
+                  className={`w-full text-left rounded-md border px-2.5 py-2 transition-colors ${toolInput.name === t.name ? "border-amber-400 bg-amber-50 dark:bg-amber-950/30" : t.name.startsWith("mcp__") ? "border-violet-200 hover:border-violet-400" : "hover:border-amber-200"}`}
                 >
                   <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-semibold font-mono">{t.name}</span>
-                    {t.builtin && <Badge variant="secondary" className="text-[9px] px-1 py-0">内置</Badge>}
+                    <span className="text-xs font-semibold font-mono truncate">{t.name}</span>
+                    {t.builtin ? <Badge variant="secondary" className="text-[9px] px-1 py-0 shrink-0">内置</Badge> : <Badge className="bg-violet-600 text-[9px] px-1 py-0 shrink-0 text-white">MCP</Badge>}
                   </div>
                   <div className="text-[10px] text-muted-foreground line-clamp-1 mt-0.5">{t.description}</div>
                 </button>
               ))}
             </div>
             <div className="rounded-md border p-2 space-y-2">
-              <div className="text-[10px] text-muted-foreground">调用参数（JSON）</div>
+              <div className="text-[10px] text-muted-foreground">调用参数（JSON）——改参数后点执行即验证契约</div>
               <textarea
                 className="w-full max-w-full h-28 text-[11px] font-mono rounded bg-muted/50 p-2 outline-none focus:ring-1 focus:ring-amber-400 resize-none break-all"
                 value={toolInput.json}
@@ -230,13 +313,51 @@ export function PluginsPanel() {
           </CardContent>
         </Card>
 
-        {/* MCP 客户端 */}
+        {/* MCP 客户端（P0-4 入口统一 + P1-4 标准化） */}
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base"><Cable className="h-4 w-4 text-amber-500" />MCP 客户端接入</CardTitle>
-            <p className="text-[11px] text-muted-foreground break-words">JSON-RPC 2.0 · initialize → tools/list 握手 · 工具自动发现</p>
+            <CardTitle className="flex items-center justify-between text-base">
+              <span className="flex items-center gap-2"><Cable className="h-4 w-4 text-amber-500" />MCP 客户端接入</span>
+              <span className="flex items-center gap-1.5 shrink-0">
+                {registeredMcpTools.length > 0 && (
+                  <Badge className="bg-violet-600 text-[9px] px-1.5 py-0 text-white" title={registeredMcpTools.map((t) => t.name).join("\n")}>
+                    <Zap className="h-2.5 w-2.5 mr-0.5" />已接入 {registeredMcpTools.length} 工具
+                  </Badge>
+                )}
+              </span>
+            </CardTitle>
+            <p className="text-[11px] text-muted-foreground break-words">JSON-RPC 2.0 双传输 · 会话管理 · 工具发现即接入注册表（mcp__服务器__工具，Agent 可调）</p>
           </CardHeader>
           <CardContent className="space-y-3">
+            {/* P1-4：导入导出 + 同步 */}
+            <div className="flex gap-1.5 flex-wrap">
+              <Button size="sm" variant="outline" className="h-7 text-[10px]" onClick={() => setShowImport((v) => !v)}>
+                <Upload className="h-3 w-3 mr-1" />导入 mcpServers JSON
+              </Button>
+              <Button size="sm" variant="outline" className="h-7 text-[10px]" onClick={() => void doExport()}>
+                <Download className="h-3 w-3 mr-1" />导出（Cursor 可用）
+              </Button>
+              <Button size="sm" variant="outline" className="h-7 text-[10px]" onClick={() => void doSyncTools()} disabled={syncing}>
+                {syncing ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Zap className="h-3 w-3 mr-1" />}同步到注册表
+              </Button>
+            </div>
+            {showImport && (
+              <div className="rounded-md border border-violet-200 bg-violet-50/50 dark:bg-violet-950/20 p-2 space-y-1.5">
+                <div className="text-[10px] text-muted-foreground">粘贴标准 mcpServers JSON（Cursor / Claude Desktop / VS Code 同构格式；有 url 判远程、有 command 判 stdio）</div>
+                <textarea
+                  className="w-full max-w-full h-24 text-[10px] font-mono rounded bg-muted/50 p-2 outline-none focus:ring-1 focus:ring-violet-400 resize-none break-all"
+                  placeholder='{ "mcpServers": { "deepwiki": { "url": "https://mcp.deepwiki.com/mcp" }, "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"] } } }'
+                  value={importText}
+                  onChange={(e) => setImportText(e.target.value)}
+                />
+                <div className="flex gap-1.5">
+                  <Button size="sm" className="h-7 text-[10px] bg-violet-600 hover:bg-violet-700 text-white" onClick={() => void doImport()} disabled={importing || !importText.trim()}>
+                    {importing ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Upload className="h-3 w-3 mr-1" />}导入
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-7 text-[10px]" onClick={() => { setShowImport(false); setImportText("") }}>收起</Button>
+                </div>
+              </div>
+            )}
             {/* 新增表单：双传输（P0-4）——http 填 URL / stdio 填命令行 */}
             <div className="flex gap-1.5 flex-wrap">
               {(["http", "stdio"] as const).map((t) => (
