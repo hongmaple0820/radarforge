@@ -341,13 +341,13 @@ export function PluginsPanel() {
             </div>
             <div className="rounded-lg bg-muted/40 border px-2.5 py-2 space-y-1.5">
               <p className="text-[10px] font-semibold">安装（宿主装有 dsh 时）：</p>
-              <code className="text-[10px] font-mono block bg-background border rounded px-2 py-1 break-all">dsh plugin --profile web add ./dsh-plugin-radar.tgz</code>
+              <code className="text-[10px] font-mono block bg-background border rounded px-2 py-1 break-all">dsh plugin --profile web add https://github.com/hongmaple0820/radarforge/releases/download/v0.2.0-dsh-plugin/dsh-plugin-radar.tgz</code>
               <p className="text-[10px] text-muted-foreground leading-snug">
-                插件包已产出：<span className="font-mono">download/dsh-plugin-radar/</span>（package.json + cordis.patch.yml + lib 双半 + README，形态学自 dsh-agnes-multimodal MIT）。
-                平台地址用宿主环境变量 <span className="font-mono">RADAR_BASE</span> 配置；供应商密钥全部留在本平台设置中心，插件侧零密钥。
+                插件包在仓库 <span className="font-mono">plugins/dsh-radar/</span>（v0.2.0 规范对齐版：defineTool 参数 schema + Schemastery Config + name 导出 + engines.dsh + 协作取消）。
+                平台地址用 dsh 设置层 <span className="font-mono">radarBase</span> 或环境变量 <span className="font-mono">RADAR_BASE</span> 配置；供应商密钥全部留在本平台设置中心，插件侧零密钥。
               </p>
               <p className="text-[10px] text-muted-foreground leading-snug">
-                <span className="text-amber-600">已知边界（诚实）：</span>骨架代码完整且 API 契约已对平台端到端实测（工具注册 / 出稿 / 分镜 / 渲染全 200）；沙箱内无 dsh 宿主，宿主内联调待装有 dsh 的环境补做。
+                <span className="text-emerald-600">实测通过于 dsh 0.2.1-rc.5：</span>真实宿主全链路（pnpm 安装 → dump-config 插件树 → 挂载 → radar_article 实调六步流水线 249s 全绿 → 纯文本回传 → 协作取消契约）；回归证据 <span className="font-mono">scripts/test-dsh-plugin.mjs</span>（33 断言）。已知边界：LLM 驱动的模型自主调工具需宿主侧 DeepSeek 凭证（沙箱内未验，协议链路已全验）。
               </p>
             </div>
           </CardContent>

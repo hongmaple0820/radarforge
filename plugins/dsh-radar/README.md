@@ -17,11 +17,11 @@
 ## 安装
 
 ```bash
-# 本地包安装（推荐先打 tgz）
-dsh plugin --profile web add ./dsh-plugin-radar.tgz
+# 从 GitHub Release 安装（推荐——发布产物，pnpm 原生支持 https tarball）
+dsh plugin --profile web add https://github.com/hongmaple0820/radarforge/releases/download/v0.2.0-dsh-plugin/dsh-plugin-radar.tgz
 
-# 或直接指向目录
-dsh plugin --profile web add ./dsh-plugin-radar
+# 或本地包安装
+# dsh plugin --profile web add ./dsh-plugin-radar.tgz
 ```
 
 安装后重启 `dsh web`。命令行方式装完需在插件页手动打开开关（与 dsh-agnes-multimodal 同语义）。
@@ -30,7 +30,7 @@ dsh plugin --profile web add ./dsh-plugin-radar
 
 | 项 | 方式 | 默认 |
 |---|---|---|
-| 平台地址 | 宿主环境变量 `RADAR_BASE` | `http://localhost:3000` |
+| 平台地址 | dsh 设置层 `radarBase`（Schemastery Config）或宿主环境变量 `RADAR_BASE` | `http://localhost:3000` |
 
 ## 对话用法
 
@@ -55,9 +55,21 @@ dsh：（先 storyboard-directions 拿三个方向，选 B·Amplify）→ 分镜
 
 供应商配置（LLM/搜索/生图/Agnes 账号池）全部在平台设置中心完成；插件侧零密钥。
 
+## 规范对齐（v0.2.0）
+
+对齐 @deepseek-ai/dsh-tools 官方 defineTool 契约：
+
+- `defineTool()` + `parameters` 类型化参数 schema（缺必填/类型错/额外键在执行前被官方校验器拦截）
+- `output` 声明（schema + render，注册表强制校验输出规范 JSON）
+- Schemastery `Config` 导出 `radarBase`（配置层可改，环境变量作回落）
+- `name` 导出（加载失败诊断定位）+ `engines.dsh >= 0.2.1-rc.5`
+- 协作取消：`execute(args, exec)` 观测 `exec.signal`（官方约定）
+- 依赖钉住与宿主对齐的 `@deepseek-ai/dsh-tools@0.2.1-rc.5`（rc 间破坏兼容实测教训：旧版 0.0.1-rc.1 与宿主 0.2.1-rc.5 不兼容）
+
 ## 已知边界（诚实声明）
 
-- 本包为**骨架已完整**的 v0.1.0：工具与卡片代码可直接运行，但沙箱内无 dsh 宿主，未做宿主内端到端联调——装进 dsh 后如遇 cordis API 细节差异（如 `attachments.push` 签名），按 dsh-agnes-multimodal 同模式微调即可
+- **实测通过于 dsh 0.2.1-rc.5**（2026-11-03）：真实宿主全链路——pnpm 安装 → `--dump-config` 插件树（radar-plugin 行）→ 挂载日志（radar_article + radar_video）→ `radar_article` 实调六步流水线（249s·六步全绿·纯文本回传）→ 协作取消契约（已中止 signal → 立即报「已取消」）；回归证据：仓库 `scripts/test-dsh-plugin.mjs`（33 断言）
+- LLM 驱动的模型自主调工具（DeepSeek 模型在对话里决定调 radar_article）需宿主侧 LLM 凭证，沙箱内未验——协议链路已全验，模型行为属 dsh 宿主侧
 - 富产物（HTML 排版 / 封面图 / MP4）只在会话卡片展示，不回传模型（对齐 agnes 插件 "result returns only plain text" 约定）
 - 长流水线等待窗口：图文 6 分钟 / 视频 5 分钟，超时后回平台页继续看
 
