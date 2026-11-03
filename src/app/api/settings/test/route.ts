@@ -5,14 +5,15 @@
 //   llm:    按 settings.llm.mode 分派（builtin/custom/agnes/pi-ai）真实 chat 一条
 //   image:  真实生图一张（测完清理产物）
 //   agnes:  accountId → probeAccount 单账号 /models 探活；无 id → 池 health
-//   video:  local → ffmpeg 可用性；agnes/auto → agnes-video health
+//   video:  AI 模型探活（P0-1 语义拆分：local 通道无模型可探活，
+//           返回引导说明而非拿 ffmpeg 探测冒充「模型检查」）
+//   dependencies: 本地渲染依赖自检（ffmpeg/ffprobe 逐项：解析路径 +
+//           版本 + 三条修复路径指引，不透出运行时原始报错）
 // 统一返回 { ok, latencyMs, detail?, error? }
 // ============================================================
 
 import { NextResponse } from "next/server"
-import { execFile } from "child_process"
 import { unlink } from "fs/promises"
-import { promisify } from "util"
 import { getSettings, type AgnesAccount } from "@/lib/settings"
 import { chat } from "@/lib/gateway"
 import { yuanbaoSearch } from "@/lib/gateway/providers/yuanbao-search"
@@ -20,11 +21,10 @@ import { generateCoverImage } from "@/lib/gateway/providers/zai-image"
 import { agnesVideo } from "@/lib/gateway/providers/agnes/agnes-video"
 import { agnesLlm } from "@/lib/gateway/providers/agnes/agnes-llm"
 import { probeAccount } from "@/lib/gateway/providers/agnes/pool"
+import { getBinaryReport, resolveFFmpeg } from "@/lib/media/binaries"
 import type { HealthReport } from "@/lib/gateway/types"
 
-const execFileP = promisify(execFile)
-
-type Scope = "llm" | "search" | "image" | "agnes" | "video"
+type Scope = "llm" | "search" | "image" | "agnes" | "video" | "dependencies"
 
 interface TestResult {
   ok: boolean
@@ -46,8 +46,8 @@ export async function POST(req: Request) {
   try {
     const body = (await req.json()) as { scope?: Scope; accountId?: string }
     const scope = body.scope
-    if (!scope || !["llm", "search", "image", "agnes", "video"].includes(scope)) {
-      return NextResponse.json({ ok: false, error: "scope 必须是 llm/search/image/agnes/video" }, { status: 400 })
+    if (!scope || !["llm", "search", "image", "agnes", "video", "dependencies"].includes(scope)) {
+      return NextResponse.json({ ok: false, error: "scope 必须是 llm/search/image/agnes/video/dependencies" }, { status: 400 })
     }
     const s = await getSettings(true)
     let result: TestResult
@@ -125,19 +125,38 @@ export async function POST(req: Request) {
           result = h ? fromHealth(h) : { ok: true, latencyMs: 0, detail: "Provider 无健康检查，视为可用" }
         }
       }
-    } else {
-      // video
+    } else if (scope === "video") {
+      // AI 模型探活（P0-1 语义拆分：本按钮只探活 AI 模型通道；
+      // 本地渲染依赖请用「渲染依赖自检」按钮（scope=dependencies））
       if (s.video.channel === "local") {
-        const t0 = Date.now()
-        try {
-          const { stdout } = await execFileP("ffmpeg", ["-version"])
-          result = { ok: true, latencyMs: Date.now() - t0, detail: `本地渲染可用：${stdout.split("\n")[0].slice(0, 40)}` }
-        } catch (e) {
-          result = { ok: false, latencyMs: Date.now() - t0, error: `ffmpeg 不可用：${(e as Error).message.slice(0, 80)}` }
+        const ff = resolveFFmpeg()
+        result = {
+          ok: true,
+          latencyMs: 0,
+          detail: ff
+            ? `本地渲染通道无需 AI 模型（成片由本地 ffmpeg 渲染）；渲染依赖已就绪：${ff.path}。完整依赖体检请点「渲染依赖自检」`
+            : "本地渲染通道无需 AI 模型；但渲染依赖 ffmpeg 未解析到——请点「渲染依赖自检」查看修复指引",
         }
       } else {
         const h = await agnesVideo.health?.()
         result = h ? fromHealth(h) : { ok: true, latencyMs: 0, detail: "Provider 无健康检查，视为可用" }
+      }
+    } else {
+      // dependencies —— 本地渲染依赖自检：逐项解析路径 + 版本 + 修复指引
+      const items = await getBinaryReport()
+      const ok = items.every((i) => i.resolved && i.version)
+      const missing = items.find((i) => !i.resolved || !i.version)
+      result = {
+        ok,
+        latencyMs: 0,
+        detail: items
+          .map((i) =>
+            i.resolved
+              ? `${i.name}：${i.path}${i.version ? `（${i.version}）` : "（已解析但执行失败）"}`
+              : `${i.name}：未解析到`,
+          )
+          .join("；"),
+        error: missing?.hint ?? undefined,
       }
     }
 

@@ -6,11 +6,14 @@
 //   description: xxx
 //   ---
 //   # 正文（指令与工作流）
-// 扫描目录默认 /home/z/my-project/skills，支持追加自定义目录
+// 扫描根（P0-3 目录主权）：产品库 db/skills（git 跟踪随仓库分发）
+// + 用户自装位 ~/.radarforge/skills；平台 skills/ 已移出（宿主运维
+// 技能与内容创作无关，且曾整批覆盖产品技能——不可逆损失根因）。
 // ============================================================
 
 import { readFile, readdir, stat } from "fs/promises"
 import path from "path"
+import os from "os"
 
 export interface LoadedSkill {
   id: string // 目录名
@@ -22,7 +25,7 @@ export interface LoadedSkill {
   frontmatterKeys: string[]
 }
 
-const DEFAULT_SKILL_DIRS = ["/home/z/my-project/skills"]
+const DEFAULT_SKILL_DIRS = [path.join(process.cwd(), "db", "skills"), path.join(os.homedir(), ".radarforge", "skills")]
 
 /** 轻量 YAML frontmatter 解析（浅层 key: value，够用且零依赖） */
 function parseFrontmatter(raw: string): { fm: Record<string, string>; body: string } {

@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/hooks/use-toast"
-import { Settings2, Bot, Search, ImageIcon, Compass, Loader2, CheckCircle2, XCircle, KeyRound, Users, Video, Plus, Trash2, Zap, Download, Upload, Timer, Play, ScrollText, Newspaper, Rss, Lightbulb } from "lucide-react"
+import { Settings2, Bot, Search, ImageIcon, Compass, Loader2, CheckCircle2, XCircle, KeyRound, Users, Video, Plus, Trash2, Zap, Download, Upload, Timer, Play, ScrollText, Newspaper, Rss, Lightbulb, Globe } from "lucide-react"
 
 type AgnesSite = "cn" | "intl" | "custom"
 interface AgnesAccountForm {
@@ -44,6 +44,7 @@ interface SettingsData {
   }
   video: { channel: "local" | "agnes" | "auto" | "hybrid"; secondsPerScene: number }
   style: { positioning: string; audience: string; domains: string; tone: string; taboos: string }
+  network: { proxyUrl: string }
   _meta: Record<string, { hasKey: boolean; envFallback: boolean }>
 }
 
@@ -77,6 +78,8 @@ export function SettingsPanel() {
   const [searchForm, setSearchForm] = useState({ apiKey: "" })
   const [imageForm, setImageForm] = useState({ mode: "builtin" as "builtin" | "custom", baseUrl: "", apiKey: "", model: "" })
   const [styleForm, setStyleForm] = useState({ positioning: "", audience: "", domains: "", tone: "", taboos: "" })
+  // P0-2 网络代理（全局；RSS 抓取按「按源 > 全局 > 直连」）
+  const [networkForm, setNetworkForm] = useState({ proxyUrl: "" })
   // Agnes 表单（账号密钥留空 = 不修改已存）
   const [agnesForm, setAgnesForm] = useState<{
     enabled: boolean
@@ -103,6 +106,7 @@ export function SettingsPanel() {
     setSearchForm({ apiKey: "" })
     setImageForm({ mode: s.image.mode, baseUrl: s.image.baseUrl, apiKey: "", model: s.image.model })
     setStyleForm({ ...s.style })
+    setNetworkForm({ proxyUrl: s.network?.proxyUrl ?? "" })
     setAgnesForm({
       enabled: s.agnes.enabled,
       accounts: s.agnes.accounts.map((a) => ({ ...a, apiKey: "" })),
@@ -191,10 +195,10 @@ export function SettingsPanel() {
   }
 
   // silent：探活前的自动落库（不弹保存 toast，失败仍弹）
-  const save = async (scope: "llm" | "search" | "image" | "style", clearKey = false, silent = false): Promise<boolean> => {
+  const save = async (scope: "llm" | "search" | "image" | "style" | "network", clearKey = false, silent = false): Promise<boolean> => {
     setSaving(scope)
     try {
-      const value = scope === "llm" ? llmForm : scope === "search" ? searchForm : scope === "image" ? imageForm : styleForm
+      const value = scope === "llm" ? llmForm : scope === "search" ? searchForm : scope === "image" ? imageForm : scope === "network" ? networkForm : styleForm
       const res = await fetch("/api/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -258,9 +262,9 @@ export function SettingsPanel() {
   }
 
   // 同一模式推广到 llm/search/image/video：先静默保存表单再探测，
-  // 避免「改了配置没保存，测到的还是旧配置」
-  const probeScope = async (scope: "llm" | "search" | "image" | "video") => {
-    const saved = scope === "video" ? await saveVideo(true) : await save(scope, false, true)
+  // 避免「改了配置没保存，测到的还是旧配置」；dependencies 纯读环境无需保存
+  const probeScope = async (scope: "llm" | "search" | "image" | "video" | "dependencies") => {
+    const saved = scope === "video" ? await saveVideo(true) : scope === "dependencies" ? true : await save(scope, false, true)
     if (!saved) return
     await test(scope)
   }
@@ -330,7 +334,7 @@ export function SettingsPanel() {
     }
   }
 
-  const test = async (scope: "llm" | "search" | "image" | "agnes" | "video", accountId?: string) => {
+  const test = async (scope: "llm" | "search" | "image" | "agnes" | "video" | "dependencies", accountId?: string) => {
     const key = accountId ? `agnes:${accountId}` : scope
     setTesting(key)
     setTests((t) => ({ ...t, [key]: null }))
@@ -346,7 +350,7 @@ export function SettingsPanel() {
         throw new Error(`非 JSON 响应（HTTP ${res.status}），请检查服务状态`)
       })
       setTests((t) => ({ ...t, [key]: json }))
-      const nameMap: Record<string, string> = { llm: "LLM", search: "AI 搜索", image: "生图", agnes: "Agnes 账号", video: "视频模型" }
+      const nameMap: Record<string, string> = { llm: "LLM", search: "AI 搜索", image: "生图", agnes: "Agnes 账号", video: "视频模型", dependencies: "渲染依赖" }
       if (json.ok) toast({ title: `${nameMap[scope] ?? scope} 连通正常`, description: json.detail?.slice(0, 60) })
       else toast({ title: "连通失败", description: json.error ?? json.detail ?? "未知错误", variant: "destructive" })
     } catch (e) {
@@ -365,7 +369,7 @@ export function SettingsPanel() {
     )
   }
 
-  const TestBadge = ({ scope }: { scope: "llm" | "search" | "image" | "agnes" | "video" }) => {
+  const TestBadge = ({ scope }: { scope: "llm" | "search" | "image" | "agnes" | "video" | "dependencies" }) => {
     const r = tests[scope]
     if (testing === scope) return <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500" />
     if (!r) return null
@@ -504,6 +508,45 @@ export function SettingsPanel() {
               />
             </label>
             <span className="text-[10px] text-muted-foreground">pi-ai 协议 · dsh 插件侧可复用同一套配置</span>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* 网络代理（P0-2 全局配置；RSS 抓取按「按源 > 全局 > 直连」） */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center justify-between text-sm">
+            <span className="flex items-center gap-1.5"><Globe className="h-4 w-4 text-cyan-600" />网络代理</span>
+            {data.network?.proxyUrl && <Badge variant="outline" className="text-[9px] text-cyan-600 border-cyan-300">已启用</Badge>}
+          </CardTitle>
+          <p className="text-[11px] text-muted-foreground">
+            RSS 信源抓取的统一出口（沙箱外网受限或区域不可达时的第二通路）。优先级：源级代理（信源卡片铅笔设置）&gt; 此处全局代理 &gt; 直连——与 Feedly / Folo 等阅读器「全局代理 + 源级例外」通行做法一致
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-2.5">
+          <div className="flex items-center gap-2">
+            <Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            <Input
+              placeholder="http://127.0.0.1:7890（留空 = 直连；仅作用于 RSS 抓取，不影响搜索/LLM 通道）"
+              value={networkForm.proxyUrl}
+              onChange={(e) => setNetworkForm({ proxyUrl: e.target.value })}
+              className="font-mono text-xs"
+            />
+          </div>
+          <p className="text-[10px] text-muted-foreground">
+            {data.network?.proxyUrl
+              ? `当前全局代理：${data.network.proxyUrl}——经代理失败会在源卡留痕「经代理」标记，便于区分源故障与代理故障`
+              : "未配置全局代理（全部直连）。仅个别源需要代理时，建议用源级代理而非全局开启"}
+          </p>
+          <div className="flex gap-2 pt-1">
+            <Button size="sm" onClick={() => save("network")} disabled={saving === "network"} className="bg-amber-500 hover:bg-amber-600 text-white">
+              {saving === "network" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}保存
+            </Button>
+            {data.network?.proxyUrl && (
+              <Button size="sm" variant="ghost" onClick={() => { setNetworkForm({ proxyUrl: "" }); void save("network") }} disabled={saving === "network"} className="text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30">
+                <XCircle className="h-3.5 w-3.5 mr-1" />清除（恢复直连）
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -764,7 +807,7 @@ export function SettingsPanel() {
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center justify-between text-sm">
             <span className="flex items-center gap-1.5"><Video className="h-4 w-4 text-rose-500" />视频通道</span>
-            <TestBadge scope="video" />
+            <span className="flex items-center gap-2"><TestBadge scope="video" /><TestBadge scope="dependencies" /></span>
           </CardTitle>
           <p className="text-[11px] text-muted-foreground">
             四通道：本地双风格渲染（motion 商业片 / art 艺术动画，Playwright+ffmpeg 出片）/ Agnes AI 视频模型（720P · 4-12s）/ 自动（优先 AI，失败回退本地）/ 混合通道（分镜按 render 标注分发：数据/字排→代码动画，实景/情绪→AI 模型 5~10s 插播，成本 ≈ 纯模型 1/3）
@@ -804,12 +847,15 @@ export function SettingsPanel() {
               )}
             </div>
           )}
-          <div className="flex gap-2 pt-1">
+          <div className="flex flex-wrap gap-2 pt-1">
             <Button size="sm" onClick={() => void saveVideo()} disabled={saving === "video"} className="bg-amber-500 hover:bg-amber-600 text-white">
               {saving === "video" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}保存
             </Button>
-            <Button size="sm" variant="outline" onClick={() => void probeScope("video")} disabled={testing === "video" || saving === "video"}>
-              {(testing === "video" || saving === "video") ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}检查视频模型
+            <Button size="sm" variant="outline" onClick={() => void probeScope("video")} disabled={testing === "video" || saving === "video"} title="探活 AI 视频模型通道（Agnes）；本地渲染通道无需模型">
+              {(testing === "video" || saving === "video") ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}AI 模型探活
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => void probeScope("dependencies")} disabled={testing === "dependencies"} title="自检本地渲染依赖（ffmpeg/ffprobe）：解析路径 + 版本 + 修复指引">
+              {testing === "dependencies" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}渲染依赖自检
             </Button>
           </div>
         </CardContent>

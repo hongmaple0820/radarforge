@@ -137,10 +137,10 @@ export function AgentPanel() {
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
               <Search className="h-3.5 w-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input placeholder="搜索 69 个技能…" value={skillQuery} onChange={(e) => setSkillQuery(e.target.value)} className="h-8 pl-7 text-xs" />
+              <Input placeholder={`搜索 ${skills.length} 个技能…`} value={skillQuery} onChange={(e) => setSkillQuery(e.target.value)} className="h-8 pl-7 text-xs" />
             </div>
           </div>
-          <p className="text-[10px] text-muted-foreground">扫描 skills/*/SKILL.md（开放标准，即装即用）</p>
+          <p className="text-[10px] text-muted-foreground">扫描产品库 db/skills/* 与用户位 ~/.radarforge/skills/*/SKILL.md（Agent Skills 开放标准，即装即用）</p>
         </CardHeader>
         <CardContent className="pt-0 flex-1">
           <ScrollArea className="h-[560px]">

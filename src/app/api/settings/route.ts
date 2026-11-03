@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server"
-import { getSettings, saveSetting, redactSettings, type AppSettings, type AgnesAccount, type AgnesSettings, type VideoSettings } from "@/lib/settings"
+import { getSettings, saveSetting, redactSettings, type AppSettings, type AgnesAccount, type AgnesSettings, type VideoSettings, type NetworkSettings } from "@/lib/settings"
+import { resetGlobalProxyCache } from "@/lib/sources/rss"
 
 type Scope = keyof AppSettings
 
-const SCOPES: Scope[] = ["llm", "search", "image", "agnes", "video", "style"]
+const SCOPES: Scope[] = ["llm", "search", "image", "agnes", "video", "style", "exemplars", "network"]
 
 export async function GET() {
   const s = await getSettings(true)
@@ -55,6 +56,24 @@ export async function PUT(req: Request) {
               ? "Agnes 已启用（LLM/生图/视频三通道可用）"
               : "Agnes 已停用"
             : "Agnes 配置已保存",
+      })
+    }
+
+    // ---------- 网络代理（P0-2：全局代理，空 = 直连；保存后失效 rss 层缓存即生效） ----------
+    if (scope === "network") {
+      const v = (body.value ?? {}) as Partial<NetworkSettings>
+      const proxyUrl = (v.proxyUrl ?? "").trim()
+      if (proxyUrl && !/^https?:\/\//i.test(proxyUrl)) {
+        return NextResponse.json({ error: "代理地址必须以 http(s):// 开头（如 http://127.0.0.1:7890），留空 = 直连" }, { status: 400 })
+      }
+      await saveSetting("network", { proxyUrl: proxyUrl.slice(0, 300) })
+      resetGlobalProxyCache() // 失效 rss.ts 全局代理缓存，下一次刷新即生效
+      const fresh = await getSettings(true)
+      return NextResponse.json({
+        settings: redactSettings(fresh),
+        message: proxyUrl
+          ? `全局代理已启用：${proxyUrl}（RSS 抓取按「按源代理 > 全局代理 > 直连」生效）`
+          : "全局代理已清除，RSS 抓取恢复直连（按源代理不受影响）",
       })
     }
 

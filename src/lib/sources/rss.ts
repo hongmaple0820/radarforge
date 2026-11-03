@@ -9,6 +9,8 @@
 
 import { db } from "../db.ts" // .ts 扩展：Node 离线可测规约（学 card-engine）
 import { simhash64, isDuplicate } from "./simhash.ts"
+import http from "node:http" // 代理路径（P0-2）：绝对形式转发 / CONNECT 隧道
+import https from "node:https"
 
 // ---------- 默认源注册表（24 个 AI 资讯源：中文 8 + 英文 16） ----------
 export interface FeedSeed {
@@ -190,32 +192,186 @@ export interface RefreshOptions {
   feedIds?: string[] // 定向刷新指定源（单源重试/回归隔离）
 }
 
-/** 单源抓取（fetch + 解析；网络类瞬时错误自动重试 1 次——探活实证沙箱外网抖动，curl 三连可达而 fetch 偶发 failed） */
-export async function fetchAndParse(url: string, timeoutMs = 15_000): Promise<ParsedFeed> {
+// ---------- 代理层（P0-2：可选配置，按源 > 全局 > 直连） ----------
+
+/** 代理地址合法性：http(s)://host:port（与源 url 同规则，空串=不代理） */
+export function isValidProxyUrl(p: string): boolean {
+  return !p || /^https?:\/\/.+/i.test(p)
+}
+
+/** 经代理的 GET 请求（Node 标准库手写，无三方依赖）。
+ *  注：undici 7.30 的 ProxyAgent 在本环境实测挂死（请求级 dispatcher 不发任何字节），
+ *  故手写两条标准路径——
+ *  · http 目标：绝对形式请求（GET http://host/path）直接发往代理，代理转发；
+ *  · https 目标：CONNECT 隧道建裸 TCP，再在其上发 TLS 请求（真实代理通行行为）。
+ *  失败快速抛错（不可达代理毫秒级 ECONNREFUSED，不无限等待）。 */
+interface ProxyGetResult {
+  status: number
+  contentType: string
+  body: string
+}
+
+function proxyGet(targetUrl: string, proxyUrl: string, timeoutMs: number): Promise<ProxyGetResult> {
+  return new Promise((resolve, reject) => {
+    const t = new URL(targetUrl)
+    const p = new URL(proxyUrl)
+    const headers = { "User-Agent": "RadarForge/2.0 (+rss-reader)", Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*" }
+    const fail = (e: unknown): void => reject(e instanceof Error ? e : new Error(String(e)))
+
+    const collect = (res: import("node:http").IncomingMessage): Promise<ProxyGetResult> =>
+      new Promise((res2) => {
+        const chunks: Buffer[] = []
+        res.on("data", (c: Buffer) => chunks.push(c))
+        res.on("end", () => {
+          const ct = res.headers["content-type"]
+          res2({
+            status: res.statusCode ?? 0,
+            contentType: Array.isArray(ct) ? String(ct[0]) : String(ct ?? ""),
+            body: Buffer.concat(chunks).toString("utf-8"),
+          })
+        })
+      })
+
+    if (t.protocol === "https:") {
+      // CONNECT 隧道：代理建到目标的裸 TCP，再在其上发 TLS 请求
+      const req = http.request({
+        host: p.hostname,
+        port: Number(p.port) || 80,
+        method: "CONNECT",
+        path: `${t.hostname}:${t.port || 443}`,
+        headers: { host: `${t.hostname}:${t.port || 443}` },
+        timeout: timeoutMs,
+      })
+      req.on("connect", (res: { statusCode?: number }, socket: import("node:stream").Duplex) => {
+        if (res.statusCode !== 200) {
+          socket.destroy()
+          reject(new Error(`代理 CONNECT 失败：HTTP ${res.statusCode}（经代理 ${proxyUrl}）`))
+          return
+        }
+        const tlsReq = https.request({
+          socket,
+          servername: t.hostname,
+          method: "GET",
+          path: `${t.pathname}${t.search}`,
+          headers: { ...headers, host: t.host },
+          timeout: timeoutMs,
+        } as import("node:https").RequestOptions)
+        tlsReq.on("response", (r2: import("node:http").IncomingMessage) => { void collect(r2).then(resolve, fail) })
+        tlsReq.on("timeout", () => tlsReq.destroy(new Error(`经代理 ${proxyUrl} 请求超时（${timeoutMs}ms）`)))
+        tlsReq.on("error", fail)
+        tlsReq.end()
+      })
+      req.on("timeout", () => req.destroy(new Error(`连接代理 ${proxyUrl} 超时（${timeoutMs}ms）`)))
+      req.on("error", fail)
+      req.end()
+    } else {
+      // http 目标：绝对形式请求直接发往代理
+      const req = http.request({
+        host: p.hostname,
+        port: Number(p.port) || 80,
+        method: "GET",
+        path: targetUrl,
+        headers: { ...headers, host: t.host },
+        timeout: timeoutMs,
+      })
+      req.on("response", (r2: import("node:http").IncomingMessage) => { void collect(r2).then(resolve, fail) })
+      req.on("timeout", () => req.destroy(new Error(`经代理 ${proxyUrl} 请求超时（${timeoutMs}ms）`)))
+      req.on("error", fail)
+      req.end()
+    }
+  })
+}
+
+const proxyLogged = new Set<string>()
+function logProxyOnce(proxyUrl: string): void {
+  if (proxyLogged.has(proxyUrl)) return
+  proxyLogged.add(proxyUrl)
+  console.log(`[rss] 代理已启用：${proxyUrl}（按源或全局配置生效）`)
+}
+
+/** 全局代理（SettingKV network:proxy；rss.ts 为离线可测模块，不 import 别名路径的 settings.ts） */
+let globalProxyCache: { url: string; at: number } | null = null
+export async function getGlobalProxyUrl(): Promise<string> {
+  if (globalProxyCache && Date.now() - globalProxyCache.at < 30_000) return globalProxyCache.url
+  let url = ""
+  try {
+    const row = await db.settingKV.findUnique({ where: { key: "network:proxy" } })
+    if (row) {
+      try {
+        const parsed = JSON.parse(row.value) as { proxyUrl?: string }
+        url = typeof parsed.proxyUrl === "string" ? parsed.proxyUrl.trim() : ""
+      } catch {
+        /* 坏 JSON → 直连 */
+      }
+    }
+  } catch {
+    /* DB 未就绪 → 直连 */
+  }
+  globalProxyCache = { url, at: Date.now() }
+  return url
+}
+
+/** 测试钩子：清空全局代理缓存（保存代理后由调用方失效） */
+export function resetGlobalProxyCache(): void {
+  globalProxyCache = null
+}
+
+/** 单源抓取（fetch + 解析；网络类瞬时错误自动重试 1 次——探活实证沙箱外网抖动，curl 三连可达而 fetch 偶发 failed）。
+ *  P0-2：proxyUrl 非空时经 undici ProxyAgent 发请求；失败错误信息带「经代理」标记，
+ *  让用户能区分是源挂了还是代理挂了。 */
+export async function fetchAndParse(url: string, timeoutMs = 15_000, proxyUrl = ""): Promise<ParsedFeed> {
+  const viaProxy = proxyUrl.trim() !== ""
+  if (viaProxy) logProxyOnce(proxyUrl.trim())
   const attempt = async (): Promise<ParsedFeed> => {
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(timeoutMs),
-      headers: { "User-Agent": "RadarForge/2.0 (+rss-reader)", Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*" },
-      redirect: "follow",
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const ctype = res.headers.get("content-type") ?? ""
-    const text = await res.text()
+    let status: number
+    let ctype: string
+    let text: string
+    if (viaProxy) {
+      // 代理路径：手写 proxyGet（绝对形式 / CONNECT 隧道），失败快速抛错
+      const res = await proxyGet(url, proxyUrl.trim(), timeoutMs)
+      status = res.status
+      ctype = res.contentType
+      text = res.body
+    } else {
+      // 直连路径：全局 fetch（零行为变化）
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: { "User-Agent": "RadarForge/2.0 (+rss-reader)", Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*" },
+        redirect: "follow",
+      })
+      status = res.status
+      ctype = res.headers.get("content-type") ?? ""
+      text = await res.text()
+    }
+    if (status < 200 || status >= 300) throw new Error(`HTTP ${status}${viaProxy ? "（经代理）" : ""}`)
     if (!/<(rss|feed|rdf|RDF)[:\s>]/i.test(text) && !/<(item|entry)[\s>]/i.test(text)) {
-      throw new Error(`非 RSS/Atom 内容（${ctype || "未知类型"}，${text.length} 字符）`)
+      throw new Error(`非 RSS/Atom 内容（${ctype || "未知类型"}，${text.length} 字符）${viaProxy ? "（经代理）" : ""}`)
     }
     return parseFeed(text)
   }
   try {
     return await attempt()
   } catch (e) {
-    const msg = String((e as Error).message ?? "")
-    // 只重试网络类瞬时错误（fetch failed / timeout / ECONNRESET / 5xx）；4xx 与内容错误不重试
-    if (/fetch failed|timeout|aborted|ECONNRESET|ECONNREFUSED|HTTP 5\d\d/i.test(msg)) {
-      await new Promise((r) => setTimeout(r, 1500))
-      return attempt()
+    const firstMsg = String((e as Error).message ?? "")
+    // 只重试网络类瞬时错误（fetch failed / timeout / aborted / ECONNRESET / 5xx）；4xx 与内容错误不重试
+    const transient = /fetch failed|timeout|aborted|ECONNRESET|ECONNREFUSED|HTTP 5\d\d/i.test(firstMsg)
+    if (!transient) {
+      // 代理连接类错误（ProxyAgent 典型报错）补「经代理」标记，区分源故障与代理故障
+      if (viaProxy && !/经代理/.test(firstMsg)) {
+        throw new Error(`${firstMsg}（经代理 ${proxyUrl.trim()}——请确认代理服务可达，其余源不受影响）`)
+      }
+      throw e
     }
-    throw e
+    await new Promise((r) => setTimeout(r, 1500))
+    try {
+      return await attempt()
+    } catch (e2) {
+      const msg2 = String((e2 as Error).message ?? "")
+      if (viaProxy && !/经代理/.test(msg2)) {
+        throw new Error(`${msg2}（经代理 ${proxyUrl.trim()}——请确认代理服务可达，其余源不受影响）`)
+      }
+      throw e2
+    }
   }
 }
 
@@ -228,6 +384,7 @@ export async function refreshFeeds(opts: RefreshOptions = {}): Promise<FeedRefre
     orderBy: { createdAt: "asc" },
     ...(opts.limit ? { take: opts.limit } : {}),
   })
+  const globalProxy = await getGlobalProxyUrl()
 
   // 近 7 天已有条目指纹（跨源去重基准）
   const since = new Date(Date.now() - 7 * 86400_000)
@@ -239,10 +396,18 @@ export async function refreshFeeds(opts: RefreshOptions = {}): Promise<FeedRefre
   const knownHashes = recentItems.map((x) => x.simhash).filter(Boolean)
 
   // 单源处理（抓取 → 三层过滤去重 → 入库 → 状态留痕）
-  const processFeed = async (feed: { id: string; name: string; url: string; site: string }): Promise<FeedRefreshResult> => {
+  const processFeed = async (feed: {
+    id: string
+    name: string
+    url: string
+    site: string
+    proxyUrl?: string
+  }): Promise<FeedRefreshResult> => {
     const r: FeedRefreshResult = { feedId: feed.id, feedName: feed.name, status: "ok", error: "", fetched: 0, inserted: 0, stale: 0, known: 0, duplicates: 0 }
+    // 代理优先级（P0-2）：按源 proxyUrl > 全局代理 > 直连
+    const effectiveProxy = feed.proxyUrl?.trim() || globalProxy
     try {
-      const parsed = await fetchAndParse(feed.url, timeoutMs)
+      const parsed = await fetchAndParse(feed.url, timeoutMs, effectiveProxy)
       r.fetched = parsed.items.length
       const now = Date.now()
       for (const it of parsed.items) {

@@ -26,6 +26,7 @@ import { chatRetry } from "@/lib/gateway"
 import { registry } from "@/lib/gateway/registry"
 import { getSettings } from "@/lib/settings"
 import { extractJson } from "./json"
+import { mustResolve } from "@/lib/media/binaries"
 
 const execFileP = promisify(execFile)
 
@@ -250,7 +251,7 @@ function sceneSvg(scene: StoryboardScene, i: number, n: number, sb: Storyboard, 
 // ---------- ffmpeg / TTS ----------
 
 async function ffprobeSeconds(file: string): Promise<number> {
-  const { stdout } = await execFileP("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file])
+  const { stdout } = await execFileP(mustResolve("ffprobe"), ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file])
   return Number.parseFloat(stdout.trim()) || 0
 }
 
@@ -302,7 +303,7 @@ const BGM_RECIPES: Record<Exclude<BgmPreset, "none">, { expr: string; chain: str
 async function synthesizeBgm(preset: Exclude<BgmPreset, "none">, seconds: number, outFile: string): Promise<void> {
   const r = BGM_RECIPES[preset]
   const fadeOutStart = Math.max(0, seconds - 2.2).toFixed(2)
-  await execFileP("ffmpeg", [
+  await execFileP(mustResolve("ffmpeg"), [
     "-y", "-f", "lavfi",
     "-i", `aevalsrc=${r.expr}:s=24000:d=${seconds.toFixed(2)}`,
     "-af", `${r.chain},afade=t=out:st=${fadeOutStart}:d=2.2`,
@@ -318,7 +319,7 @@ async function mixBgm(videoIn: string, preset: Exclude<BgmPreset, "none">, hasVo
   const dur = await ffprobeSeconds(videoIn)
   await synthesizeBgm(preset, dur, bgmWav)
   const bgmVol = hasVoice ? r.volume : Math.min(0.6, r.volume * 2.4)
-  await execFileP("ffmpeg", [
+  await execFileP(mustResolve("ffmpeg"), [
     "-y", "-i", videoIn, "-i", bgmWav,
     "-filter_complex", `[1:a]volume=${bgmVol.toFixed(2)}[b];[0:a][b]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]`,
     "-map", "0:v:0", "-map", "[a]",
@@ -445,7 +446,7 @@ async function muxSegment(videoIn: string, audioIn: string | null, dur: number, 
     "-t", dur.toFixed(2), "-shortest",
     outFile,
   ]
-  await execFileP("ffmpeg", args, { timeout: 120_000 })
+  await execFileP(mustResolve("ffmpeg"), args, { timeout: 120_000 })
 }
 
 async function renderVideo(
@@ -617,7 +618,7 @@ async function renderVideo(
       const frame = path.join(tmp, `f${i}.png`)
       await writeFile(frame, png)
       const fadeOut = Math.max(0, durations[i] - 0.25).toFixed(2)
-      await execFileP("ffmpeg", [
+      await execFileP(mustResolve("ffmpeg"), [
         "-y", "-loop", "1", "-framerate", "30", "-t", durations[i].toFixed(2), "-i", frame,
         ...(audioFiles[i] ? ["-i", audioFiles[i]] : ["-f", "lavfi", "-t", durations[i].toFixed(2), "-i", "anullsrc=r=24000:cl=mono"]),
         "-vf", `fade=t=in:st=0:d=0.22,fade=t=out:st=${fadeOut}:d=0.22,format=yuv420p`,
@@ -650,7 +651,7 @@ async function renderVideo(
           await writeFile(frame, png)
           const localSeg = path.join(tmp, `sl${i}.mp4`)
           const fadeOut = Math.max(0, durations[i] - 0.25).toFixed(2)
-          await execFileP("ffmpeg", [
+          await execFileP(mustResolve("ffmpeg"), [
             "-y", "-loop", "1", "-framerate", "30", "-t", durations[i].toFixed(2), "-i", frame,
             ...(audioFiles[i] ? ["-i", audioFiles[i]] : ["-f", "lavfi", "-t", durations[i].toFixed(2), "-i", "anullsrc=r=24000:cl=mono"]),
             "-vf", `fade=t=in:st=0:d=0.22,fade=t=out:st=${fadeOut}:d=0.22,format=yuv420p`,
@@ -783,7 +784,7 @@ async function renderVideo(
           "-c:a", "aac", "-b:a", "96k", "-ar", "24000", "-ac", "1",
           "-t", dur.toFixed(2), "-shortest", seg,
         ]
-        await execFileP("ffmpeg", args, { timeout: 120_000 })
+        await execFileP(mustResolve("ffmpeg"), args, { timeout: 120_000 })
         segs.push(seg)
         saveProgress({ sceneDone: i + 1, percent: Math.round(50 + (40 * (i + 1)) / n) })
       }
@@ -794,7 +795,7 @@ async function renderVideo(
     const listFile = path.join(tmp, "list.txt")
     await writeFile(listFile, segs.map((s) => `file '${s}'`).join("\n"))
     const outPath = finalPath
-    await execFileP("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", outPath], { timeout: 120_000 })
+    await execFileP(mustResolve("ffmpeg"), ["-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", outPath], { timeout: 120_000 })
 
     // ===== Stage 3.5: BGM 本地合成混音（可选；口播为主 BGM 垫底） =====
     let bgmNote = ""
@@ -977,7 +978,7 @@ async function reviseSceneVideo(runId: string, assetId: string, storyboard: Stor
       const frame = path.join(tmp, "f.png")
       await writeFile(frame, png)
       const fadeOut = Math.max(0, dur - 0.25).toFixed(2)
-      await execFileP("ffmpeg", [
+      await execFileP(mustResolve("ffmpeg"), [
         "-y", "-loop", "1", "-framerate", "30", "-t", dur.toFixed(2), "-i", frame,
         ...(ttsOk ? ["-i", wav] : ["-f", "lavfi", "-t", dur.toFixed(2), "-i", "anullsrc=r=24000:cl=mono"]),
         "-vf", `fade=t=in:st=0:d=0.22,fade=t=out:st=${fadeOut}:d=0.22,format=yuv420p`,
@@ -991,7 +992,7 @@ async function reviseSceneVideo(runId: string, assetId: string, storyboard: Stor
     saveProgress({ stage: "concat", percent: 80, aiNote: "时间线重新合成…" })
     const listFile = path.join(tmp, "list.txt")
     await writeFile(listFile, segFiles.map((f, i) => `file '${i === idx ? newSeg : f}'`).join("\n"))
-    await execFileP("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", finalPath], { timeout: 120_000 })
+    await execFileP(mustResolve("ffmpeg"), ["-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", finalPath], { timeout: 120_000 })
 
     // ---- 3.5 BGM 混音（可选） ----
     let bgmNote = ""

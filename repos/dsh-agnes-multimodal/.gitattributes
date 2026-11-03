@@ -1,0 +1,16 @@
+# Normalize line endings to LF in the repository — this package ships LF-only files.
+* text=auto eol=lf
+
+# Windows batch / command scripts must keep CRLF
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.mp4 binary
+*.zip binary
+*.exe binary

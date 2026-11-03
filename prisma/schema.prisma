@@ -217,10 +217,11 @@ model SourceFeed {
   url           String    @unique // RSS/Atom 地址（RSSHub 路由拼好的完整 URL）
   category      String    @default("综合") // AI 资讯 / 研究前沿 / 开源生态 / 资本动向 …
   site          String    @default("") // 主站域名（解析 item link 时兜底）
+  proxyUrl      String    @default("") // 按源代理（P0-2）：http(s)://host:port，空 = 走全局代理或直连；优先级 按源 > 全局 > 直连
   active        Boolean   @default(true)
   lastFetchedAt DateTime?
   lastStatus    String    @default("pending") // ok | partial | error | pending（诚实留痕）
-  lastError     String    @default("") // 失败原因（人话）
+  lastError     String    @default("") // 失败原因（人话；经代理失败带「经代理」标记）
   lastItemCount Int       @default(0) // 最近一次新增条目数
   note          String    @default("")
   createdAt     DateTime  @default(now())

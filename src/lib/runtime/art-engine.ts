@@ -13,6 +13,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "child_process"
 import { createServer } from "http"
 import { readFile, mkdir, stat } from "fs/promises"
 import path from "path"
+import { mustResolve } from "@/lib/media/binaries"
 
 const ENGINE_DIR = "/home/z/my-project/public/engine/art-motion"
 
@@ -118,7 +119,7 @@ interface FfmpegPipe {
 }
 
 function startFfmpegPipe(outFile: string, fps: number, width: number, height: number): FfmpegPipe {
-  const proc = spawn("ffmpeg", [
+  const proc = spawn(mustResolve("ffmpeg"), [
     "-y",
     "-f", "image2pipe",
     "-framerate", String(fps),

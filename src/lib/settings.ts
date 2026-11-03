@@ -66,6 +66,13 @@ export interface VideoSettings {
   secondsPerScene: number
 }
 
+/** 网络代理（P0-2）：全局 http/https 代理地址，空 = 直连。
+ *  RSS 抓取优先级：按源 proxyUrl > 全局代理 > 直连（与 Feedly/Folo
+ *  「全局代理 + 源级例外」通行做法一致）。 */
+export interface NetworkSettings {
+  proxyUrl: string // 如 http://127.0.0.1:7890；空串 = 不代理
+}
+
 export interface StyleExemplarSettings {
   items: { id: string; name: string; source: string; createdAt: string; words: number; fingerprint: StyleExemplarFingerprint }[]
 }
@@ -78,6 +85,7 @@ export interface AppSettings {
   video: VideoSettings
   style: StyleProfile
   exemplars: StyleExemplarSettings
+  network: NetworkSettings
 }
 
 const DEFAULTS: AppSettings = {
@@ -97,6 +105,7 @@ const DEFAULTS: AppSettings = {
   video: { channel: "local", secondsPerScene: 8 },
   style: { positioning: "", audience: "", domains: "", tone: "", taboos: "" },
   exemplars: { items: [] },
+  network: { proxyUrl: "" },
 }
 
 const KEYS: Record<keyof AppSettings, string> = {
@@ -107,6 +116,7 @@ const KEYS: Record<keyof AppSettings, string> = {
   video: "video:channel",
   style: "style:profile",
   exemplars: "style:exemplars",
+  network: "network:proxy",
 }
 
 let cache: AppSettings | null = null
@@ -123,6 +133,7 @@ export async function getSettings(force = false): Promise<AppSettings> {
     video: { ...DEFAULTS.video },
     style: { ...DEFAULTS.style },
     exemplars: { items: [] },
+    network: { ...DEFAULTS.network },
   }
   try {
     const rows = await db.settingKV.findMany()
@@ -248,6 +259,7 @@ export function redactSettings(s: AppSettings): AppSettings & { _meta: Record<st
     video: { ...s.video },
     style: { ...s.style },
     exemplars: { items: s.exemplars.items.slice(0, 20) },
+    network: { ...s.network },
     _meta: {
       llm: { hasKey: Boolean(s.llm.apiKey), envFallback: false },
       search: { hasKey: Boolean(s.search.apiKey || process.env.WSA_API_KEY), envFallback: !s.search.apiKey && Boolean(process.env.WSA_API_KEY) },

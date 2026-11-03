@@ -83,13 +83,98 @@ export async function POST(req: Request) {
   }
 }
 
-// ---------- PATCH：启用/停用源 ----------
+// ---------- PATCH：启停 / 编辑源（P0-2 子集更新） ----------
+// body: { id, active? }                          → 启停（原有语义）
+// body: { id, name? / url? / category? / proxyUrl? } → 编辑任意子集
+//   - url 变更：保留 http(s) 前缀 + 查重校验，更新后触发一次定向重抓验证
+//     （复用 refreshFeeds 的 feedIds 定向刷新；失败不阻断保存，仅在 recheck 留痕）
+//   - proxyUrl：空串 = 清除按源代理；非空须 http(s):// 前缀
+//   - 历史条目全部保留（对比删除重建的级联丢失）
 export async function PATCH(req: Request) {
   try {
-    const body = (await req.json()) as { id?: string; active?: boolean }
+    const body = (await req.json()) as {
+      id?: string
+      active?: boolean
+      name?: string
+      url?: string
+      category?: string
+      proxyUrl?: string
+    }
     if (!body.id) return NextResponse.json({ error: "id 不能为空" }, { status: 400 })
-    const feed = await db.sourceFeed.update({ where: { id: body.id }, data: { active: body.active ?? true } })
-    return NextResponse.json({ feed })
+    const existing = await db.sourceFeed.findUnique({ where: { id: body.id } })
+    if (!existing) return NextResponse.json({ error: "源不存在（可能已删除，请刷新列表）" }, { status: 404 })
+
+    // ---- 启停（原有语义，无编辑字段时走此分支） ----
+    const hasEdit = ["name", "url", "category", "proxyUrl"].some((k) => body[k as keyof typeof body] !== undefined)
+    if (!hasEdit) {
+      if (typeof body.active !== "boolean") {
+        return NextResponse.json({ error: "没有可更新字段（active 或 name/url/category/proxyUrl 至少其一）" }, { status: 400 })
+      }
+      const feed = await db.sourceFeed.update({ where: { id: body.id }, data: { active: body.active } })
+      return NextResponse.json({ feed })
+    }
+
+    // ---- 编辑（子集更新；启停与编辑可并存） ----
+    const data: { active?: boolean; name?: string; url?: string; category?: string; proxyUrl?: string } = {}
+    if (typeof body.active === "boolean") data.active = body.active
+
+    if (body.name !== undefined) {
+      const name = body.name.trim()
+      if (!name) return NextResponse.json({ error: "名称不能为空" }, { status: 400 })
+      data.name = name.slice(0, 60)
+    }
+
+    let urlChanged = false
+    if (body.url !== undefined) {
+      const url = body.url.trim()
+      if (!url) return NextResponse.json({ error: "url 不能为空" }, { status: 400 })
+      if (!/^https?:\/\//i.test(url)) return NextResponse.json({ error: "url 必须以 http(s):// 开头" }, { status: 400 })
+      if (url !== existing.url) {
+        const dup = await db.sourceFeed.findUnique({ where: { url } })
+        if (dup && dup.id !== body.id) return NextResponse.json({ error: "该 url 已被其他源使用" }, { status: 400 })
+        data.url = url.slice(0, 500)
+        urlChanged = true
+      }
+    }
+
+    if (body.category !== undefined) data.category = body.category.trim().slice(0, 20) || "自定义"
+
+    if (body.proxyUrl !== undefined) {
+      const proxy = body.proxyUrl.trim()
+      if (proxy && !/^https?:\/\//i.test(proxy)) {
+        return NextResponse.json({ error: "代理地址必须以 http(s):// 开头（如 http://127.0.0.1:7890），留空则清除" }, { status: 400 })
+      }
+      data.proxyUrl = proxy.slice(0, 300)
+    }
+
+    if (Object.keys(data).length === 0) {
+      return NextResponse.json({ error: "没有实际变更（与现有值相同）" }, { status: 400 })
+    }
+
+    const feed = await db.sourceFeed.update({ where: { id: body.id }, data })
+
+    // ---- url 变更 → 定向重抓验证（不阻断保存，结果进 recheck） ----
+    let recheck: { status: string; fetched: number; error: string } | undefined
+    if (urlChanged) {
+      try {
+        const [r] = await refreshFeeds({ feedIds: [body.id], perFeedTimeoutMs: 15_000 })
+        recheck = r
+          ? { status: r.status, fetched: r.fetched, error: r.error }
+          : { status: "skipped", fetched: 0, error: "源已停用，未重抓（启用后再验证）" }
+      } catch (e) {
+        recheck = { status: "error", fetched: 0, error: (e as Error).message.slice(0, 160) }
+      }
+    }
+
+    return NextResponse.json({
+      feed,
+      ...(recheck ? { recheck } : {}),
+      message: urlChanged
+        ? recheck?.status === "ok"
+          ? `已保存并重抓验证：抓到 ${recheck.fetched} 条（历史条目全部保留）`
+          : `已保存（历史条目保留）；新地址重抓未成功：${recheck?.error?.slice(0, 80) ?? "未知"}——可点「刷新全部」重试`
+        : "已保存（历史条目全部保留）",
+    })
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 })
   }

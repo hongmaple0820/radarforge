@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useToast } from "@/hooks/use-toast"
-import { Puzzle, Wrench, Cable, RefreshCw, Play, Plus, Trash2, Loader2, ServerCog, Activity } from "lucide-react"
+import { Puzzle, Wrench, Cable, RefreshCw, Play, Plus, Trash2, Loader2, ServerCog, Activity, Power, Terminal } from "lucide-react"
 
 interface ProviderInfo {
   kind: string
@@ -25,7 +25,7 @@ interface ProviderInfo {
   lastCheckedAt: string | null
 }
 interface ToolInfo { name: string; description: string; builtin: boolean; params: Record<string, string> }
-interface McpInfo { id: string; name: string; transport: string; url: string; command: string; enabled: boolean; status: string; discoveredTools: string; lastError: string }
+interface McpInfo { id: string; name: string; transport: string; url: string; command: string; enabled: boolean; status: string; discoveredTools: string; lastError: string; source?: "db" | "file" }
 
 const STATUS_COLOR: Record<string, string> = {
   healthy: "bg-emerald-600",
@@ -45,7 +45,7 @@ export function PluginsPanel() {
   const [toolResult, setToolResult] = useState<string>("")
   const [running, setRunning] = useState(false)
   const [servers, setServers] = useState<McpInfo[]>([])
-  const [newServer, setNewServer] = useState({ name: "", url: "", transport: "http" })
+  const [newServer, setNewServer] = useState({ name: "", url: "", command: "", transport: "http" as "http" | "stdio" })
   const [testing, setTesting] = useState<string | null>(null)
 
   const refreshProviders = useCallback(async () => {
@@ -91,14 +91,34 @@ export function PluginsPanel() {
   }
 
   const addServer = async () => {
-    if (!newServer.name.trim() || !newServer.url.trim()) {
-      toast({ title: "请填写名称和 URL" })
+    if (!newServer.name.trim()) {
+      toast({ title: "请填写名称" })
       return
     }
-    await fetch("/api/agent/mcp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "create", ...newServer }) })
-    setNewServer({ name: "", url: "", transport: "http" })
+    if (newServer.transport === "http" && !newServer.url.trim()) {
+      toast({ title: "http 传输需要 URL" })
+      return
+    }
+    if (newServer.transport === "stdio" && !newServer.command.trim()) {
+      toast({ title: "stdio 传输需要 command" })
+      return
+    }
+    const res = await fetch("/api/agent/mcp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "create", ...newServer }) })
+    const json = await res.json()
+    if (!res.ok) {
+      toast({ title: "添加失败", description: json.error, variant: "destructive" })
+      return
+    }
+    setNewServer({ name: "", url: "", command: "", transport: newServer.transport })
     void refreshServers()
-    toast({ title: "MCP server 已添加" })
+    toast({ title: "MCP server 已添加", description: newServer.transport === "stdio" ? "点「测试连接」做 stdio 握手验证" : "点「测试连接」验证握手与工具发现" })
+  }
+
+  const toggleServer = async (id: string) => {
+    const res = await fetch("/api/agent/mcp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "toggle", id }) })
+    const json = await res.json()
+    if (!res.ok) toast({ title: "启停失败", description: json.error, variant: "destructive" })
+    void refreshServers()
   }
 
   const testServer = async (id: string) => {
@@ -217,9 +237,28 @@ export function PluginsPanel() {
             <p className="text-[11px] text-muted-foreground break-words">JSON-RPC 2.0 · initialize → tools/list 握手 · 工具自动发现</p>
           </CardHeader>
           <CardContent className="space-y-3">
+            {/* 新增表单：双传输（P0-4）——http 填 URL / stdio 填命令行 */}
+            <div className="flex gap-1.5 flex-wrap">
+              {(["http", "stdio"] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setNewServer((s) => ({ ...s, transport: t }))}
+                  className={`rounded-md border px-2 py-1 text-[10px] transition-colors ${newServer.transport === t ? "border-amber-400 bg-amber-50 dark:bg-amber-950/30 font-semibold" : "hover:border-amber-200 text-muted-foreground"}`}
+                >
+                  {t === "http" ? "远程 HTTP（Streamable）" : "本地 stdio（子进程）"}
+                </button>
+              ))}
+            </div>
             <div className="flex gap-2">
-              <Input placeholder="名称，如：我的 MCP 服务" value={newServer.name} onChange={(e) => setNewServer({ ...newServer, name: e.target.value })} className="h-8 text-xs" />
-              <Input placeholder="https://…/mcp" value={newServer.url} onChange={(e) => setNewServer({ ...newServer, url: e.target.value })} className="h-8 text-xs" />
+              <Input placeholder="名称，如：我的 MCP 服务" value={newServer.name} onChange={(e) => setNewServer((s) => ({ ...s, name: e.target.value }))} className="h-8 text-xs w-36 shrink-0" />
+              {newServer.transport === "http" ? (
+                <Input placeholder="https://…/mcp（JSON-RPC endpoint）" value={newServer.url} onChange={(e) => setNewServer((s) => ({ ...s, url: e.target.value }))} className="h-8 text-xs font-mono" />
+              ) : (
+                <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                  <Terminal className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <Input placeholder="完整命令行，如 npx -y @modelcontextprotocol/server-github" value={newServer.command} onChange={(e) => setNewServer((s) => ({ ...s, command: e.target.value }))} className="h-8 text-xs font-mono" />
+                </div>
+              )}
               <Button size="sm" onClick={addServer} className="bg-amber-500 hover:bg-amber-600 text-white shrink-0"><Plus className="h-3.5 w-3.5" /></Button>
             </div>
             <div className="space-y-1.5">
@@ -231,23 +270,32 @@ export function PluginsPanel() {
                   tools = []
                 }
                 return (
-                  <motion.div key={s.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-md border px-2.5 py-2 space-y-1.5">
+                  <motion.div key={s.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`rounded-md border px-2.5 py-2 space-y-1.5 ${s.enabled === false ? "opacity-60" : ""}`}>
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <ServerCog className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                         <span className="text-xs font-semibold truncate">{s.name}</span>
                         <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0">{s.transport}</Badge>
+                        {s.source === "file" && <Badge variant="secondary" className="text-[9px] px-1 py-0 shrink-0">config 文件</Badge>}
                         {s.status !== "unknown" && <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${STATUS_COLOR[s.status] ?? "bg-gray-400"}`} />}
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
+                        {s.source !== "file" && (
+                          <Button variant="ghost" size="icon" className={`h-6 w-6 ${s.enabled ? "text-emerald-600" : "text-muted-foreground"}`} onClick={() => void toggleServer(s.id)} title={s.enabled ? "停用（保留配置）" : "启用"}>
+                            <Power className="h-3 w-3" />
+                          </Button>
+                        )}
                         <Button variant="outline" size="sm" className="h-6 text-[10px]" onClick={() => testServer(s.id)} disabled={testing === s.id}>
                           {testing === s.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Cable className="h-3 w-3" />}
                           测试连接
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => deleteServer(s.id)}><Trash2 className="h-3 w-3" /></Button>
+                        {s.source !== "file" && (
+                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => deleteServer(s.id)}><Trash2 className="h-3 w-3" /></Button>
+                        )}
                       </div>
                     </div>
                     <div className="text-[10px] text-muted-foreground truncate font-mono">{s.url || s.command}</div>
+                    {s.enabled === false && <div className="text-[10px] text-amber-600">已停用（测试与后续工具接入会跳过）</div>}
                     {s.lastError && <div className="text-[10px] text-red-500 line-clamp-2">{s.lastError}</div>}
                     {tools.length > 0 && (
                       <div className="flex flex-wrap gap-1">
@@ -263,7 +311,7 @@ export function PluginsPanel() {
             </div>
             <div className="text-[10px] text-muted-foreground rounded bg-muted/40 px-2 py-1.5 flex items-start gap-1.5">
               <RefreshCw className="h-3 w-3 mt-0.5 shrink-0" />
-              <span>添加任意 MCP server（如 mcp.z.ai/mcp、本地工具服务等）即可将外部工具纳入同一注册表体系。stdio 传输需本地运行时。</span>
+              <span>双传输统一入口（P0-4）：远程 HTTP（Streamable，含会话管理）与本地 stdio（子进程 JSON-RPC）均在此添加与测试；config/mcp.json 的条目自动并入清单（标「config 文件」）。P1 将把发现的工具以 mcp__服务器__工具 注册进工具注册表供 Agent 调用。</span>
             </div>
           </CardContent>
         </Card>

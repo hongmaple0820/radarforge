@@ -15,13 +15,14 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useToast } from "@/hooks/use-toast"
-import { Rss, RefreshCw, Loader2, Plus, Trash2, ExternalLink, ArrowRightCircle, CircleDot, CircleX, CircleDashed } from "lucide-react"
+import { Rss, RefreshCw, Loader2, Plus, Trash2, ExternalLink, ArrowRightCircle, CircleDot, CircleX, CircleDashed, Pencil, Globe } from "lucide-react"
 
 interface FeedInfo {
   id: string
   name: string
   url: string
   category: string
+  proxyUrl?: string
   active: boolean
   lastFetchedAt: string | null
   lastStatus: string
@@ -58,6 +59,10 @@ export function RssPanel({ onDataChange }: { onDataChange?: () => void }) {
   const [promoting, setPromoting] = useState<string | null>(null)
   const [newFeed, setNewFeed] = useState({ name: "", url: "" })
   const [adding, setAdding] = useState(false)
+  // P0-2 行内编辑态（铅笔进入；名称/URL/分类/按源代理）
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editForm, setEditForm] = useState({ name: "", url: "", category: "", proxyUrl: "" })
+  const [savingEdit, setSavingEdit] = useState(false)
 
   const refresh = useCallback(async () => {
     const j = await fetch("/api/sources").then((x) => x.json()).catch(() => null)
@@ -161,6 +166,34 @@ export function RssPanel({ onDataChange }: { onDataChange?: () => void }) {
     }
   }
 
+  // P0-2：进入编辑态（回填现有值）
+  const startEdit = (f: FeedInfo) => {
+    setEditingId(f.id)
+    setEditForm({ name: f.name, url: f.url, category: f.category, proxyUrl: f.proxyUrl ?? "" })
+  }
+
+  // P0-2：保存编辑（PATCH 子集更新；url 变更自动定向重抓验证）
+  const saveEdit = async () => {
+    if (!editingId) return
+    setSavingEdit(true)
+    try {
+      const res = await fetch("/api/sources", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: editingId, ...editForm }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      toast({ title: "已保存编辑", description: json.message ?? "历史条目全部保留" })
+      setEditingId(null)
+      await refresh()
+    } catch (e) {
+      toast({ title: "保存失败", description: (e as Error).message, variant: "destructive" })
+    } finally {
+      setSavingEdit(false)
+    }
+  }
+
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -184,25 +217,54 @@ export function RssPanel({ onDataChange }: { onDataChange?: () => void }) {
           </span>
         </CardTitle>
         <p className="text-[10px] text-muted-foreground">
-          24 个默认 AI 资讯源（中文 8 + 英文 16）自动播种；抓取 → 双粒度新鲜度过滤 → SimHash 跨源去重 → 条目一键转选题池
+          24 个默认 AI 资讯源（中文 8 + 英文 16）自动播种；抓取 → 双粒度新鲜度过滤 → SimHash 跨源去重 → 条目一键转选题池；源可编辑（铅笔，历史保留）与按源代理（Globe 标记）
         </p>
       </CardHeader>
       <CardContent className="pt-0 space-y-3">
-        {/* 源墙（状态灯 + 分类） */}
-        <div className="rounded-lg border bg-muted/30 p-2 max-h-40 overflow-y-auto">
+        {/* 源墙（状态灯 + 分类；P0-2：铅笔行内编辑） */}
+        <div className="rounded-lg border bg-muted/30 p-2 max-h-56 overflow-y-auto">
           <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-1.5">
             {feeds.map((f) => {
               const st = STATUS_ICON[f.lastStatus] ?? STATUS_ICON.pending
               const StIcon = st.icon
+              // P0-2：编辑态占满整行（四个字段 + 保存/取消）
+              if (editingId === f.id) {
+                return (
+                  <div key={f.id} className="col-span-full rounded-md border border-sky-300 bg-sky-50/50 dark:bg-sky-950/20 p-2 space-y-1.5">
+                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                      <Pencil className="h-3 w-3" />编辑「{f.name}」——历史条目全部保留（改 URL 会自动重抓验证）
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5">
+                      <Input value={editForm.name} onChange={(e) => setEditForm((s) => ({ ...s, name: e.target.value }))} placeholder="名称" className="h-7 text-[11px]" />
+                      <Input value={editForm.category} onChange={(e) => setEditForm((s) => ({ ...s, category: e.target.value }))} placeholder="分类" className="h-7 text-[11px]" />
+                      <Input value={editForm.url} onChange={(e) => setEditForm((s) => ({ ...s, url: e.target.value }))} placeholder="RSS/Atom URL" className="h-7 text-[11px] col-span-2 font-mono" />
+                      <div className="col-span-2 md:col-span-4 flex items-center gap-1.5 flex-wrap">
+                        <Globe className="h-3 w-3 text-muted-foreground shrink-0" />
+                        <Input value={editForm.proxyUrl} onChange={(e) => setEditForm((s) => ({ ...s, proxyUrl: e.target.value }))} placeholder="按源代理（可选，如 http://127.0.0.1:7890；留空 = 全局代理或直连）" className="h-7 text-[11px] flex-1 min-w-[200px] font-mono" />
+                      </div>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <Button size="sm" className="h-6 text-[10px]" onClick={() => void saveEdit()} disabled={savingEdit || !editForm.name.trim() || !editForm.url.trim()}>
+                        {savingEdit ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}保存（{f._count?.items ?? 0} 条历史保留）
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => setEditingId(null)} disabled={savingEdit}>取消</Button>
+                    </div>
+                  </div>
+                )
+              }
               return (
-                <div key={f.id} className="group flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-[10px]" title={f.lastError ? `失败原因：${f.lastError}` : `${f.url}｜累计 ${f._count?.items ?? 0} 条`}>
+                <div key={f.id} className="group flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-[10px]" title={f.lastError ? `失败原因：${f.lastError}` : `${f.url}｜累计 ${f._count?.items ?? 0} 条${f.proxyUrl ? `｜经代理 ${f.proxyUrl}` : ""}`}>
                   <button onClick={() => void toggleActive(f.id, !f.active)} title={f.active ? "停用（刷新时跳过）" : "启用"} className="shrink-0">
                     <StIcon className={`h-3 w-3 ${f.active ? st.cls : "text-muted-foreground/30"}`} />
                   </button>
                   <span className={`truncate ${f.active ? "" : "text-muted-foreground/40 line-through"}`}>{f.name}</span>
+                  {f.proxyUrl && <span className="shrink-0 text-sky-500" title={`按源代理：${f.proxyUrl}`}><Globe className="h-2.5 w-2.5" /></span>}
                   <span className="text-muted-foreground/60 shrink-0 ml-auto">{f._count?.items ?? 0}</span>
+                  <button onClick={() => startEdit(f)} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-sky-600 shrink-0" title="编辑（名称/URL/分类/代理，历史保留）">
+                    <Pencil className="h-2.5 w-2.5" />
+                  </button>
                   {f.active && (
-                    <button onClick={() => void doDelete(f.id)} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 shrink-0" title="删除该源">
+                    <button onClick={() => void doDelete(f.id)} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 shrink-0" title="删除该源（级联清条目）">
                       <Trash2 className="h-2.5 w-2.5" />
                     </button>
                   )}
