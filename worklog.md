@@ -815,3 +815,74 @@ Stage Summary:
 ### 待用户评审后执行
 - 方案获批即按表 8-1 顺序开工（P0-1 依赖解析链为第一刀）；用户可直接对 13 行排期表做增删调序
 - LLM 配额恢复后并行续跑：eval50 剩余 46 题 + 在线回归补测（与本轮方案互不阻塞）
+
+---
+
+## 2026-11-03 · 七问整固 P0+P1 全量落地（用户批准「高质量严格执行」后一轮完成）
+
+### 本轮范围（q7 方案表 8-1 的 P0 四项 + P1 六项，除 P1-3 的 GitHub Release 上传外全部落地）
+
+**P0-1 依赖解析链（根治「ffmpeg 不可用：Executable not found in $PATH」）**
+- `src/lib/media/binaries.ts` 四层解析链：env(FFMPEG_PATH) → which(PATH 扫描) → known(常见路径表) → static(ffmpeg-static 包兜底)；模块级缓存 + 启动日志 + 人话错误（三条修复路径指引，不透出原始 ENOENT）
+- 13 处裸命令名调用点全部改 `mustResolve()` 绝对路径（video.ts 11 + art-engine.ts spawn 1 + settings/test 1）
+- 按钮语义拆分：「检查视频模型」→「AI 模型探活」（local 通道返回引导说明而非拿 ffmpeg 冒充）+「渲染依赖自检」（新 scope=dependencies，逐项路径+版本+指引）；新增 GET /api/settings/dependencies
+- ffmpeg-static 列 optionalDependencies（外部部署装上即兜底；沙箱 GitHub 大文件下载持续截断，二进制未落——系统 ffmpeg 已就绪不影响）
+- 自测 test-binaries.ts **18/18**（受限 PATH 清空复现生产场景仍解析成功=核心断言）
+- 顺手修真实 bug：ideas/[id] 路由 `db.ideaCandidate`（schema 无此表，运行时必炸）→ `db.idea`；删 2 个死文件（gateway/bootstrap.ts、wsa-search.ts）→ **tsc 历史遗留 13 错清零**
+
+**P0-2 RSS 编辑与代理**
+- PATCH /api/sources 扩展子集更新（name/url/category/proxyUrl 任意组合；url 变更自动定向重抓验证 recheck 留痕不阻断保存；历史条目全保留对比删除重建）
+- SourceFeed 增 proxyUrl 字段；三级代理优先级：按源 > 全局(SettingKV network:proxy) > 直连；设置中心新增「网络代理」卡（保存即失效 rss 层缓存）
+- **工程教训固化：undici 7.30 ProxyAgent 在本环境实测挂死**（请求级 dispatcher 不发任何字节，连 CONNECT 都不出）→ 手写 Node 标准库代理客户端（http 绝对形式 / https CONNECT 隧道），不可达代理毫秒级报错
+- 「经代理」标记区分源故障与代理故障；RSS 源卡铅笔行内编辑 + Globe 按源代理标记
+- 自测 test-rss-proxy.mjs **19/19**（本地回环代理断言请求确实经代理发出 + 两代理分别计数断言优先级）+ 既有 rss 37/37 不回归
+
+**P0-3 技能目录主权（根治「社区技能无法加载」架构性根因）**
+- 扫描根迁移：平台 skills/（69 个宿主运维技能，曾整批覆盖产品技能造成不可逆损失）→ **产品库 db/skills/**（git 跟踪随仓库分发）+ 用户自装位 ~/.radarforge/skills；同 id 产品库优先
+- 12 技能按 agentskills.io 官方规范重建（wewrite 十件套 + huashu 双件，name=目录名/description 1-1024 字符/重建标记入 metadata）；双 loader（skills/loader.ts + agent/skill-loader.ts）同迁
+- UI 动态计数替代硬编码「搜索 69 个技能」；extensions-panel 来源标签改产品库/用户自装
+- scripts/build-db-skills.py 生成流水线入库
+
+**P0-4 MCP 入口统一**
+- 统一客户端 mcp-client.ts：stdio 真握手（spawn 子进程 JSON-RPC，原「Web 环境不支持」的诚实借口不再是必要的）+ http 会话管理（Mcp-Session-Id 响应头取、后续请求带）
+- /api/agent/mcp GET 双读（DB + config/mcp.json file: 前缀条目）迁移期兼容；POST create 支持 stdio（command 必填）
+- UI：双传输切换表单（远程 HTTP/本地 stdio 命令行）+ 启停开关 + config 文件条目标记与删除引导
+
+**P1-1/2/3 dsh 补完 + 真实宿主实测 + 分发就绪**
+- 四步补完：`defineTool()`（parameters 类型化 schema + **output 必填声明** schema+render + timeoutMs 策略元数据）+ Schemastery `Config` 导出 radarBase + `name` 导出 + `engines.dsh >= 0.2.1-rc.5` + 协作取消（execute 观测 exec.signal）
+- **真实宿主全链路实测（沙箱内装 @deepseek-ai/dsh@0.2.1-rc.5）**：pnpm 安装 → `--dump-config` 插件树出现 radar-plugin 行 → 启动挂载日志（radar_article + radar_video）→ `radar_article` 实调六步流水线（249s 全绿 · 纯文本回传 1972 字符 · 平台 run 留痕）→ 协作取消契约（已中止 signal 立即报「已取消」）
+- **两条实测教训固化**：① dsh-tools 必须钉住与宿主对齐版本（0.0.1-rc.1 与宿主 0.2.1-rc.5 的 dsh-llm 导出不兼容——rc 间破坏性变更实证）② 插件不能 export default（cordis unwrapExports 取 exports.default ?? exports，default 会把命名导出折叠成裸函数丢失 inject/Config——加载失败定位半天）
+- 插件包迁 plugins/dsh-radar/（git 正式目录，download/ 旧目录出库）；README 安装命令指向 Release 直链 + 实测声明；UI dsh 卡「已知边界」改「实测通过于 dsh 0.2.1-rc.5」
+- 回归脚本 test-dsh-plugin.mjs **33/33**（产物五件套/规范对齐/官方 validateArgs 五用例/协议链路/取消契约/tgz）
+- **P1-3 唯一挂起项：GitHub Release 上传与 topic 打标**——推送令牌在本会话不可见（用户消息原文持有）；scripts/github-release.sh 一键脚本已就绪（幂等：topic+Release upsert+tgz 上传+直链输出），`GHP=<token> bash scripts/github-release.sh` 即完成分发
+- 诚实边界：LLM 驱动的「模型自主决定调工具」需宿主侧 DeepSeek 凭证（沙箱无）——协议链路已全验，模型行为属宿主侧
+
+**P1-4 MCP 标准化（七问中最实质缺陷的根治：工具从不接入注册表 → 发现即接入）**
+- schema 扩展：McpServer 增 args(JSON 数组)/env(JSON 对象)/headers(JSON 对象鉴权头)——D.2/D.3 标准形态
+- mcpServers 标准格式导入导出：有 url 判远程（headers/auth 同步入库）有 command 判 stdio（args/env 入库）；不支持字段（envFile 等）**显式列出不静默丢弃**；导出同构 JSON 可直贴 Cursor/Claude Desktop；坏 JSON/缺键 400 人话错误
+- **工具接入注册表（核心接线）**：`syncMcpToolsToRegistry()` 把已启用+已握手服务器的工具以 `mcp__服务器__工具` 命名（学 dsh）注册进 toolRegistry——inputSchema 转 params 说明；发现即接入（test 成功自动同步）；启停联动摘除恢复；删除服务器摘除其工具；boot-restore 启动自愈恢复（进程重启注册表不再丢）
+- callMcpTool 双传输工具调用（stdio 一次连接完成调用 / http 带会话与鉴权头）
+- UI：导入导出同步三按钮 + 已接入 N 工具徽章 + 导入面板
+- 自测 test-p1-mcp.mjs **31/31**（导入双形态/双传输握手/注册表接入+echo 真回显/导出往返一致/启停联动/老通道兼容；DeepWiki 3 工具实测自动接入）
+
+**P1-5 视频模型配置轻量化**
+- VideoSettings 扩展四字段：model（datalist 预置+手填自定义 id）/models（可编辑清单，去重+上限12）/resolution（720P/1080P）/aspect（9:16/16:9）
+- 视频通道卡收敛全套参数单卡（模型/分辨率/画幅/秒数）；Agnes 池卡卸下视频模型选择（兼容字段保留回退 `s.video.model || s.agnes.videoModel`）
+- render-video 画幅缺省取 settings.video.aspect（请求可覆盖）；agnes-video 请求构造 size 用 resolution
+- 自测 test-p1-video.mjs **15/15**（全套保存/清单去重上限/白名单校验/向后兼容旧 DB 值默认补齐）
+
+**P1-6 工具测试台重定位**
+- 「工具注册表」→「工具测试台」+ 诊断用途徽章 + 说明改「改参数 schema 后立即冒烟 · 验证降级链 · MCP 外部工具联调」
+- 测试台列 MCP 工具（violet 边框 + MCP 徽章 + 已接入计数）——从「孤岛演示」变「生态联调」
+
+### 回归快照（本轮全绿）
+- **十一套离线**：binaries 18/18 · rss-proxy 19/19 · rss 37/37 · card-engine 33/33 · section-rewrite 28/28 · tune 28/28 · sweep-step 11/11 · eval-step 9/9 · prisma-mirror 11/11 · claim-match 5/5 · dsh-plugin 33/33
+- **四套在线集成**：p0-integration 39/39 · p1-mcp 31/31 · p1-video 15/15 · p2-intel 17/17（既有）
+- **浏览器实测 18/18**（新 UI 全链路：设置三新卡/测试台重定位/MCP 三按钮/RSS 编辑态/控制台零错误）
+- tsc 零错误（历史 13 死错清零）· 全量 eslint 零输出（ignores 收口 repos/skill-pool 等三方目录）
+
+### 遗留与下一步
+- **P1-3 尾项**：GitHub Release 上传 + topic 打标待令牌（github-release.sh 就绪一键完成）；远端推送同待令牌（push-retry.sh）
+- **P2 三项**（技能安装管理 / 设置三分区+健康中心 / MCP 服务端开放）按方案排期待后续轮次
+- LLM 配额：本轮 dsh 实测两条真实流水线 + 在线回归约消耗 60+ 次；eval50 剩余 46 题继续排队（互不阻塞）
+- 工程资产：scripts/test-p0p1-browser.sh（浏览器实测）/ test-p1-mcp.mjs / test-p1-video.mjs / test-binaries.ts / test-rss-proxy.mjs / test-dsh-plugin.mjs / build-db-skills.py / github-release.sh 全部入库
