@@ -29,6 +29,8 @@ import { loadMcpConfig } from "@/lib/mcp/config"
 
 export async function GET() {
   await seedDefaultServer()
+  // P1-4：进程重启后注册表自愈（内存态丢失，首次访问即从 DB 恢复 MCP 工具接入）
+  await syncMcpToolsToRegistry()
   const servers = await db.mcpServer.findMany({ orderBy: { createdAt: "desc" } })
   // 迁移期双读（P0-4）：config/mcp.json 的 stdio 服务器并入清单（source: "file"）
   const config = await loadMcpConfig()
