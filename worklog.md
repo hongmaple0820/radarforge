@@ -886,3 +886,51 @@ Stage Summary:
 - **P2 三项**（技能安装管理 / 设置三分区+健康中心 / MCP 服务端开放）按方案排期待后续轮次
 - LLM 配额：本轮 dsh 实测两条真实流水线 + 在线回归约消耗 60+ 次；eval50 剩余 46 题继续排队（互不阻塞）
 - 工程资产：scripts/test-p0p1-browser.sh（浏览器实测）/ test-p1-mcp.mjs / test-p1-video.mjs / test-binaries.ts / test-rss-proxy.mjs / test-dsh-plugin.mjs / build-db-skills.py / github-release.sh 全部入库
+
+---
+
+## 2026-11-04 · 七问整固 P2 全量落地（P0+P1 之后第三批次收官）
+
+### 本轮范围（q7 方案表 8-1 的 P2 三项全部落地）
+
+**P2-1 技能安装管理（q7 方案 3.3 第二步）**
+- 合规校验模块 `src/lib/skills/compliance.ts`：agentskills.io 官方五规则（name 必填/1-64 字符/小写连字符/与目录名一致/description 必填 1-1024）——**pattern 与 matches-dir 独立报告**（大写 name 同时指出两处错误）；warn 不阻断（allowed-tools 实验性/license 未声明）
+- 安装双通道 `src/lib/skills/install.ts` + 纯函数层 `zip-struct.ts`：**URL 安装**（GitHub tree/blob 页自动转 codeload zip + 仓库根包裹层剥离；直链 zip 即装）与 **zip 上传**（multipart）；三种形态全支持——根形态（id 优先取 SKILL.md 声明的合法 name，规范语义 name=目录名）/ 单目录包裹（剥壳后目录名做 id）/ 技能仓库（多技能批量识别）
+- 安全防护：zip-slip（.. 与绝对路径条目过滤）+ __MACOSX/.DS_Store/.git 垃圾跳过 + 限额（单文件 2MB/总量 20MB/200 文件）+ 落盘前目标路径二次校验
+- 产品库同 id 冲突 → 409 拒绝（产品库优先语义）；不合规技能**照样装但显式标注**（「明确标注原因而非静默跳过」方案原文）
+- 详情抽屉（Sheet 组件）：SKILL.md 全文 + 目录结构树（200 项截断）+ 合规报告明细；API `GET /api/skills/detail?id=`
+- 启停联动：SettingKV `skills:disabled` 停用集（5s 缓存）——停用技能**文件保留但移出 Agent 候选池**（agent/skill-loader 过滤 + /api/agent/runs POST API 纵深防御双保险）；幽灵 id 启停 404（不写死状态）；卸载自动清停用集
+- 卸载：仅用户位可卸（产品库技能随仓库分发拒绝卸载，引导停用）
+- UI：agent-panel 重构——安装盒（URL+上传双通道）、来源/合规/停用三徽标、行内管理动作条（详情/电源/删除）
+- 工程重构顺手件：frontmatter 解析抽 `frontmatter.ts` 纯函数共享（loader/install/detail 三处同源防漂移）；删除死代码 workbench/extensions-panel（4 文件，从未被引用）
+
+**P2-2 设置三分区 + 全局健康中心（q7 方案 7.2）**
+- 设置中心三分区信息架构：模型与密钥（LLM/搜索/生图/Agnes 池/视频通道）/ 运行时依赖（**渲染依赖自检归位此区**——逐项解析路径+版本+来源+修复指引卡，P0-1 按钮语义终态）/ 内容策略（风格定位/自动化任务）；每卡带锚点 id `settings-card-<key>`
+- `GET /api/health/summary` 四项聚合：搜索密钥/LLM 通道/视频依赖（ffmpeg 解析链）/信源健康（RSS 抓取留痕统计）——**只读聚合不主动探活**（探活是设置卡里的显式动作）；每项 status 枚举 + 人话 detail + 跳转目标（分区+卡片锚点）
+- 首屏 HealthBar 状态条（page 层）：60s 自动刷新、异常项脉冲红点、点击跳转对应设置卡（jump 属性驱动分区切换+350ms 后锚点滚动）；信源健康跳情报中心
+- overall = 最差项聚合（error>warn>ok）
+- **实测教训固化：Radix TabsTrigger 在 mousedown 激活**——`element.click()` 只派发 click 不触发切换，浏览器自动化测试须 `dispatchEvent(new MouseEvent('mousedown'))`（冒烟脚本 CLICK_TAB 封装）
+
+**P2-3 MCP 服务端开放（q7 方案 p23 双向 MCP 收官）**
+- 平台工具集 `src/lib/mcp-server/platform-tools.ts` 八件：radar_ping/radar_list_topics/radar_create_idea/radar_start_article（异步 runId+轮询指引+人格主题清单回传）/radar_run_status/radar_run_output/radar_list_skills/radar_search——全部真实可调用，参数校验人话错误
+- JSON-RPC 路由 `POST /api/mcp-server`：Streamable HTTP 形态——initialize 下发 Mcp-Session-Id + capabilities + instructions；notifications 202；ping；tools/list（含 JSON Schema）；tools/call（工具错误→isError=true 人话文案，协议错误→-32601/-32602/-32700/-32600 精确码）；GET 405 / DELETE 会话注销 204
+- 鉴权与启停 `config.ts`：SettingKV `mcp:server`——Bearer / X-Radar-Token 双头；启停 503 人话指引；令牌 8-128 位格式校验
+- UI 卡（plugins-panel）：接入端点 + **一键复制标准 mcpServers JSON**（Cursor/Claude Desktop/VS Code 直贴可用）+ 启停开关 + 令牌（随机生成/替换/清除）+ 对外工具徽标清单 + 与 dsh 出口的分工说明（方案 5.4：纯文本走 MCP、富产物留 dsh）
+- **自环 dogfood（双向 MCP 铁证）**：本平台作为 MCP 客户端导入自身端点 → 测试连接握手（36ms）→ 8 工具以 mcp__radarforge-self__* 注册进工具注册表 → 工具测试台经统一注册表实调自环成功 → 删除服务器工具同步摘除——客户端与服务端两半在同一进程内互证
+
+### 回归快照（本轮全绿）
+- **离线十二套**：rss 37/37 · rss-proxy 19/19 · binaries 18/18 · p2-skills 36/36（新）· card-engine 33/33 · section-rewrite 28/28 · tune 28/28 · sweep-step 11/11 · eval-step 9/9 · prisma-mirror 11/11 · claim-match 全过 · dsh-plugin 27 过+1 降级跳过
+- **在线六套**：p0-integration 39/39 · p1-mcp 31/31 · p1-video 15/15 · p2-health 15/15（新）· p2-skills-integration 44/44（新）· p2-mcp-server 47/47（新，含 245s 真实流水线端到端）
+- **浏览器三套冒烟**：p21 9/9 · p22 14/14 · p23 11/11（控制台零错误）
+- tsc 零错误 · 全量 eslint 零输出
+
+### 工程纪律与诚实边界
+- 测试冷启动自洽持续贯彻：test-p1-video 补「无 run 时自建最小 AgentRun」修复（沙箱回收后不再依赖暖库）；p2-skills-integration 首尾双清场（用户位+停用集复位）
+- 沙箱回收一次（本轮开头 boot-restore 恢复）；SEARCH_KEY 在本会话不可见——搜索走演示降级链，health 显示「未配置」属诚实留痕
+- LLM 配额未受限：P2-3 流水线端到端实测两轮（201s/245s 各一）
+- 提交说明：24e96e2 提交信息只写了 P2-2，实际内容含 P2-3 全部代码（add -A 卷入）——内容完整无缺，特此在 worklog 留痕更正
+
+### 遗留与下一步
+- **P1-3 尾项仍在**：GitHub Release 上传 + topic 打标待令牌（github-release.sh 一键就绪）；远端推送 8+ 提交待令牌（push-retry.sh）
+- 七问十二项（P0 四项 + P1 六项 + P2 三项）全部落地完毕；q7 方案执行闭环
+- 后续可选（非七问范围）：eval50 剩余 46 题续跑（等配额窗口）、p21 定时出版/p22 资产中心（product-deep-dive 路线图）
