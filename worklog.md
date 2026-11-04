@@ -934,3 +934,21 @@ Stage Summary:
 - **P1-3 尾项仍在**：GitHub Release 上传 + topic 打标待令牌（github-release.sh 一键就绪）；远端推送 8+ 提交待令牌（push-retry.sh）
 - 七问十二项（P0 四项 + P1 六项 + P2 三项）全部落地完毕；q7 方案执行闭环
 - 后续可选（非七问范围）：eval50 剩余 46 题续跑（等配额窗口）、p21 定时出版/p22 资产中心（product-deep-dive 路线图）
+
+---
+
+## 2026-11-04 · 七问方案分发收官（令牌到位后的最后一公里）
+
+### 远端推送
+- origin/main：cbcb0c3 → cdecd60 **12 个提交全量推送**（七问体检轮+P0 四项+P1 六项+P2 三项+锁同步），分四块攻坚（体检轮/P0 大块含 13.7MB gif/P1 收尾/P2 全量），upstream 已建立；沙箱网络两次连接失败均由限时重试自愈（块 A 第 2 次、块 C 第 2 次成功）
+- 驱动脚本入库：`scripts/tmp/push-chunks.sh`（push-retry.sh 的定向增量版，幂等可重跑，令牌仅经 GHP 环境变量不入库）
+- 补提交 `bun.lock`（adm-zip 锁条目，P2-1 提交时漏带）
+
+### GitHub Release（P1-3 尾项闭环）
+- 仓库 topic：**dsh-plugin / dsh / ai-radar** 已打（官方发现通道）
+- **Release v0.2.0-dsh-plugin**（id=433725503，prerelease）已发布：notes 含 dsh 0.2.1-rc.5 真实宿主实测声明与安装命令
+- tgz 资产上传并**匿名直链实测**：HTTP 200 / 8227B / md5 与本地 `download/dsh-plugin-radar.tgz` 逐字节一致；README 安装命令指向的 URL 即时生效
+- 顺手修 `github-release.sh` 资产列举 node 单行箭头函数缺右括号的语法 bug（首轮上传因此中断，幂等重跑成功）
+
+### 至此七问十二项（P0+P1+P2）代码、测试、文档、远端、分发全链路闭环
+- 唯一诚实遗留：**SEARCH_KEY 本会话不可见**——搜索走演示降级链（health 面板如实显示未配置），用户提供密钥后经设置中心「模型与密钥」分区写入即恢复真实检索

@@ -74,7 +74,7 @@ fi
 echo "── ③ 上传 tgz 产物"
 if [ -n "$REL_ID" ]; then
   # 删旧资产（同名覆盖需先删）
-  api GET "releases/${REL_ID}/assets" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const a=JSON.parse(d);for(const x of a)if(x.name==='dsh-plugin-radar.tgz')console.log(x.id)}" | while read -r AID; do
+  api GET "releases/${REL_ID}/assets" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const a=JSON.parse(d);for(const x of a)if(x.name==='dsh-plugin-radar.tgz')console.log(x.id)})" | while read -r AID; do
     [ -n "$AID" ] && curl -sS --fail -X DELETE -H "Authorization: Bearer ${TOKEN}" "https://api.github.com/repos/${REPO}/releases/assets/${AID}" && echo "    ✓ 旧资产已删（${AID}）"
   done
   curl -sS --fail -X POST \
