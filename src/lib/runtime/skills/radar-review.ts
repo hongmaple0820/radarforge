@@ -1,13 +1,15 @@
 // ============================================================
-// radar-review —— 五维审稿 skill（学 wewrite 编辑飞轮）
+// radar-review —— 五维审稿 skill（编排层）
 // 准确 / 观点 / 有用 / 合声 / 好读，JSON 评分
 // P0 升级：跨家族审稿 ≤2 轮 + 成对比较裁决（防「越改越差」）
 // —— LLM-as-a-Judge 综述（2411.15594）的三个系统性偏差对策：
 //    自我偏好 → 裁判换供应商家族；位置偏差 → A/B 交换位置各评一次；
 //    过度修改漂移 → 修订上限 2 轮 + 成对比较只在接受修订更优时通过
+// A1 接管后：prompt 主体在 db/skills/wewrite-review/SKILL.md（三分节）
 // ============================================================
 
 import type { ChatMessage } from "@/lib/gateway/types"
+import { renderSkillPrompt } from "../skill-prompt.ts"
 
 export interface ReviewScores {
   accuracy: number // 准确：事实与来源
@@ -31,39 +33,26 @@ const DIMS: { key: keyof ReviewScores; label: string; ask: string }[] = [
   { key: "readability", label: "好读", ask: "节奏、句长、小节切分是否舒适" },
 ]
 
-export function reviewMessages(markdown: string, personaLabel: string): ChatMessage[] {
+export async function reviewMessages(markdown: string, personaLabel: string): Promise<ChatMessage[]> {
+  const system = await renderSkillPrompt("wewrite-review", "review", {
+    dims_comments: DIMS.map((d) => `    { "dim": "${d.label}", "comment": "一句话意见，指出最具体的问题" },`).join("\n"),
+    dims_lines: DIMS.map((d) => `- ${d.label}：${d.ask}`).join("\n"),
+    persona_label: personaLabel,
+  })
   return [
-    {
-      role: "system",
-      content: [
-        "你是一名严格的技术编辑，按五个维度给文章打分（0-10，允许小数）。评分要有区分度，不要全给 7。",
-        "严格输出 JSON（不要 markdown 代码块）：",
-        `{`,
-        `  "scores": { "accuracy": 0, "viewpoint": 0, "usefulness": 0, "voice": 0, "readability": 0 },`,
-        `  "comments": [`,
-        ...DIMS.map((d) => `    { "dim": "${d.label}", "comment": "一句话意见，指出最具体的问题" },`),
-        `  ]`,
-        `}`,
-        `维度定义：`,
-        ...DIMS.map((d) => `- ${d.label}：${d.ask}`),
-        `人格设定：${personaLabel}（voice 维度对照此标准）`,
-      ].join("\n"),
-    },
+    { role: "system", content: system },
     { role: "user", content: markdown.slice(0, 9000) },
   ]
 }
 
-export function reviseMessages(markdown: string, review: Review): ChatMessage[] {
+export async function reviseMessages(markdown: string, review: Review): Promise<ChatMessage[]> {
   const problems = review.comments
     .filter((c) => review.scores[c.dim as keyof ReviewScores] !== undefined && review.scores[c.dim as keyof ReviewScores] < 8)
     .map((c) => `${c.dim}（${review.scores[c.dim as keyof ReviewScores]}/10）：${c.comment}`)
     .join("\n")
+  const system = await renderSkillPrompt("wewrite-review", "revise", {})
   return [
-    {
-      role: "system",
-      content:
-        "你是原文作者本人。按审稿意见修订文章：只改有问题的地方，保持整体结构与文风稳定，保留所有 [n] 引用。输出修订后的完整 Markdown（不要解释、不要 diff）。",
-    },
+    { role: "system", content: system },
     { role: "user", content: `【审稿意见】\n${problems || "整体偏弱，全面强化一次"}\n\n【原文】\n${markdown}` },
   ]
 }
@@ -108,22 +97,14 @@ export interface PairwiseInput {
  * orientation=true 时交换（A=修订稿 B=原文）。
  * 输出 winner: "A" | "B" | "tie"（按 orientation 归一化回「修订稿是否更优」由调用方处理）
  */
-export function pairwiseMessages(input: PairwiseInput, orientation: boolean): ChatMessage[] {
+export async function pairwiseMessages(input: PairwiseInput, orientation: boolean): Promise<ChatMessage[]> {
   const a = orientation ? input.revised : input.original
   const b = orientation ? input.original : input.revised
   const aLabel = orientation ? "修订稿" : "原文"
   const bLabel = orientation ? "原文" : "修订稿"
+  const system = await renderSkillPrompt("wewrite-review", "pairwise", {})
   return [
-    {
-      role: "system",
-      content: [
-        "你是严格的第三方内容编辑，裁决两版稿件哪版更好。不知道也不关心哪版是谁写的。",
-        "评判标准（按重要性）：① 事实与引用严谨（编造/无据陈述最严重）② 论点清晰敢表态 ③ 结构与节奏 ④ 与人格设定一致。",
-        "注意：不要因篇幅更长就偏袒某版；先指出各自最具体的优缺点再下结论。",
-        "严格输出 JSON（不要 markdown 代码块）：",
-        `{ "winner": "A" | "B" | "tie", "reason": "一句话最关键的裁决理由", "aWeakness": "A 版最具体的问题", "bWeakness": "B 版最具体的问题" }`,
-      ].join("\n"),
-    },
+    { role: "system", content: system },
     {
       role: "user",
       content: [

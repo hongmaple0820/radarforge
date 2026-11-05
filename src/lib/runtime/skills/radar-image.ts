@@ -1,15 +1,17 @@
 // ============================================================
-// radar-image —— 图像生成 skill（两条线共用）
+// radar-image —— 图像生成 skill（两条线共用，编排层）
 // ① 纯图线（image run）：主题 → LLM 构图方案（风格统一的
 //    concept/caption 清单）→ zai-image 批量生成
 // ② 图文线正文配图（illustrate 步骤）：初稿 → LLM 插图规划
 //    （anchor 锚定小节标题 + concept 画面 + caption 图注）
-//    → 逐张生成 → 回插 markdown
-// 铁律：图是「补充信息量」不是复述文字；风格 token 统一
-// 保证一组图视觉一致；失败降级留痕不阻断。
+//    → 配图导演（B1，见 illustration-director.ts）升级提示词
+//    → 逐张生成 → VLM 审图（B3）→ 回插 markdown
+// A1 接管后：插图规划 prompt 主体在 db/skills/wewrite-illustrate/SKILL.md
+// 铁律：图是「补充信息量」不是复述文字；失败降级留痕不阻断。
 // ============================================================
 
 import type { ChatMessage } from "../../gateway/types"
+import { renderSkillPrompt } from "../skill-prompt.ts"
 
 // ---------- 风格预设（前端下拉 + 后端 prompt 共用） ----------
 
@@ -130,8 +132,8 @@ export function imagePlanMessages(input: {
 
 // ---------- ①-b 纯图线 2.0：版式卡文案规划（P1 版式骨架） ----------
 
-import { CARD_FAMILIES, CARD_TEMPLATES, type CardPlanItem } from "../card-engine"
-export { parseCardPlan } from "../card-engine"
+import { CARD_FAMILIES, CARD_TEMPLATES, type CardPlanItem } from "../card-engine.ts"
+export { parseCardPlan } from "../card-engine.ts"
 
 export function cardPlanMessages(input: { subject: string; usageId: string; count: number; familyId?: string }): ChatMessage[] {
   const usage = getImageUsage(input.usageId)
@@ -178,7 +180,7 @@ export interface IllustrationPlanItem {
 export const ILLUSTRATION_STYLE_TOKEN =
   "现代扁平插画风，几何构图，蓝灰科技配色，与文章气质一致的克制配色，干净留白，无文字无水印"
 
-export function illustrationPlanMessages(draft: string, outlineHints?: { heading: string; illustration: string; imageCaption: string }[]): ChatMessage[] {
+export async function illustrationPlanMessages(draft: string, outlineHints?: { heading: string; illustration: string; imageCaption: string }[]): Promise<ChatMessage[]> {
   const hintBlock =
     outlineHints && outlineHints.length > 0
       ? [
@@ -189,20 +191,9 @@ export function illustrationPlanMessages(draft: string, outlineHints?: { heading
             .map((h) => `- 「${h.heading}」：${h.illustration}${h.imageCaption ? `（图说方向：${h.imageCaption}）` : ""}`),
         ].join("\n")
       : ""
+  const system = await renderSkillPrompt("wewrite-illustrate", undefined, {})
   return [
-    {
-      role: "system",
-      content: [
-        "你是公众号配图编辑。阅读文章，规划 2~3 张正文插图：图必须提供文字之外的信息量（示意结构、对比、场景、时间线），绝不复述段落文字。",
-        "规则：",
-        "1. anchor 必须逐字复制文中已存在的二级标题（## 后的文字，去掉前后空格）；插图将插入该小节标题之后。",
-        "2. 优先选信息密度高、有画面感的小节；开篇第一个小节和结尾小节通常适合放图。",
-        "3. concept 用具象画面语言（主体/场景/构图/光线），30~80 字，可直接作为文生图 prompt；禁止要求生成文字。",
-        "4. caption 是中文图注（≤16 字），是对图的说明，不是小节标题的重复。",
-        "严格输出 JSON 数组（不要 markdown 代码块、不要多余文字）：",
-        `[{"anchor":"## 后的小节标题原文","concept":"画面描述","caption":"图注"}]`,
-      ].join("\n") + hintBlock,
-    },
+    { role: "system", content: system + hintBlock },
     { role: "user", content: draft.slice(0, 6000) },
   ]
 }

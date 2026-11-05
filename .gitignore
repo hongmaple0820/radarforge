@@ -81,3 +81,4 @@ server.log
 # 版式卡离线测试探针产物（test-card-engine.mjs 可再生）
 /public/assets/t-*.png
 /public/assets/vlm-*.png
+/.videotmp/

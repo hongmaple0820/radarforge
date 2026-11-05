@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
+import { LENGTH_TIERS } from "@/lib/runtime/length-tier"
 import { Settings2, Bot, Search, ImageIcon, Compass, Loader2, CheckCircle2, XCircle, KeyRound, Users, Video, Plus, Trash2, Zap, Download, Upload, Timer, Play, ScrollText, Newspaper, Rss, Lightbulb, Globe, HardDrive } from "lucide-react"
 
 /** 健康中心跳转目标（P2-2，由 page 层下发） */
@@ -58,6 +59,7 @@ interface SettingsData {
     resolution?: "720P" | "1080P"
     aspect?: "9:16" | "16:9"
   }
+  article: { lengthTier: "short" | "medium" | "deep"; imageStyleId: string }
   style: { positioning: string; audience: string; domains: string; tone: string; taboos: string }
   network: { proxyUrl: string }
   _meta: Record<string, { hasKey: boolean; envFallback: boolean }>
@@ -119,6 +121,10 @@ export function SettingsPanel({ jump }: { jump?: SettingsJumpTarget | null }) {
     resolution: "720P" | "1080P"
     aspect: "9:16" | "16:9"
   }>({ channel: "local", secondsPerScene: 8, model: "agnes-video-2.5-flash", models: ["agnes-video-2.5-flash"], resolution: "720P", aspect: "9:16" })
+  // A2 文章产线（默认篇幅档位 + 插图风格统一入口）
+  const [articleForm, setArticleForm] = useState<{ lengthTier: "short" | "medium" | "deep"; imageStyleId: string }>({ lengthTier: "medium", imageStyleId: "modern-flat" })
+  // 插图风格清单（复用纯图线 /api/image-runs 的 styles 字段，避免客户端 import 服务端模块）
+  const [imageStyles, setImageStyles] = useState<{ id: string; label: string }[]>([])
   // 自动化任务（P2）
   const [automation, setAutomation] = useState<AutomationState | null>(null)
   const [autoSaving, setAutoSaving] = useState(false)
@@ -152,6 +158,10 @@ export function SettingsPanel({ jump }: { jump?: SettingsJumpTarget | null }) {
       resolution: s.video.resolution ?? "720P",
       aspect: s.video.aspect ?? "9:16",
     })
+    setArticleForm({
+      lengthTier: s.article?.lengthTier ?? "medium",
+      imageStyleId: s.article?.imageStyleId ?? "modern-flat",
+    })
   }, [])
 
   useEffect(() => {
@@ -175,6 +185,14 @@ export function SettingsPanel({ jump }: { jump?: SettingsJumpTarget | null }) {
   useEffect(() => {
     void loadDeps()
   }, [loadDeps])
+
+  // A2：插图风格清单（复用纯图线 /api/image-runs 的 styles，避免客户端 import 服务端模块）
+  useEffect(() => {
+    fetch("/api/image-runs")
+      .then((r) => r.json())
+      .then((j) => setImageStyles(Array.isArray(j.styles) ? j.styles : []))
+      .catch(() => setImageStyles([]))
+  }, [])
 
   // ---------- P2-2：健康中心跳转（分区切换 + 卡片锚点滚动） ----------
   useEffect(() => {
@@ -340,6 +358,28 @@ export function SettingsPanel({ jump }: { jump?: SettingsJumpTarget | null }) {
       const json = await res.json()
       if (!res.ok) throw new Error(json.error)
       if (!silent) toast({ title: "视频通道已保存", description: json.message })
+      await load()
+      return true
+    } catch (e) {
+      toast({ title: "保存失败", description: (e as Error).message, variant: "destructive" })
+      return false
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  // ---------- A2 文章产线（默认篇幅档位 + 插图风格统一入口） ----------
+  const saveArticle = async (): Promise<boolean> => {
+    setSaving("article")
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope: "article", value: articleForm }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      toast({ title: "文章产线已保存", description: json.message })
       await load()
       return true
     } catch (e) {
@@ -1051,6 +1091,53 @@ export function SettingsPanel({ jump }: { jump?: SettingsJumpTarget | null }) {
 
         {/* ========== 分区③：内容策略 ========== */}
         <TabsContent value="content" className="mt-3 space-y-4">
+      {/* 文章产线（A2：默认篇幅档位 + 插图风格统一入口） */}
+      <Card id="settings-card-article">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-1.5 text-sm"><ScrollText className="h-4 w-4 text-amber-500" />文章产线 · 默认篇幅与插图风格</CardTitle>
+          <p className="text-[11px] text-muted-foreground">
+            新 Run 的缺省篇幅档位（向导与创作台可按篇覆盖）；正文插图与封面的统一风格基准（B1 配图导演的 style_ref 由此发展，图文线与纯图线同源）
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-2.5">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-1.5">
+            {LENGTH_TIERS.map((t) => {
+              const active = articleForm.lengthTier === t.id
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => setArticleForm((f) => ({ ...f, lengthTier: t.id }))}
+                  className={`rounded-md border px-2.5 py-2 text-left transition-colors ${active ? "border-amber-400 bg-amber-50 dark:bg-amber-950/30" : "hover:border-amber-200"}`}
+                >
+                  <div className={`text-xs ${active ? "font-semibold text-amber-600" : ""}`}>{t.label}{t.id === "medium" ? "（默认）" : ""}</div>
+                  <div className="text-[10px] text-muted-foreground mt-0.5">{t.desc}</div>
+                </button>
+              )
+            })}
+          </div>
+          <div className="rounded-lg border bg-muted/30 p-2.5 space-y-1.5">
+            <div className="text-[10px] font-medium flex items-center gap-1.5"><ImageIcon className="h-3 w-3 text-amber-500" />插图风格（统一入口）</div>
+            <select
+              value={articleForm.imageStyleId}
+              onChange={(e) => setArticleForm((f) => ({ ...f, imageStyleId: e.target.value }))}
+              className="h-8 w-full text-xs border rounded-md bg-background px-2"
+              aria-label="插图风格"
+            >
+              {(imageStyles.length > 0 ? imageStyles : [{ id: "modern-flat", label: "现代扁平插画" }]).map((s) => (
+                <option key={s.id} value={s.id}>{s.label}</option>
+              ))}
+            </select>
+            <p className="text-[10px] text-muted-foreground">纯图线在生图工作台单独选风格；此处决定图文线成稿的默认插图基调</p>
+          </div>
+          <div className="flex items-center gap-2 pt-1">
+            <Button size="sm" onClick={() => void saveArticle()} disabled={saving === "article"} className="bg-amber-500 hover:bg-amber-600 text-white">
+              {saving === "article" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}保存
+            </Button>
+            {data?.article && <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-600">当前默认：{LENGTH_TIERS.find((t) => t.id === data.article.lengthTier)?.label ?? data.article.lengthTier}</Badge>}
+          </div>
+        </CardContent>
+      </Card>
+
       {/* 风格定位 */}
       <Card id="settings-card-style">
         <CardHeader className="pb-3">

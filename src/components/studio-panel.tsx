@@ -25,6 +25,7 @@ interface RunItem {
 }
 interface PersonaInfo { id: string; label: string; desc: string }
 interface ThemeInfo { id: string; label: string; category: string; description: string }
+interface TierInfo { id: string; label: string; desc: string }
 interface IdeaItem { id: string; title: string; angle: string; status: string }
 interface ExemplarItem { id: string; name: string; source: string; createdAt: string; words: number; fingerprint: { structure: string; rhythm: string; lexicon: string; rhetoric: string; voice: string; endings: string } }
 
@@ -36,6 +37,9 @@ export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { tit
   const [runs, setRuns] = useState<RunItem[]>([])
   const [personas, setPersonas] = useState<PersonaInfo[]>([])
   const [themes, setThemes] = useState<ThemeInfo[]>([])
+  // A2 篇幅三档（默认 medium，与设置中心一致）
+  const [tiers, setTiers] = useState<TierInfo[]>([])
+  const [tier, setTier] = useState("medium")
   const [ideas, setIdeas] = useState<IdeaItem[]>([])
   const [ideaTitle, setIdeaTitle] = useState("")
   const [ideaAngle, setIdeaAngle] = useState("")
@@ -95,6 +99,7 @@ export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { tit
     ])
     setRuns(r.runs ?? [])
     setPersonas(r.personas ?? [])
+    setTiers(r.tiers ?? [])
     setThemes(r.themes ?? [])
     setIdeas(i.ideas ?? [])
     setExemplars(e.exemplars ?? [])
@@ -113,7 +118,7 @@ export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { tit
     return () => clearInterval(t)
   }, [runs, refresh])
 
-  const start = async (payload?: { ideaTitle: string; ideaAngle: string; persona: string; theme: string; exemplarId: string; ideaId?: string }) => {
+  const start = async (payload?: { ideaTitle: string; ideaAngle: string; persona: string; theme: string; exemplarId: string; ideaId?: string; lengthTier?: string }) => {
     const t = payload?.ideaTitle ?? ideaTitle
     if (!t.trim()) return
     setStarting(true)
@@ -128,6 +133,7 @@ export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { tit
           theme: payload?.theme ?? theme,
           exemplarId: payload?.exemplarId ?? exemplarId,
           ideaId: payload?.ideaId,
+          lengthTier: payload?.lengthTier ?? tier,
         }),
       })
       const json = await res.json()
@@ -209,6 +215,7 @@ export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { tit
           themes={themes}
           ideas={ideas}
           exemplars={exemplars.map((x) => ({ id: x.id, name: x.name, words: x.words }))}
+          tiers={tiers}
           starting={starting}
           onStart={(p) => void start(p)}
         />
@@ -219,11 +226,16 @@ export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { tit
           <p className="text-[11px] text-muted-foreground">brief → claims 取证 → 大纲先行 → 分节初稿 → 跨家族审稿（成对比较）→ 原子断言核验 → 正文配图 → 封面 → 微信排版</p>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid grid-cols-1 md:grid-cols-[1fr_170px_130px_auto] gap-2">
+          <div className="grid grid-cols-1 md:grid-cols-[1fr_150px_130px_120px_auto] gap-2">
             <Input placeholder="选题标题，如：具身智能融资观察" value={ideaTitle} onChange={(e) => setIdeaTitle(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void start() }} />
             <select value={persona} onChange={(e) => setPersona(e.target.value)} className="h-9 rounded-md border bg-background px-2 text-xs">
               {personas.map((p) => (
                 <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </select>
+            <select value={tier} onChange={(e) => setTier(e.target.value)} className="h-9 rounded-md border bg-background px-2 text-xs" aria-label="篇幅档位" title={(tiers.find((x) => x.id === tier))?.desc ?? "篇幅档位"}>
+              {(tiers.length > 0 ? tiers : [{ id: "medium", label: "标准深度", desc: "" }]).map((x) => (
+                <option key={x.id} value={x.id}>{x.label}</option>
               ))}
             </select>
             <select value={theme} onChange={(e) => setTheme(e.target.value)} className="h-9 rounded-md border bg-background px-2 text-xs max-w-[150px]" aria-label="排版主题">

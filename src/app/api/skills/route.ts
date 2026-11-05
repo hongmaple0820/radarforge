@@ -2,11 +2,14 @@ import { NextResponse } from 'next/server'
 import { loadSkills } from '@/lib/skills/loader'
 import { setSkillDisabled } from '@/lib/skills/state'
 import { uninstallSkill, installFromUrl } from '@/lib/skills/install'
+import { PIPELINE_SKILL_IDS } from '@/lib/runtime/skill-prompt'
 
 /**
  * Agent Skills 接口（P2-1 安装管理扩展）
  * GET  /api/skills                 —— 全量清单（含停用态 + 合规报告 + 来源统计）
  * POST /api/skills {action}        —— toggle（启停）/ uninstall（卸载用户技能）/ install-url（URL 安装）
+ * A1 接管后：流水线技能（wewrite-brief/outline/draft/review/fact-check/illustrate/art-direct）
+ * 是图文线九步的提示词事实源，不可停用（停用会断产线）——toggle 显式 400。
  */
 
 export const runtime = 'nodejs'
@@ -23,7 +26,9 @@ export async function GET() {
         user: skills.filter((s) => s.source === 'user').length,
       },
       disabled: skills.filter((s) => s.disabled).length,
-      skills,
+      // A1：pipeline=true 为图文线九步的提示词事实源（不可停用，改 SKILL.md 定制）
+      pipelineTotal: skills.filter((s) => PIPELINE_SKILL_IDS.has(s.id)).length,
+      skills: skills.map((s) => ({ ...s, pipeline: PIPELINE_SKILL_IDS.has(s.id) })),
     })
   } catch (e) {
     return NextResponse.json(
@@ -45,6 +50,13 @@ export async function POST(req: Request) {
       const all = await loadSkills()
       if (!all.some((s) => s.id === id)) {
         return NextResponse.json({ ok: false, message: `技能 "${id}" 不存在（产品库与用户自装位均未找到）` }, { status: 404 })
+      }
+      // A1：流水线技能是产线提示词事实源，停用 = 断产线 → 显式拒绝（改 SKILL.md 才是正道）
+      if (body.disabled !== false && PIPELINE_SKILL_IDS.has(id)) {
+        return NextResponse.json(
+          { ok: false, message: `「${id}」是图文流水线的提示词事实源（A1 接管），不能停用；可编辑其 SKILL.md 定制行为，或在用户位放置同名技能覆盖` },
+          { status: 400 }
+        )
       }
       const disabled = await setSkillDisabled(id, body.disabled !== false)
       return NextResponse.json({

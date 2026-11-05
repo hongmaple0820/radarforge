@@ -952,3 +952,51 @@ Stage Summary:
 
 ### 至此七问十二项（P0+P1+P2）代码、测试、文档、远端、分发全链路闭环
 - 唯一诚实遗留：**SEARCH_KEY 本会话不可见**——搜索走演示降级链（health 面板如实显示未配置），用户提供密钥后经设置中心「模型与密钥」分区写入即恢复真实检索
+
+---
+
+## 2026-11-05 · 内容质量升级 批次一落地（A1 SKILL 接管 + A2 篇幅三档 + B1 配图导演 + B3 图文线 VLM 审图）
+
+背景：用户三条质量抱怨（文章篇幅少/死板、配图未用大模型生图、视频质量差）→《docs/content-quality-upgrade-plan.md》三线十二项三批排期获批。用户拍板：①默认档 medium（2500~4000 字）②模板库全量 3774 条带署名入库 ③视频默认通道 auto 且 UI 可选 ④Agnes 池够用不新增。批次一 = 方案 A1+A2+B1+B3（篇幅与提示词两条最痛根因先除）。
+
+### A1 SKILL.md 接管产线（提示词唯一事实源）
+- `src/lib/runtime/skill-prompt.ts`：loadSkillPrompt——用户位 `~/.radarforge/skills/<id>` 覆盖产品位 `db/skills/<id>`，两级都缺 → SkillPromptMissingError 显式报错（拒绝静默回退，方案 A1 验收项）；extractPromptSection 支持 `<!-- prompt: name -->` 多 prompt 分节；renderPromptTemplate {{var}} 占位符渲染 + 3+ 空行收敛；5s 热加载缓存（改 SKILL.md 最长 5s 生效）
+- 七个产线技能 prompt 主体全部下沉 SKILL.md：wewrite-brief / outline / draft（single+section 双分节）/ review（review+revise+pairwise 三分节）/ fact-check / illustrate / art-direct（inline+cover 双分节，新增）；radar-* ts 模块退化为「编排+变量注入+解析」
+- 技能中心守卫：PIPELINE_SKILL_IDS 七技能 toggle 停用 → 400（人话指引「可编辑 SKILL.md 定制，或在用户位放同名技能覆盖」）；GET /api/skills 逐技能透出 pipeline 标记 + pipelineTotal
+- 验收双证：删除任一 SKILL.md → 对应步骤显式报错（离线 68 断言之二）；改 SKILL.md 字数指令 → 成稿字数随之变化（A2 联测，E2E 大纲指令即来自 SKILL.md 档位占位符）
+
+### A2 篇幅三档制（默认 medium）
+- `length-tier.ts`：short 1200~2000 字/4~6 节 · medium 2500~4000 字/6~9 节（默认）· deep 4500~8000 字/8~14 节；四处旧硬钳制（radar-write:184 / radar-outline 两处 / MAX_SECTIONS=8）全部档位驱动
+- AgentRun.lengthTier 字段（schema+db push）；POST /api/runs 非法档位 400；GET /api/runs 下发 tiers；优先级 run.lengthTier > settings.article.lengthTier > 默认 medium
+- UI 三处：向导第二步三卡可视化选档（默认 medium 高亮）+ 创作台高级表单下拉 + 设置中心新增「文章产线」卡（内容策略分区首位：默认档三卡 + 插图风格统一入口下拉；PUT scope=article 落 SettingKV article:pipeline，非法值 400）
+- **合计预算带归一化（实测抓出并修复）**：首轮 E2E medium 档成稿仅 2257 字 < 2500——根因 parseOutline 只逐节钳制（8×300=2400 预算和低于档位下限）；normalizeSectionBudgets 把预算和等比缩进带（< totalMin → 抬到 ×1.1 留落笔余量；> totalMax → 压到 ×0.9；两轮迭代收敛钳制漂移，节数不足以达带时尽力而为）；修复后同流程复测 2552（draft v0）/2719（终稿）字双落带
+- 逐节 ±65%/160% 容差带带反馈重生一次；rollingContext 滚动窗（deep 档防上下文撑爆）；artifacts.draft 增 wordCount + inBand 诚实留痕，带外时步骤摘要显式「⚠ 字数带外（批次二 A5 扩样补齐）」
+- 决策③顺带落地：settings.video.channel 默认 local → auto（优先 Agnes 失败回退本地）
+
+### B1 配图导演（提示词工程管线）
+- `illustration-director.ts`：directInlineIllustration / directCoverImage——复用现有 LLM 通道（零新密钥成本，学 dsh-imagegen-video promptModel 思想）把「配图概念一句话」升级为结构化专业提示词：主体（中英双语，生图模型对英文响应更好）+ 构图 + 色调光线 + 风格 + 负面词；prompt 主体在 wewrite-art-direct/SKILL.md；两档温度 0.4/0.2 解析重试；失败 → legacy 降级（概念+风格拼接）显式标注 source=legacy，降级不消失
+- assemblePromptFull：中文主体 + 英文关键词短语 + avoid: 负面词收尾；风格基准由 settings.article.imageStyleId 统一入口下发（图文线与纯图线同源）
+
+### B3 VLM 审图闭环扩到图文线
+- run-manager 正文插图与封面双环节：导演生成 → vlmCheckImage 读回复核（完整/文字健康/主题相关/构图四清单）→ 未过带 retryHint 定向重生一次（导演注入针对性修正建议）→ 仍未过诚实留痕不阻断
+- artifacts.illustrations 全统计：planned/inserted/degraded/director/legacy/vlmPass/vlmFail/vlmRetried；步骤摘要带「VLM 审图 N 过/M 未过（重生 K）」
+
+### 验证（批次一收口全绿）
+- 离线 `scripts/test-b1-offline.ts` **68/68**：三档纯函数/逐节钳制/合计归一化三场景/SKILL 分节提取/占位符渲染/用户位覆盖/缺技能显式错/真实 SKILL.md 事实源断言/outline-section-draft 档位注入/导演拼装解析与 legacy 降级
+- 服务器冒烟 `scripts/tmp/b1-smoke.sh` **9/9**：tiers 三档下发/非法档 400/deep 落库回读一致/pipelineTotal=7/停用产线技能 400/settings 默认 medium/PUT article 合法往返+非法 400/还原默认
+- 全量回归 full-regression.mjs（REG_SKIP_VIDEO=1，视频线批次一动未动）全绿：九步流水线 E2E done、8 节大纲 8/8 回填、**正文配图「导演 3/3｜VLM 审图 3 过/0 未过」**、版式卡 VLM 质检 3 过含 1 重试后通过、18 主题/五平台导出/发布门禁全过
+- 聚焦 E2E `scripts/tmp/b1-e2e-tier.mjs`：默认 medium run 301s done，成稿 2719 字落带；artifacts {draft: inBand=true 2552 字｜illustrations: 导演 3/3，VLM 2 过/1 未过，重生 1}——B3 重生循环活体工作
+- 浏览器冒烟 `scripts/tmp/b1-browser-smoke.mjs` **5/5**：向导第二步三档卡可见、deep 点选 amber 高亮、设置中心文章产线卡三档按钮齐、插图风格下拉在；截图 4 张 download/assets/b1-*.png（非空白像素比核验）
+- tsc --noEmit 零错误
+
+### 工程纪律与断点修复
+- 上棒会话断点续传：test-b1-offline 一处半成品乱码断言（名字参数被三元污染成 "true"）修正；extractPromptSection 整体返回统一 trim；sectionWordNeedsRetry 空文不误报（空文是上游 <50 字硬错的失败类）
+- 模块缺省档位 short→medium 对齐决策①（产线恒显式传档位，缺省只影响旁路调用，测试同步改）
+- 死代码清理收尾：src/components/workbench/ 五组件（6 Tab 时代旧件；上棒已删 bootstrap/wsa-search 但漏删此目录，零引用实证）+ scripts/tmp/debug-tabs*.sh 四个调试残留
+- 两笔 UUID 消息临时提交（上棒断线遗留，均未推送）软重置合并为单笔干净批次一提交，远端历史保持线性
+- 一次性 DB 核数脚本用后即删；三个验收脚本入库 scripts/tmp/
+- 沙箱回收一次（gitignored db/custom.db 随之丢失，boot-restore 幂等自愈：prisma generate+db push+密钥+tune+默认源）；SEARCH_KEY 本会话仍不可见——A4 两轮研究循环将按方案走「单轮+规则 gap 标注」降级链（批次二）
+
+### 遗留与下一步
+- 批次二（资产与通道，~4 日）：B2 八风格包 / B4 模板库 3774 条带署名入库（/tmp/digv 已随沙箱回收消失，需从 npm 重拉 dsh-imagegen-video 源包）/ B5 三通道生图回退链 / B6 配图密度分档+数据卡意境图职责分离 / A3 五种叙事骨架 / A4 两轮研究循环 / A5 调优扩样
+- 批次三（视频，~5 日）：C1 AI 首帧 i2v 混合通道 / C2 导演规划器 / C3 协议族抽象 / C4 账号池限流 / C5 1080P+BGM / C6 合成诊断

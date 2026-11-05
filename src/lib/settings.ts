@@ -6,6 +6,16 @@
 
 import { db } from "@/lib/db"
 import type { StyleExemplarFingerprint } from "@/lib/runtime/skills/radar-learn"
+import type { LengthTierId } from "@/lib/runtime/length-tier"
+
+// ---------- 文章产线（A2 篇幅三档 + 配图风格） ----------
+
+export interface ArticleSettings {
+  /** 篇幅档位：short 快讯 / medium 标准深度（默认）/ deep 封面级长文 */
+  lengthTier: LengthTierId
+  /** 正文插图风格（IMAGE_STYLES id；图文线与纯图线风格统一入口） */
+  imageStyleId: string
+}
 
 export interface LlmSettings {
   mode: "builtin" | "custom" | "agnes" | "pi-ai" // builtin = zai-llm（SDK 免密钥）/ agnes = 免费多账号池 / pi-ai = 统一多供应商引擎
@@ -91,6 +101,7 @@ export interface AppSettings {
   image: ImageSettings
   agnes: AgnesSettings
   video: VideoSettings
+  article: ArticleSettings
   style: StyleProfile
   exemplars: StyleExemplarSettings
   network: NetworkSettings
@@ -111,12 +122,18 @@ const DEFAULTS: AppSettings = {
     rpmVideo: 1,
   },
   video: {
-    channel: "local",
+    // 决策③：默认 auto（优先 agnes 回退 local，选择权仍在设置卡）
+    channel: "auto",
     secondsPerScene: 8,
     model: "agnes-video-2.5-flash",
     models: ["agnes-video-2.5-flash"],
     resolution: "720P",
     aspect: "9:16",
+  },
+  // 决策①：默认 medium（2500~4000 字）
+  article: {
+    lengthTier: "medium",
+    imageStyleId: "modern-flat",
   },
   style: { positioning: "", audience: "", domains: "", tone: "", taboos: "" },
   exemplars: { items: [] },
@@ -129,6 +146,7 @@ const KEYS: Record<keyof AppSettings, string> = {
   image: "provider:image",
   agnes: "provider:agnes",
   video: "video:channel",
+  article: "article:pipeline",
   style: "style:profile",
   exemplars: "style:exemplars",
   network: "network:proxy",
@@ -146,6 +164,7 @@ export async function getSettings(force = false): Promise<AppSettings> {
     image: { ...DEFAULTS.image },
     agnes: { ...DEFAULTS.agnes, accounts: [] },
     video: { ...DEFAULTS.video },
+    article: { ...DEFAULTS.article },
     style: { ...DEFAULTS.style },
     exemplars: { items: [] },
     network: { ...DEFAULTS.network },
@@ -272,6 +291,7 @@ export function redactSettings(s: AppSettings): AppSettings & { _meta: Record<st
       accounts: s.agnes.accounts.map((a) => ({ ...a, apiKey: maskKey(a.apiKey) })),
     },
     video: { ...s.video },
+    article: { ...s.article },
     style: { ...s.style },
     exemplars: { items: s.exemplars.items.slice(0, 20) },
     network: { ...s.network },
@@ -281,6 +301,7 @@ export function redactSettings(s: AppSettings): AppSettings & { _meta: Record<st
       image: { hasKey: Boolean(s.image.apiKey), envFallback: false },
       agnes: { hasKey: s.agnes.accounts.some((a) => a.apiKey), envFallback: false },
       video: { hasKey: false, envFallback: false },
+      article: { hasKey: false, envFallback: false },
     },
   }
 }

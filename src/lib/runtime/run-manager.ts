@@ -17,6 +17,8 @@ import { renderWechatHtml, resolveThemeId, type RenderClaim } from "./render"
 import { briefMessages, draftMessages, getPersona, type Brief, type BriefClaim } from "./skills/radar-write"
 import { parseReview, reviewMessages, reviseMessages, pairwiseMessages, parsePairwise, reviewSummary, type Review } from "./skills/radar-review"
 import { outlineMessages, parseOutline, sectionMessages, assembleDraft, type Outline } from "./skills/radar-outline"
+import { countWords, resolveLengthTier, rollingContext, sectionWordNeedsRetry, type LengthTier } from "./length-tier"
+import { directCoverImage, directInlineIllustration, type DirectedImagePrompt } from "./illustration-director"
 import { atomicAssertionsMessages, parseAssertions, assertionStats } from "./skills/radar-verify"
 import { bestMatch, MIN_HITS } from "./matching"
 import {
@@ -28,7 +30,6 @@ import {
   illustrationPlanMessages,
   insertImageAfterHeading,
   findHeadingIndex,
-  ILLUSTRATION_STYLE_TOKEN,
   type ImagePlanItem,
   type IllustrationPlanItem,
 } from "./skills/radar-image"
@@ -68,6 +69,8 @@ export interface CreateArticleRunArgs {
   theme?: string
   exemplarId?: string // 文风校准档案（style-exemplars；空=不校准）
   ideaId?: string // 关联选题池条目（空=自由输入）；启动后回填 runId + status=picked
+  /** A2 篇幅档位覆盖（short/medium/deep；空=用设置中心默认 medium） */
+  lengthTier?: string
 }
 
 export async function createArticleRun(args: CreateArticleRunArgs): Promise<string> {
@@ -79,6 +82,7 @@ export async function createArticleRun(args: CreateArticleRunArgs): Promise<stri
       persona: args.persona ?? "cold-analyst",
       theme: args.theme ?? "radar",
       exemplarId: (args.exemplarId ?? "").slice(0, 60),
+      lengthTier: resolveLengthTier(args.lengthTier).id,
       input: args.ideaTitle,
       status: "queued",
       steps: JSON.stringify(initialSteps()),
@@ -108,6 +112,10 @@ async function executeArticleRun(runId: string): Promise<void> {
   const artifacts: Record<string, unknown> = {}
   const settings = await getSettings()
   const stylePrompt = styleProfilePrompt(settings.style)
+  // A2 篇幅档位：run 级覆盖 > 设置中心默认（medium）
+  const tier: LengthTier = resolveLengthTier(run.lengthTier || settings.article.lengthTier)
+  // A2/后续 B2 前置：图文线插图风格统一入口（设置中心可选，取代全局唯一 token）
+  const imageStyle = getImageStyle(settings.article.imageStyleId)
   // P1 p15 调优指令（评测驱动选优变体；v0 基线为空串 → 零改动）
   const tune = await resolveTuneInstruction()
   // 文风校准档案（学 wewrite exemplar：仅结构节奏，安全条款在注入块内）
@@ -152,7 +160,7 @@ async function executeArticleRun(runId: string): Promise<void> {
       // 降温重试：0.4 偶发非 JSON / 缺字段 / 空返回 → 0.2 保守档 → 0.3 第三档（同 ideas/refresh 已验证模式）
       let parsed: Brief | null = null
       for (const temp of [0.4, 0.2, 0.3]) {
-        const raw = await chatRetry(briefMessages(run.ideaTitle, run.ideaAngle, stylePrompt), { temperature: temp })
+        const raw = await chatRetry(await briefMessages(run.ideaTitle, run.ideaAngle, stylePrompt), { temperature: temp })
         if (!raw || raw.replace(/\s/g, "").length < 20) continue // 空返回按失败重试
         parsed = extractJson<Brief>(raw)
         if (parsed?.coreJudgment) break
@@ -250,23 +258,24 @@ async function executeArticleRun(runId: string): Promise<void> {
       async () => {
         for (const temp of [0.4, 0.2]) {
           const raw = await chatRetry(
-            outlineMessages({
+            await outlineMessages({
               brief: brief!,
               ideaTitle: run.ideaTitle,
               ideaAngle: run.ideaAngle,
               claims: verifiedClaims.map((c) => ({ idx: c.idx, text: c.text, verified: c.verified })),
               stylePrompt,
+              tier,
             }),
             { temperature: temp },
           )
-          outline = parseOutline(extractJson(raw))
+          outline = parseOutline(extractJson(raw), tier)
           if (outline) break
         }
         if (!outline) return "大纲解析失败（两档温度重试）→ 初稿回退单遍生成（老管线，不阻断）"
         artifacts.outline = outline
         const withIllus = outline.sections.filter((s) => s.illustration).length
         const totalWords = outline.sections.reduce((s2, x) => s2 + x.words, 0)
-        return `${outline.sections.length} 节大纲｜预算 ${totalWords} 字｜配图位 ${withIllus} 节｜标题「${outline.title.slice(0, 20)}」`
+        return `${tier.label}｜${outline.sections.length} 节大纲｜预算 ${totalWords} 字（目标 ${tier.totalMin}~${tier.totalMax}）｜配图位 ${withIllus} 节｜标题「${outline.title.slice(0, 20)}」`
       },
       { optional: true },
     )
@@ -286,12 +295,16 @@ async function executeArticleRun(runId: string): Promise<void> {
         sourceDate: c.sourceDate,
         sourceUrl: c.sourceUrl,
       }))
+      // A2 逐节字数校验重生计数（分节路径使用；单遍路径为 0）
+      let wordRetried = 0
       if (outline) {
         // 分节生成：每节只带着自己的论点与证据写作，上下文聚焦（STORM 分节写入）
+        // A2：rollingContext 滚动窗（deep 档防上下文撑爆）+ 逐节字数校验重生一次
         const bodies: string[] = []
         for (let i = 0; i < outline.sections.length; i++) {
-          const raw = await chatRetry(
-            sectionMessages({
+          const sec = outline.sections[i]
+          let raw = await chatRetry(
+            await sectionMessages({
               outline,
               sectionIndex: i,
               brief: brief!,
@@ -303,11 +316,34 @@ async function executeArticleRun(runId: string): Promise<void> {
               stylePrompt,
               exemplarPrompt: exPrompt,
               tunePrompt: tune.instruction,
-              writtenSoFar: bodies,
+              writtenSoFar: rollingContext(bodies, tier),
             }),
             { temperature: 0.75 },
           )
-          if (!raw || raw.replace(/\s/g, "").length < 50) {
+          // A2 逐节字数校验：偏离预算容差带（<65% 或 >160%）带反馈重生一次（不无限循环，控配额）
+          const actual = countWords(raw ?? "")
+          if (raw && actual >= 50 && sectionWordNeedsRetry(sec.words, actual)) {
+            wordRetried++
+            raw = await chatRetry(
+              await sectionMessages({
+                outline,
+                sectionIndex: i,
+                brief: brief!,
+                persona,
+                claims: claimsInput,
+                rules: rules.map((r) => r.rule),
+                ideaTitle: run.ideaTitle,
+                ideaAngle: run.ideaAngle,
+                stylePrompt,
+                exemplarPrompt: exPrompt,
+                tunePrompt: tune.instruction,
+                writtenSoFar: rollingContext(bodies, tier),
+                retryNote: `上一次生成 ${actual} 字，偏离预算 ${sec.words} 字，本次严格贴近字数预算重写本节`,
+              }),
+              { temperature: 0.7 },
+            )
+          }
+          if (!raw || countWords(raw) < 50) {
             throw new Error(`第 ${i + 1} 节生成过短或为空（${raw?.length ?? 0} 字符）`)
           }
           bodies.push(raw)
@@ -316,7 +352,7 @@ async function executeArticleRun(runId: string): Promise<void> {
       } else {
         // 降级：老管线单遍生成
         const raw = await chatRetry(
-          draftMessages({
+          await draftMessages({
             brief: brief!,
             persona,
             claims: claimsInput,
@@ -326,6 +362,7 @@ async function executeArticleRun(runId: string): Promise<void> {
             stylePrompt,
             exemplarPrompt: exPrompt,
             tunePrompt: tune.instruction,
+            tier,
           }),
           { temperature: 0.75 },
         )
@@ -336,13 +373,18 @@ async function executeArticleRun(runId: string): Promise<void> {
         await db.$transaction(rules.map((r) => db.learningRule.update({ where: { id: r.id }, data: { hits: { increment: 1 } } })))
       }
       const wordCount = draft.replace(/\s/g, "").length
+      // A2 带内标记：低于档位下限 90% 或超出上限 120% → 带外（诚实留痕；扩样补齐在批次二 A5）
+      const inBand = wordCount >= Math.round(tier.totalMin * 0.9) && wordCount <= Math.round(tier.totalMax * 1.2)
+      if (outline) artifacts.draft = { tier: tier.id, sections: outline.sections.length, wordRetried, wordCount, inBand }
+      else artifacts.draft = { tier: tier.id, sections: 0, wordRetried: 0, wordCount, inBand }
       const title = draft.match(/^#\s+(.+)$/m)?.[1] ?? run.ideaTitle
       await db.article.create({
         data: { runId, version: 0, title: title.slice(0, 120), markdown: draft, wordCount },
       })
+      const bandNote = inBand ? "" : `｜⚠ 字数带外（批次二 A5 扩样补齐）`
       return outline
-        ? `${persona.label}｜分节 ${outline.sections.length}/${outline.sections.length}｜${wordCount} 字｜注入飞轮规则 ${rules.length} 条${tune.instruction ? `｜调优 ${tune.variant}` : ""}`
-        : `${persona.label}｜单遍降级｜${wordCount} 字｜注入飞轮规则 ${rules.length} 条${tune.instruction ? `｜调优 ${tune.variant}` : ""}`
+        ? `${persona.label}｜${tier.label}｜分节 ${outline.sections.length}/${outline.sections.length}｜${wordCount} 字（目标 ${tier.totalMin}~${tier.totalMax}）｜字数重生 ${wordRetried} 节｜注入飞轮规则 ${rules.length} 条${tune.instruction ? `｜调优 ${tune.variant}` : ""}${bandNote}`
+        : `${persona.label}｜单遍降级｜${tier.label}｜${wordCount} 字（目标 ${tier.totalMin}~${tier.totalMax}）｜注入飞轮规则 ${rules.length} 条${tune.instruction ? `｜调优 ${tune.variant}` : ""}${bandNote}`
     })
 
     // ========== Step 5: 跨家族审稿（≤2 轮修订 + 成对比较裁决） ==========
@@ -374,7 +416,7 @@ async function executeArticleRun(runId: string): Promise<void> {
       }
       const reviewOnce = async (md: string): Promise<Review | null> => {
         for (const temp of [0.2, 0.1]) {
-          const raw = await judge(reviewMessages(md, persona.label), temp)
+          const raw = await judge(await reviewMessages(md, persona.label), temp)
           const r = parseReview(extractJson(raw))
           if (r) return r
         }
@@ -410,7 +452,7 @@ async function executeArticleRun(runId: string): Promise<void> {
         // 未达标 → 修订（写作家族自己改，裁判只评不改）
         let revisedDraft = ""
         try {
-          revisedDraft = await chatRetry(reviseMessages(current, review), { temperature: 0.5 })
+          revisedDraft = await chatRetry(await reviseMessages(current, review), { temperature: 0.5 })
         } catch {
           revisedDraft = ""
         }
@@ -432,8 +474,8 @@ async function executeArticleRun(runId: string): Promise<void> {
         let accepted = false
         let reason = ""
         try {
-          const v1 = parsePairwise(extractJson(await judge(pairwiseMessages({ original: current, revised: revisedDraft, reviewSummary: summary }, false), 0.2)))
-          const v2 = parsePairwise(extractJson(await judge(pairwiseMessages({ original: current, revised: revisedDraft, reviewSummary: summary }, true), 0.2)))
+          const v1 = parsePairwise(extractJson(await judge(await pairwiseMessages({ original: current, revised: revisedDraft, reviewSummary: summary }, false), 0.2)))
+          const v2 = parsePairwise(extractJson(await judge(await pairwiseMessages({ original: current, revised: revisedDraft, reviewSummary: summary }, true), 0.2)))
           if (v1 && v2) {
             // 归一化：修订稿在两个方向下的胜场
             const revisedWins = (v1.winner === "B" ? 1 : 0) + (v2.winner === "A" ? 1 : 0)
@@ -491,7 +533,7 @@ async function executeArticleRun(runId: string): Promise<void> {
         }
         let assertions: { text: string }[] = []
         for (const temp of [0.3, 0.1]) {
-          const raw = await chatRetry(atomicAssertionsMessages(finalDraft), { temperature: temp })
+          const raw = await chatRetry(await atomicAssertionsMessages(finalDraft), { temperature: temp })
           assertions = parseAssertions(extractJson(raw))
           if (assertions.length > 0) break
         }
@@ -532,10 +574,11 @@ async function executeArticleRun(runId: string): Promise<void> {
       { optional: true },
     )
 
-    // ========== Step 7: 正文配图（可选：插图规划 → zai-image 生成 → 回插 markdown） ==========
-    // 修复「文章里没有图」：优先采纳大纲期配图位（P0 大纲 JSON 的
-    // illustration/imageCaption 字段），从成稿提炼 2~3 个插图位（锚定小节标题），
-    // 生成与文风一致的扁平插画并回插 markdown；生图降级不阻断（跳过该图留痕）
+    // ========== Step 7: 正文配图（B1 导演提示词 + B3 VLM 审图闭环） ==========
+    // 修复「文章里没有图」：优先采纳大纲期配图位，从成稿提炼 2~3 个插图位；
+    // B1：配图概念 → 导演升级为结构化专业提示词（中英双语，失败 legacy 降级并留痕）；
+    // B3：生图后 VLM 审图，未过带建议重生一次（图文线此前无质检，本批补齐）；
+    // 生图降级不阻断（跳过该图留痕）。
     await step(
       6,
       async () => {
@@ -544,7 +587,7 @@ async function executeArticleRun(runId: string): Promise<void> {
           ? outline.sections.map((s) => ({ heading: s.heading, illustration: s.illustration, imageCaption: s.imageCaption }))
           : undefined
         for (const temp of [0.3, 0.1]) {
-          const raw = await chatRetry(illustrationPlanMessages(finalDraft, outlineHints), { temperature: temp })
+          const raw = await chatRetry(await illustrationPlanMessages(finalDraft, outlineHints), { temperature: temp })
           plan = extractJson<IllustrationPlanItem[]>(raw)
           if (Array.isArray(plan) && plan.length > 0) break
         }
@@ -554,22 +597,58 @@ async function executeArticleRun(runId: string): Promise<void> {
         let md = finalDraft
         let inserted = 0
         let degraded = 0
+        let directorUsed = 0
+        let legacyUsed = 0
+        let vlmPass = 0
+        let vlmFail = 0
+        let vlmRetried = 0
         for (let i = 0; i < items.length; i++) {
           const it = items[i]
           // 先验锚点（找不到就不浪费一次生图）
           if (findHeadingIndex(md, it.anchor) < 0) continue
-          const img = await generateImage(
-            `${it.concept}，${ILLUSTRATION_STYLE_TOKEN}`,
-            runId,
-            `ill-${i + 1}`,
-            "1344x768",
-          )
+          // B1 配图导演：概念 → 结构化专业提示词（失败 legacy 降级并留痕）
+          let directed: DirectedImagePrompt = await directInlineIllustration({
+            topic: run.ideaTitle,
+            anchor: it.anchor,
+            concept: it.concept,
+            caption: it.caption ?? "",
+            stylePrompt: imageStyle.prompt,
+          })
+          let img = await generateImage(directed.promptFull, runId, `ill-${i + 1}`, "1344x768")
+          // B3 VLM 审图闭环：未过 → 导演带建议重生一次 → 复检；二次未过采用并留痕
+          let vlm: VlmCheckResult | null = null
+          if (img.ok) {
+            vlm = await vlmCheckImage({ absPath: img.absPath, concept: directed.promptFull.slice(0, 200), caption: (it.caption ?? "").slice(0, 30), kind: "gen" })
+            if (vlm.done && !vlm.pass && vlm.retryHint) {
+              vlmRetried++
+              const retryDirected = await directInlineIllustration({
+                topic: run.ideaTitle,
+                anchor: it.anchor,
+                concept: it.concept,
+                caption: it.caption ?? "",
+                stylePrompt: imageStyle.prompt,
+                retryHint: vlm.retryHint,
+              })
+              const retryImg = await generateImage(retryDirected.promptFull, runId, `ill-${i + 1}r`, "1344x768")
+              if (retryImg.ok) {
+                img = retryImg
+                directed = retryDirected
+                vlm = await vlmCheckImage({ absPath: retryImg.absPath, concept: retryDirected.promptFull.slice(0, 200), caption: (it.caption ?? "").slice(0, 30), kind: "gen" })
+              }
+            }
+            if (vlm.done) {
+              if (vlm.pass) vlmPass++
+              else vlmFail++
+            }
+          }
+          if (directed.source === "director") directorUsed++
+          else legacyUsed++
           if (!img.ok) {
             degraded++
             await db.asset.create({
               data: {
                 runId, kind: "image", role: "inline", provider: "zai-image(降级)", path: "",
-                meta: JSON.stringify({ caption: it.caption ?? "", anchor: it.anchor.slice(0, 60), index: i + 1 }),
+                meta: JSON.stringify({ caption: it.caption ?? "", anchor: it.anchor.slice(0, 60), index: i + 1, director: { source: directed.source, note: directed.note ?? "" } }),
                 error: img.error ?? "",
               },
             })
@@ -583,13 +662,18 @@ async function executeArticleRun(runId: string): Promise<void> {
           await db.asset.create({
             data: {
               runId, kind: "image", role: "inline", provider: "zai-image", path: img.filePath,
-              meta: JSON.stringify({ size: "1344x768", bytes: img.sizeBytes, caption, anchor: it.anchor.slice(0, 60), index: i + 1 }),
+              meta: JSON.stringify({
+                size: "1344x768", bytes: img.sizeBytes, caption, anchor: it.anchor.slice(0, 60), index: i + 1,
+                style: imageStyle.id,
+                director: { source: directed.source, note: directed.note ?? "" },
+                vlm: vlm ? { done: vlm.done, pass: vlm.pass, issues: vlm.issues.slice(0, 3) } : null,
+              }),
             },
           })
         }
         if (inserted > 0) {
           finalDraft = md
-          artifacts.illustrations = { planned: items.length, inserted, degraded }
+          artifacts.illustrations = { planned: items.length, inserted, degraded, director: directorUsed, legacy: legacyUsed, vlmPass, vlmFail, vlmRetried }
           const latest = await db.article.findFirst({ where: { runId }, orderBy: { version: "desc" } })
           if (latest) {
             await db.article.update({
@@ -599,20 +683,36 @@ async function executeArticleRun(runId: string): Promise<void> {
           }
         }
         if (inserted === 0 && degraded === 0) return "锚点全部未命中，未插图（不阻断）"
-        return `${inserted}/${items.length} 张插图已插入正文${degraded > 0 ? `，${degraded} 张降级留痕` : ""}`
+        const vlmPart = vlmPass + vlmFail > 0 ? `｜VLM 审图 ${vlmPass} 过/${vlmFail} 未过${vlmRetried > 0 ? `（重生 ${vlmRetried}）` : ""}` : ""
+        return `${inserted}/${items.length} 张插图已插入正文｜导演 ${directorUsed}/${directorUsed + legacyUsed}｜风格「${imageStyle.label}」${vlmPart}${degraded > 0 ? `｜${degraded} 张降级留痕` : ""}`
       },
       { optional: true },
     )
 
-    // ========== Step 8: 封面（可选，失败降级留痕） ==========
+    // ========== Step 8: 封面（B1 导演提示词 + B3 VLM 审图；失败降级留痕） ==========
     await step(
       7,
       async () => {
         const title = finalDraft.match(/^#\s+(.+)$/m)?.[1] ?? run.ideaTitle
-        const img = await generateCoverImage(
-          `微信公众号文章封面，主题：${title}，风格：现代扁平插画，蓝灰科技配色，简洁大气，无文字`,
-          runId,
-        )
+        // B1 封面导演：标题 → 结构化专业提示词（失败 legacy 降级）
+        let directed: DirectedImagePrompt = await directCoverImage({ title, stylePrompt: imageStyle.prompt })
+        let img = await generateCoverImage(directed.promptFull, runId)
+        // B3 VLM 审图：未过带建议重生一次
+        let vlm: VlmCheckResult | null = null
+        let vlmRetried = false
+        if (img.ok) {
+          vlm = await vlmCheckImage({ absPath: img.absPath, concept: directed.promptFull.slice(0, 200), caption: "文章封面", kind: "gen" })
+          if (vlm.done && !vlm.pass && vlm.retryHint) {
+            vlmRetried = true
+            const retryDirected = await directCoverImage({ title, stylePrompt: imageStyle.prompt, retryHint: vlm.retryHint })
+            const retryImg = await generateCoverImage(retryDirected.promptFull, runId)
+            if (retryImg.ok) {
+              img = retryImg
+              directed = retryDirected
+              vlm = await vlmCheckImage({ absPath: retryImg.absPath, concept: retryDirected.promptFull.slice(0, 200), caption: "文章封面", kind: "gen" })
+            }
+          }
+        }
         await db.asset.create({
           data: {
             runId,
@@ -620,12 +720,19 @@ async function executeArticleRun(runId: string): Promise<void> {
             role: "cover",
             provider: img.ok ? "zai-image" : "zai-image(降级)",
             path: img.filePath,
-            meta: JSON.stringify({ size: "1344x768", bytes: img.sizeBytes }),
+            meta: JSON.stringify({
+              size: "1344x768",
+              bytes: img.sizeBytes,
+              style: imageStyle.id,
+              director: { source: directed.source, note: directed.note ?? "" },
+              vlm: vlm ? { done: vlm.done, pass: vlm.pass, issues: vlm.issues.slice(0, 3), retried: vlmRetried } : null,
+            }),
             error: img.error ?? "",
           },
         })
         if (!img.ok) return `生图降级（${img.error?.slice(0, 80)}）——无封面出稿，不阻断`
-        return `封面已生成 ${img.filePath}（${Math.round(img.sizeBytes / 1024)}KB）`
+        const vlmPart = vlm?.done ? (vlm.pass ? `｜VLM 质检${vlmRetried ? "（重生后）" : ""}通过` : "｜VLM 质检未过（已留痕）") : ""
+        return `封面已生成 ${img.filePath}（${Math.round(img.sizeBytes / 1024)}KB）｜导演 ${directed.source === "director" ? "生成" : "降级"}${vlmPart}`
       },
       { optional: true },
     )

@@ -2,6 +2,7 @@
 // test-tune.mjs —— prompt 变体调优（P1 p15）离线单测（零 LLM）
 // 覆盖：变体注册表完整性 / sectionMessages·draftMessages 注入位 /
 //       SettingKV 读写与回滚 / aggregateTuneReport 聚合推荐数学
+// A1 接管后 sectionMessages/draftMessages 为 async（SKILL.md 事实源）
 // 运行：node scripts/test-tune.mjs
 // ============================================================
 import { PrismaClient } from "@prisma/client"
@@ -36,16 +37,18 @@ const persona = { id: "cold-analyst", label: "冷面分析师", desc: "d", voice
 const claims = [{ idx: 1, text: "t", claimType: "事实", verified: true, sourceSite: "s", sourceTitle: "tt", sourceDate: "2026-10-01", sourceUrl: "u" }]
 const baseInput = { outline, sectionIndex: 0, brief, persona, claims, rules: [], ideaTitle: "标题", ideaAngle: "", writtenSoFar: [] }
 
-const withTune = sectionMessages({ ...baseInput, tunePrompt: "【调优指令·测试】每段一个论点" })
+const withTune = await sectionMessages({ ...baseInput, tunePrompt: "【调优指令·测试】每段一个论点" })
 ok("sectionMessages：注入调优指令", withTune[0].content.includes("【调优指令·测试】每段一个论点"))
-const withoutTune = sectionMessages(baseInput)
+const withoutTune = await sectionMessages(baseInput)
 ok("sectionMessages：无调优指令零侵入", !withoutTune[0].content.includes("调优指令"))
 ok("sectionMessages：铁律仍在（优先级未变）", withoutTune[0].content.includes("【铁律（优先级最高）】"))
+ok("sectionMessages：人格注入（SKILL.md 事实源）", withoutTune[0].content.includes("冷面分析师"))
 
 const draftIn = { brief, persona, claims, rules: [], ideaTitle: "标题", ideaAngle: "" }
-const draftWith = draftMessages({ ...draftIn, tunePrompt: "【调优指令·测试】证据密度" })
+const draftWith = await draftMessages({ ...draftIn, tunePrompt: "【调优指令·测试】证据密度" })
 ok("draftMessages：注入调优指令（单遍降级路径同生效）", draftWith[0].content.includes("【调优指令·测试】证据密度"))
-ok("draftMessages：无指令零侵入", !draftMessages(draftIn)[0].content.includes("调优指令"))
+ok("draftMessages：无指令零侵入", !(await draftMessages(draftIn))[0].content.includes("调优指令"))
+ok("draftMessages：字数铁律注入（缺省 medium 档）", (await draftMessages(draftIn))[0].content.includes("2500~4000"))
 
 // ---------- ③ SettingKV 读写与回滚 ----------
 console.log("── ③ SettingKV 读写 ──")

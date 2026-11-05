@@ -18,6 +18,7 @@ import { PenLine, ArrowRight, ArrowLeft, Play, Loader2, Lightbulb, CheckCircle2,
 
 interface PersonaInfo { id: string; label: string; desc: string }
 interface ThemeInfo { id: string; label: string; category: string; description: string }
+interface TierInfo { id: string; label: string; desc: string }
 interface IdeaItem { id: string; title: string; angle: string; status: string }
 interface ExemplarItem { id: string; name: string; words: number }
 
@@ -28,6 +29,7 @@ export interface WizardPayload {
   theme: string
   exemplarId: string
   ideaId?: string // 关联选题池条目（选题池直达/情报中心送入时携带，闭环回写状态）
+  lengthTier?: string // A2 篇幅档位（short/medium/deep）
 }
 
 const STEP_META = [
@@ -66,6 +68,7 @@ export function Wizard({
   themes,
   ideas,
   exemplars,
+  tiers,
   starting,
   onStart,
 }: {
@@ -74,6 +77,7 @@ export function Wizard({
   themes: ThemeInfo[]
   ideas: IdeaItem[]
   exemplars: ExemplarItem[]
+  tiers?: TierInfo[]
   starting: boolean
   onStart: (payload: WizardPayload) => void
 }) {
@@ -84,6 +88,10 @@ export function Wizard({
   const [theme, setTheme] = useState("professional-clean")
   const [exemplarId, setExemplarId] = useState("")
   const [ideaId, setIdeaId] = useState<string | undefined>(undefined)
+  // A2 篇幅档位（默认 medium；向导第二步可视化选择）
+  const tierList = tiers && tiers.length > 0 ? tiers : [{ id: "medium", label: "标准深度", desc: "2500~4000 字 · 6~9 节" }]
+  const [lengthTier, setLengthTier] = useState("medium")
+  const selectedTier = tierList.find((t) => t.id === lengthTier)
 
   // 选题种子（情报中心「去创作」/ ⌘K「新图文」）→ 回第一步并填入；
   // 空标题种子也响应（重置到第一步聚焦输入）；手动改写标题时解绑选题关联
@@ -200,6 +208,29 @@ export function Wizard({
                 </div>
               </div>
               <div className="space-y-1.5">
+                <label className="text-xs font-medium">篇幅档位（A2 三档：写多深由你定）</label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {tierList.map((t) => {
+                    const active = t.id === lengthTier
+                    return (
+                      <button
+                        key={t.id}
+                        onClick={() => setLengthTier(t.id)}
+                        className={`text-left rounded-xl border p-2.5 space-y-0.5 transition-all ${
+                          active ? "border-amber-400 bg-amber-50/60 dark:bg-amber-950/30 ring-1 ring-amber-300" : "border-border hover:border-amber-300 opacity-80 hover:opacity-100"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-xs font-bold">{t.label}</span>
+                          {active && <CheckCircle2 className="h-3.5 w-3.5 text-amber-500 shrink-0" />}
+                        </div>
+                        <p className="text-[10px] text-muted-foreground leading-snug">{t.desc}</p>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+              <div className="space-y-1.5">
                 <label className="text-xs font-medium">排版主题（成稿的视觉样式，18 选 1）</label>
                 <div className="rounded-lg border bg-muted/30 p-2 max-h-36 overflow-y-auto space-y-1.5">
                   {themeGroups.map(([cat, list]) => (
@@ -247,6 +278,7 @@ export function Wizard({
                   <div><span className="text-muted-foreground">选题：</span><span className="font-medium">{ideaTitle.trim()}</span></div>
                   <div><span className="text-muted-foreground">人格：</span><span className="font-medium">{selectedPersona?.label ?? persona}</span></div>
                   <div className="truncate"><span className="text-muted-foreground">主题：</span><span className="font-mono">{theme}</span></div>
+                  <div><span className="text-muted-foreground">篇幅：</span><span className="font-medium">{selectedTier?.label ?? "标准深度"}</span></div>
                   <div><span className="text-muted-foreground">文风：</span><span className="font-medium">{selectedExemplar ? `${selectedExemplar.name}（结构节奏）` : "不校准"}</span></div>
                   {ideaAngle.trim() && <div className="col-span-full"><span className="text-muted-foreground">角度：</span><span>{ideaAngle.trim()}</span></div>}
                 </div>
@@ -283,7 +315,7 @@ export function Wizard({
               下一步<ArrowRight className="h-3.5 w-3.5 ml-1" />
             </Button>
           ) : (
-            <Button size="sm" onClick={() => onStart({ ideaTitle, ideaAngle, persona, theme, exemplarId, ideaId })} disabled={!ideaTitle.trim() || starting} className="bg-amber-500 hover:bg-amber-600 text-white">
+            <Button size="sm" onClick={() => onStart({ ideaTitle, ideaAngle, persona, theme, exemplarId, ideaId, lengthTier })} disabled={!ideaTitle.trim() || starting} className="bg-amber-500 hover:bg-amber-600 text-white">
               {starting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Play className="h-4 w-4 mr-1" />}
               启动九步流水线
             </Button>

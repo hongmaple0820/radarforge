@@ -1,13 +1,25 @@
 // ============================================================
-// radar-outline —— 大纲先行 + 分节生成 skill（P0 质量管线 L2 结构层）
-// 学 STORM outline_generation / Plan-and-Write / DOC：
-// 把创作负担前移到规划期——先出 JSON 大纲（每节：论点/证据编号/
-// 配图位/字数预算），再逐节聚焦写作，长文质量不再随长度衰减。
+// radar-outline —— 大纲先行 + 分节生成 skill（编排层）
+// A1 接管后：prompt 主体在 db/skills/wewrite-outline 与
+// wewrite-draft（prompt: section 分节）/SKILL.md；
+// A2：篇幅三档驱动节数/字数指令与解析钳制（替代 100~500/8 节硬编码）；
+// 上下文滚动窗（rollingContext）防 deep 档上下文撑爆。
 // ============================================================
 
 import type { ChatMessage } from "@/lib/gateway/types"
 import type { Brief } from "./radar-write"
 import type { Persona } from "./radar-write"
+import {
+  clampSectionWords,
+  maxSections,
+  resolveLengthTier,
+  rollingContext,
+  tierOutlineRule,
+  tierSectionWordsRule,
+  tierTotalWordsRule,
+  type LengthTier,
+} from "../length-tier.ts"
+import { renderSkillPrompt } from "../skill-prompt.ts"
 
 // ---------- 大纲 JSON ----------
 
@@ -17,7 +29,7 @@ export interface OutlineSection {
   evidence: number[] // 引用的证据块编号（对应 claims 账本 [n]）
   illustration: string // 配图位描述（无则空串）
   imageCaption: string // 图说（无则空串）
-  words: number // 字数预算（120~400）
+  words: number // 字数预算（档位钳制）
 }
 
 export interface Outline {
@@ -25,39 +37,26 @@ export interface Outline {
   sections: OutlineSection[]
 }
 
-export function outlineMessages(input: {
+export async function outlineMessages(input: {
   brief: Brief
   ideaTitle: string
   ideaAngle: string
   claims: { idx: number; text: string; verified: boolean | null }[]
   stylePrompt?: string
-}): ChatMessage[] {
+  tier?: LengthTier // A2：篇幅档位（缺省 medium，与设置默认一致）
+}): Promise<ChatMessage[]> {
+  const tier = input.tier ?? resolveLengthTier()
   const evidence = input.claims
     .map((c) => `[${c.idx}] ${c.verified === null ? "非事实" : c.verified ? "已核实" : "无来源"}｜${c.text}`)
     .join("\n")
+  const system = await renderSkillPrompt("wewrite-outline", undefined, {
+    style_block: input.stylePrompt ? `\n【创作者风格定位】\n${input.stylePrompt}\n` : "",
+    sections_rule: tierOutlineRule(tier),
+    total_words_rule: tierTotalWordsRule(tier),
+    section_words_rule: tierSectionWordsRule(tier),
+  })
   return [
-    {
-      role: "system",
-      content: [
-        "你是公众号内容主编。写之前先做大纲（wewrite 方法论 + STORM 大纲先行的共识：规划期多花一分钟，成稿少改十处）。",
-        input.stylePrompt ? `\n【创作者风格定位】\n${input.stylePrompt}\n` : "",
-        "根据任务书与证据账本，产出结构化大纲 JSON。要求：",
-        "- 4~6 个小节，起承转合完整：开场钩子 → 展开论证（2~3 节）→ 反方与边界 → 收束与行动",
-        "- 每节 point 是一个具体论点（不是话题词），敢表态、可证伪",
-        "- evidence 只能填证据账本里存在的编号；没有合适证据的节填 []（靠推理而非引用）",
-        "- 全文 fact 型证据至少覆盖 60% 的已核实条目，不许浪费已核实证据",
-        "- illustration 给出该节配图位的概念描述（2~3 节即可，其余空串）；imageCaption 一句话图说",
-        "- words 是字数预算，合计 1200~2000",
-        "严格输出 JSON（不要 markdown 代码块）：",
-        `{`,
-        `  "title": "文章标题（≤24 字，有信息量，不标题党）",`,
-        `  "sections": [`,
-        `    { "heading": "小节标题（≤12 字）", "point": "本节论点", "evidence": [1, 2], "illustration": "配图概念或空串", "imageCaption": "图说或空串", "words": 300 },`,
-        `    ...`,
-        `  ]`,
-        `}`,
-      ].join("\n"),
-    },
+    { role: "system", content: system },
     {
       role: "user",
       content: [
@@ -78,14 +77,13 @@ export function outlineMessages(input: {
   ]
 }
 
-const MAX_SECTIONS = 8
-
-export function parseOutline(raw: unknown): Outline | null {
+export function parseOutline(raw: unknown, tier?: LengthTier): Outline | null {
+  const t = tier ?? resolveLengthTier()
   if (!raw || typeof raw !== "object") return null
   const o = raw as Record<string, unknown>
   const sectionsRaw = Array.isArray(o.sections) ? o.sections : []
   const sections: OutlineSection[] = []
-  for (const s of sectionsRaw.slice(0, MAX_SECTIONS)) {
+  for (const s of sectionsRaw.slice(0, maxSections(t))) {
     const x = s as Record<string, unknown>
     const heading = String(x.heading ?? "").trim().slice(0, 40)
     const point = String(x.point ?? "").trim().slice(0, 200)
@@ -98,13 +96,36 @@ export function parseOutline(raw: unknown): Outline | null {
         : [],
       illustration: String(x.illustration ?? "").slice(0, 200),
       imageCaption: String(x.imageCaption ?? "").slice(0, 60),
-      words: Math.min(500, Math.max(100, Math.round(Number(x.words) || 250))),
+      words: clampSectionWords(x.words, t),
     })
   }
   if (sections.length < 3) return null
+  normalizeSectionBudgets(sections, t)
   return {
     title: String(o.title ?? "").trim().slice(0, 60) || "未命名",
     sections,
+  }
+}
+
+/**
+ * A2 合计预算带归一化：每节 words 各自钳制后，预算总和可能仍落在
+ * 档位总带之外（实测：8 节 × 300 = 2400 < medium 下限 2500 → 成稿 2257 字）。
+ * 规则：总和 < totalMin → 等比放大到 totalMin×1.1（留 10% 落笔余量，
+ * 实测成稿约为预算的 94%）；总和 > totalMax → 等比缩到 totalMax×0.9。
+ * 放大受每节上限约束（不够就到顶为止），两轮迭代收敛钳制漂移。
+ */
+function normalizeSectionBudgets(sections: OutlineSection[], t: import("../length-tier.ts").LengthTier): void {
+  if (sections.length === 0) return
+  const sum = () => sections.reduce((a, s) => a + s.words, 0)
+  for (let round = 0; round < 2; round++) {
+    const cur = sum()
+    let target = cur
+    if (cur < t.totalMin) target = Math.round(t.totalMin * 1.1)
+    else if (cur > t.totalMax) target = Math.round(t.totalMax * 0.9)
+    if (target === cur) break
+    const k = target / cur
+    for (const s of sections) s.words = clampSectionWords(Math.round(s.words * k), t)
+    if (sum() === cur) break // 钳制吃掉了全部缩放（节数太少/太多到顶）→ 尽力而为
   }
 }
 
@@ -132,11 +153,13 @@ export interface SectionDraftInput {
   exemplarPrompt?: string
   /** P1 p15 调优指令（评测驱动选优后的变体注入；v0 基线为空） */
   tunePrompt?: string
-  /** 已写完的各节正文（上下文连贯性） */
+  /** 已写完的各节正文（A2：调用方先过 rollingContext 滚动窗再传入） */
   writtenSoFar: string[]
+  /** A2：字数偏离重生时的一次性反馈（如「上次生成 320 字，偏离预算 800 字」）；常规生成不传 */
+  retryNote?: string
 }
 
-export function sectionMessages(input: SectionDraftInput): ChatMessage[] {
+export async function sectionMessages(input: SectionDraftInput): Promise<ChatMessage[]> {
   const sec = input.outline.sections[input.sectionIndex]
   const isFirst = input.sectionIndex === 0
   const isLast = input.sectionIndex === input.outline.sections.length - 1
@@ -149,27 +172,20 @@ export function sectionMessages(input: SectionDraftInput): ChatMessage[] {
     )
     .join("\n")
 
-  const system = [
-    "你是一名遵循大纲逐节写作的公众号作者。只写指定的这一节，写好它。",
-    "",
-    "【写作人格】",
-    `${input.persona.label}：${input.persona.voice}`,
-    input.stylePrompt ? `\n【创作者风格定位】\n${input.stylePrompt}` : "",
-    input.exemplarPrompt ? `\n${input.exemplarPrompt}` : "",
-    input.tunePrompt ? `\n${input.tunePrompt}` : "",
-    "",
-    "【铁律（优先级最高）】",
-    "1. 引用事实时句尾标 [n] 上标编号，n 对应证据块编号，禁止编造来源。",
-    "2. verified=false 或无来源的主张，不得作为事实陈述；可作为「有观点认为」或删去。",
-    "3. 禁止编造作者个人经历（「我上周去…」类内容一律禁止）。",
-    "4. 只输出本节正文（以「## 小节标题」开头），不要写其他小节，不要全文。",
-    input.rules.length > 0 ? "5. 编辑飞轮稳定规则，必须遵守：\n" + input.rules.map((r) => `   - ${r}`).join("\n") : "",
-  ]
-    .filter(Boolean)
-    .join("\n")
+  const system = await renderSkillPrompt("wewrite-draft", "section", {
+    persona_label: input.persona.label,
+    persona_voice: input.persona.voice,
+    style_block: input.stylePrompt ? `\n【创作者风格定位】\n${input.stylePrompt}` : "",
+    exemplar_block: input.exemplarPrompt ? `\n${input.exemplarPrompt}` : "",
+    tune_block: input.tunePrompt ? `\n${input.tunePrompt}` : "",
+    rules_block:
+      input.rules.length > 0
+        ? "5. 编辑飞轮稳定规则，必须遵守：\n" + input.rules.map((r) => `   - ${r}`).join("\n")
+        : "",
+  })
 
   const context = input.writtenSoFar.length
-    ? ["【已写各节（保持衔接，不要重复其中内容）】", ...input.writtenSoFar.map((t) => t.slice(0, 600))].join("\n\n")
+    ? ["【已写各节（保持衔接，不要重复其中内容）】", ...input.writtenSoFar].join("\n\n")
     : ""
 
   const user = [
@@ -186,6 +202,7 @@ export function sectionMessages(input: SectionDraftInput): ChatMessage[] {
     `- 本节论点：${sec.point}`,
     `- 引用证据编号：${sec.evidence.length ? sec.evidence.join(", ") : "（本节靠推理，不引数据）"}`,
     `- 字数预算：${sec.words} 字（±20%）`,
+    input.retryNote ? `- 字数反馈（上一次生成偏离预算，本次严格贴近）：${input.retryNote}` : "",
     isFirst ? "- 这是第一节：开场要有钩子，三句内让读者知道「这篇为什么值得读」。" : "",
     isLast ? "- 这是最后一节：收束核心判断，给出可执行结论（3 条以内），不要开新话题。" : "",
     "",
@@ -201,6 +218,9 @@ export function sectionMessages(input: SectionDraftInput): ChatMessage[] {
     { role: "user", content: user },
   ]
 }
+
+/** rollingContext 再导出（run-manager 组装滚动窗用；语义见 length-tier.ts） */
+export { rollingContext }
 
 /** 拼装全文：H1 标题 + 各节正文（去重小节标题行，规范 ## 层级） */
 export function assembleDraft(outline: Outline, sectionBodies: string[]): string {

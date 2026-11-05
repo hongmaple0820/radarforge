@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server"
-import { getSettings, saveSetting, redactSettings, type AppSettings, type AgnesAccount, type AgnesSettings, type VideoSettings, type NetworkSettings } from "@/lib/settings"
+import { getSettings, saveSetting, redactSettings, type AppSettings, type AgnesAccount, type AgnesSettings, type VideoSettings, type ArticleSettings, type NetworkSettings } from "@/lib/settings"
 import { resetGlobalProxyCache } from "@/lib/sources/rss"
+import { LENGTH_TIERS } from "@/lib/runtime/length-tier"
+import { IMAGE_STYLES } from "@/lib/runtime/skills/radar-image"
 
 type Scope = keyof AppSettings
 
-const SCOPES: Scope[] = ["llm", "search", "image", "agnes", "video", "style", "exemplars", "network"]
+const SCOPES: Scope[] = ["llm", "search", "image", "agnes", "video", "article", "style", "exemplars", "network"]
 
 export async function GET() {
   const s = await getSettings(true)
@@ -108,6 +110,28 @@ export async function PUT(req: Request) {
                 : patch.model !== undefined || patch.resolution !== undefined || patch.aspect !== undefined
                   ? "视频配置已保存（模型 / 分辨率 / 画幅 / 秒数全套，下一次生成请求即携带）"
                   : "视频配置已保存",
+      })
+    }
+
+    // ---------- 文章产线（A2：篇幅档位默认 + 插图风格统一入口；向导/创作台可按 run 覆盖） ----------
+    if (scope === "article") {
+      const v = (body.value ?? {}) as Partial<ArticleSettings>
+      const patch: Partial<ArticleSettings> = {}
+      if (v.lengthTier && LENGTH_TIERS.some((t) => t.id === v.lengthTier)) patch.lengthTier = v.lengthTier
+      if (v.imageStyleId && IMAGE_STYLES.some((s) => s.id === v.imageStyleId)) patch.imageStyleId = v.imageStyleId
+      if (!patch.lengthTier && !patch.imageStyleId) {
+        return NextResponse.json(
+          { error: `lengthTier 须是 ${LENGTH_TIERS.map((t) => t.id).join(" / ")}；imageStyleId 须是已有风格 id（${IMAGE_STYLES.map((s) => s.id).join(" / ")}）` },
+          { status: 400 },
+        )
+      }
+      await saveSetting("article", patch)
+      const fresh = await getSettings(true)
+      const tier = LENGTH_TIERS.find((t) => t.id === fresh.article.lengthTier)
+      const style = IMAGE_STYLES.find((s) => s.id === fresh.article.imageStyleId)
+      return NextResponse.json({
+        settings: redactSettings(fresh),
+        message: `文章产线已保存：默认篇幅「${tier?.label ?? fresh.article.lengthTier}」（${tier?.desc ?? ""}）；插图风格「${style?.label ?? fresh.article.imageStyleId}」`,
       })
     }
 

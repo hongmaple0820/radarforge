@@ -1,32 +1,23 @@
 // ============================================================
-// radar-verify —— 原子断言核验 skill（P0 质量管线 L1 事实层）
+// radar-verify —— 原子断言核验 skill（编排层）
 // 学 FActScore（2305.14247）：长文拆原子断言 → 逐条检索核验；
 // SAFE（2403.18802）：成本约人工 2%，自媒体生命线——一次事实
 // 翻车抵消一百篇好文。无据率超阈值 → 发布门禁拦截。
+// A1 接管后：prompt 主体在 db/skills/wewrite-fact-check/SKILL.md
 // ============================================================
 
 import type { ChatMessage } from "@/lib/gateway/types"
+import { renderSkillPrompt } from "../skill-prompt.ts"
 
 export interface AtomicAssertion {
   text: string // 自包含的原子事实断言（含数字/日期/名称/事件）
 }
 
 /** 从成稿抽取原子断言（10~20 条，只抽可核验的事实型） */
-export function atomicAssertionsMessages(markdown: string): ChatMessage[] {
+export async function atomicAssertionsMessages(markdown: string): Promise<ChatMessage[]> {
+  const system = await renderSkillPrompt("wewrite-fact-check", undefined, {})
   return [
-    {
-      role: "system",
-      content: [
-        "你是事实核查员。把文章拆解为原子断言（atomic claims）：每条是一个自包含、可独立核验的事实陈述。",
-        "抽取规则：",
-        "- 只抽事实型断言：含数字、日期、公司/产品/人名、事件、比例、排名的陈述",
-        "- 不抽：观点、预测、建议、修辞、常识性背景",
-        "- 每条改写为主语+具体事实的完整短句（脱离上下文也能看懂），保留原文数字与专有名词，不加主观修饰",
-        "- 抽 10~20 条（按文章事实密度；事实不足 10 条时宁少勿滥）",
-        "严格输出 JSON（不要 markdown 代码块）：",
-        `{ "assertions": [ { "text": "OpenAI 于 2024 年 5 月发布 GPT-4o" }, ... ] }`,
-      ].join("\n"),
-    },
+    { role: "system", content: system },
     { role: "user", content: markdown.slice(0, 12000) },
   ]
 }

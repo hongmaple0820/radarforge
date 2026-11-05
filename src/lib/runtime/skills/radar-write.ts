@@ -1,11 +1,14 @@
 // ============================================================
-// radar-write —— 图文线写作 skill
-// 7 套写作人格（学 wewrite 人格注入，禁止编造作者经历）
-// brief 任务书：目标读者/真正问题/核心判断/反方/边界 五要素
-// 初稿：人格 + brief + claims 账本 + 飞轮规则注入，[n] 引用
+// radar-write —— 图文线写作 skill（编排层）
+// A1 接管后：prompt 主体在 db/skills/wewrite-brief 与
+// wewrite-draft/SKILL.md（唯一事实源，用户位可覆盖），
+// 本模块只负责变量注入、消息组装与人格数据。
+// A2：篇幅三档（tier）注入字数铁律。
 // ============================================================
 
 import type { ChatMessage } from "@/lib/gateway/types"
+import { renderSkillPrompt } from "../skill-prompt.ts"
+import { resolveLengthTier, tierWordRule, type LengthTier } from "../length-tier.ts"
 
 export interface Persona {
   id: string
@@ -107,29 +110,12 @@ export interface Brief {
   claims: BriefClaim[]
 }
 
-export function briefMessages(ideaTitle: string, ideaAngle: string, stylePrompt?: string): ChatMessage[] {
+export async function briefMessages(ideaTitle: string, ideaAngle: string, stylePrompt?: string): Promise<ChatMessage[]> {
+  const system = await renderSkillPrompt("wewrite-brief", undefined, {
+    style_block: stylePrompt ? `\n【创作者风格定位（任务书必须贴合）】\n${stylePrompt}\n` : "",
+  })
   return [
-    {
-      role: "system",
-      content: [
-        "你是公众号内容策划编辑。为给定选题生成「文章任务书」（brief），这是 wewrite 方法论的核心：写之前先定义清楚要写什么，避免 AI 自己扩写跑偏。",
-        stylePrompt ? `\n【创作者风格定位（任务书必须贴合）】\n${stylePrompt}\n` : "",
-        "严格输出 JSON（不要 markdown 代码块、不要多余文字）：",
-        `{`,
-        `  "targetReader": "目标读者画像（一句话，具体到人群与处境）",`,
-        `  "realProblem": "读者真正的問題（表面诉求之下的深层困扰）",`,
-        `  "coreJudgment": "本文的核心判断（一句话，敢表态）",`,
-        `  "counterView": "最强反方观点（诚实写出对立面）",`,
-        `  "boundary": "适用边界（本文观点在什么条件下失效）",`,
-        `  "claims": [`,
-        `    { "type": "fact", "text": "一条需要事实核对的具体主张（含数字/事件/日期为佳）" },`,
-        `    { "type": "inference", "text": "一条基于事实的推断" },`,
-        `    { "type": "opinion", "text": "一条作者观点" }`,
-        `  ]`,
-        `}`,
-        "claims 给 3~5 条，其中 fact 型 2~4 条（这些将逐一联网取证）。",
-      ].join("\n"),
-    },
+    { role: "system", content: system },
     {
       role: "user",
       content: `选题：${ideaTitle}\n切入角度：${ideaAngle || "（无，自行判断最佳角度）"}`,
@@ -137,7 +123,7 @@ export function briefMessages(ideaTitle: string, ideaAngle: string, stylePrompt?
   ]
 }
 
-// ---------- 初稿 ----------
+// ---------- 初稿（单遍回退；分节写作见 radar-outline.sectionMessages） ----------
 
 export interface DraftInput {
   brief: Brief
@@ -158,9 +144,10 @@ export interface DraftInput {
   stylePrompt?: string // 创作者风格定位（设置中心）
   exemplarPrompt?: string // 文风校准档案（学习中心；仅结构节奏，安全条款内置）
   tunePrompt?: string // P1 p15 调优指令（评测驱动选优变体；v0 基线为空）
+  tier?: LengthTier // 篇幅档位（A2；缺省 medium，与设置默认一致）
 }
 
-export function draftMessages(input: DraftInput): ChatMessage[] {
+export async function draftMessages(input: DraftInput): Promise<ChatMessage[]> {
   const evidence = input.claims
     .map(
       (c) =>
@@ -168,24 +155,18 @@ export function draftMessages(input: DraftInput): ChatMessage[] {
     )
     .join("\n")
 
-  const system = [
-    "你是一名遵循任务书写作的公众号作者。严格按照以下人格与规则写作。",
-    "",
-    "【写作人格】",
-    `${input.persona.label}：${input.persona.voice}`,
-    input.stylePrompt ? `\n【创作者风格定位（与人格叠加生效）】\n${input.stylePrompt}` : "",
-    input.exemplarPrompt ? `\n${input.exemplarPrompt}` : "",
-    input.tunePrompt ? `\n${input.tunePrompt}` : "",
-    "",
-    "【铁律（优先级最高）】",
-    "1. 引用事实时句尾标 [n] 上标编号，n 对应证据块编号，禁止编造来源。",
-    "2. verified=false 或无来源的主张，不得作为事实陈述；可作为「有观点认为」或删去。",
-    "3. 禁止编造作者个人经历（「我上周去…」类内容一律禁止）。",
-    "4. 字数 1200~2000 字，Markdown 格式：# 标题 / ## 小节 / 段落。",
-    input.rules.length > 0 ? "5. 以下为编辑飞轮沉淀的稳定写作规则，必须遵守：\n" + input.rules.map((r) => `   - ${r}`).join("\n") : "",
-  ]
-    .filter(Boolean)
-    .join("\n")
+  const system = await renderSkillPrompt("wewrite-draft", "single", {
+    persona_label: input.persona.label,
+    persona_voice: input.persona.voice,
+    style_block: input.stylePrompt ? `\n【创作者风格定位（与人格叠加生效）】\n${input.stylePrompt}` : "",
+    exemplar_block: input.exemplarPrompt ? `\n${input.exemplarPrompt}` : "",
+    tune_block: input.tunePrompt ? `\n${input.tunePrompt}` : "",
+    tier_word_rule: tierWordRule(input.tier ?? resolveLengthTier()),
+    rules_block:
+      input.rules.length > 0
+        ? "5. 以下为编辑飞轮沉淀的稳定写作规则，必须遵守：\n" + input.rules.map((r) => `   - ${r}`).join("\n")
+        : "",
+  })
 
   const user = [
     `选题：${input.ideaTitle}`,
