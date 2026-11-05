@@ -29,6 +29,9 @@ export interface LengthTier {
   contextFullChars: number
   /** 更早节的短摘要长度（字符） */
   contextBriefChars: number
+  /** B6 配图密度分档：正文插图张数区间（数据卡+意境图合计） */
+  illustrationsMin: number
+  illustrationsMax: number
 }
 
 export const LENGTH_TIERS: LengthTier[] = [
@@ -46,6 +49,8 @@ export const LENGTH_TIERS: LengthTier[] = [
     contextFullSections: 2,
     contextFullChars: 600,
     contextBriefChars: 200,
+    illustrationsMin: 1,
+    illustrationsMax: 2,
   },
   {
     id: "medium",
@@ -61,6 +66,8 @@ export const LENGTH_TIERS: LengthTier[] = [
     contextFullSections: 2,
     contextFullChars: 800,
     contextBriefChars: 240,
+    illustrationsMin: 2,
+    illustrationsMax: 3,
   },
   {
     id: "deep",
@@ -76,6 +83,8 @@ export const LENGTH_TIERS: LengthTier[] = [
     contextFullSections: 2,
     contextFullChars: 900,
     contextBriefChars: 260,
+    illustrationsMin: 3,
+    illustrationsMax: 5,
   },
 ]
 
@@ -84,6 +93,11 @@ const DEFAULT_TIER: LengthTierId = "medium"
 /** 解析档位（非法/缺失回退 medium，与设置默认一致）；无参调用 = 取产品默认档 */
 export function resolveLengthTier(id?: string | null): LengthTier {
   return LENGTH_TIERS.find((t) => t.id === id) ?? LENGTH_TIERS.find((t) => t.id === DEFAULT_TIER)!
+}
+
+/** 插图密度规则文本（B6：注入插图规划 prompt） */
+export function tierIllustrationRule(tier: LengthTier): string {
+  return `${tier.illustrationsMin}~${tier.illustrationsMax} 张`
 }
 
 /** 初稿/单遍生成的字数铁律文本（注入 prompt 的第 4 条铁律位） */

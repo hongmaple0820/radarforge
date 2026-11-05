@@ -1000,3 +1000,55 @@ Stage Summary:
 ### 遗留与下一步
 - 批次二（资产与通道，~4 日）：B2 八风格包 / B4 模板库 3774 条带署名入库（/tmp/digv 已随沙箱回收消失，需从 npm 重拉 dsh-imagegen-video 源包）/ B5 三通道生图回退链 / B6 配图密度分档+数据卡意境图职责分离 / A3 五种叙事骨架 / A4 两轮研究循环 / A5 调优扩样
 - 批次三（视频，~5 日）：C1 AI 首帧 i2v 混合通道 / C2 导演规划器 / C3 协议族抽象 / C4 账号池限流 / C5 1080P+BGM / C6 合成诊断
+
+---
+
+## 2026-11-05 · 内容质量升级 批次二落地（B4 模板库 + B2 八风格包 + B6 密度与职责分离 + A3 叙事骨架 + A5 扩写补救 + B5 三通道生图 + A4 降级链）
+
+承接批次一（A1/A2/B1/B3）。用户拍板项：模板库全量 3774 条带署名入库。/tmp/digv 已随沙箱回收，从 npm 重拉 `@q253595422/dsh-imagegen-video@1.22.2`（4.3MB tgz）恢复源包。
+
+### B4 模板库（3774 条 · 检索式使用）
+- `db/asset/image-prompt-library/`：八个快照 JSON（canghe/cases/evolink/handraw/itgoyo/prompt-signal/songtianlun/youart）**3774 条**中英双语专业生图提示词 + Apache-2.0 LICENSE + NOTICE + THIRD_PARTY_NOTICES 原样保留（上游 MIT/CC0 署名链完整）+ README（来源版本/字段契约/检索入口）
+- `src/lib/runtime/prompt-library.ts`：惰性全库加载（进程缓存）+ CJK bigram/拉丁词双通道分词 + title/categoryZh/styles/prompt 四字段加权计分检索（limit≤10 防上下文爆）+ exemplarBlock 范例块拼装（只取中文段 ≤160 字，学结构不灌全文）
+- B1×B4 集成：directInlineIllustration/directCoverImage 自动按「选题+锚点+概念」检索 top-2 范例注入导演 user 消息；SKILL.md 明示「学结构与用词密度，禁止照抄具体画面」
+- **实测抓 bug**：readdir 过滤 `-cases.json` 漏掉无前缀的 `cases.json`（库只载 3333/7 文件）→ 改 `cases.json` 后缀匹配，3774/8 全量对数
+
+### B2 八风格包（5→8）
+- 新增：编辑质感摄影（影棚光浅景深莫兰迪）/ 新水墨（宣纸墨晕朱砂点睛）/ 玻璃拟态 3D（磨砂折射 C4D）；全八风格补一句定位 desc（UI 提示）；「无文字无水印」共同铁律；/api/image-runs styles 透出 desc
+
+### B6 配图密度分档 + 数据卡/意境图职责分离
+- LENGTH_TIERS 增 illustrationsMin/Max（short 1~2 / medium 2~3 / deep 3~5）；wewrite-illustrate SKILL.md 改 {{count_rule}} 档位注入
+- 插图规划新增 kind 字段：data（硬数据节→代码排版数据卡零错字，metrics 只能来自本节证据禁止编造）/ mood（叙事节→生成式意境图）；run-manager 双通道分轨
+- data 通道：dataCardMessages（wewrite-art-direct 第三分节 data-card）→ parseCardPlan → renderCardToAsset 1024² → VLM layout 质检（未过截短文案重渲染一次）
+- **实测抓 bug**：data-card 提示词让模型输出单对象而 parseCardPlan 只吃数组契约 → 首轮 E2E 两张数据卡全降级（「文案解析失败」）；SKILL.md 改数组契约 + run-manager 宽容解析（单对象自动包数组）→ 复测 2/2 出卡入文
+- artifacts.illustrations 增 dataCards 统计；步骤摘要「数据卡 N 张（零错字）」
+
+### A3 五种叙事骨架（治死板）
+- `narrative-skeletons.ts`：金字塔结论先行 / 时间线演进 / 问题-方案-边界 / 对比冲突裁决 / 场景故事带入——每骨架一段结构编排指令（非话题词，具体到小节推进规则）
+- 选择逻辑：run.skeleton 显式指定（创作台高级表单下拉）→ 否则 runId FNV-1a 哈希轮换（同选题重跑换骨架、同 run 稳定；200 seed 均匀覆盖五骨架离线验证）
+- wewrite-outline SKILL.md 增 {{skeleton_block}}（无骨架→默认结构语义保留）；AgentRun.skeleton 字段 + API 校验（非法 400）+ GET skeletons 清单；步骤摘要与 artifacts.outline.skeleton 留痕
+
+### A5 扩写补救（字数带外的第二道闸）
+- wewrite-draft SKILL.md 第三分节 expand：三类合法扩写（补证据细节/补因果推理/补场景转折）+ 禁止注水纪律 + ## 标题原文不变（保配图锚点）
+- run-manager：合计归一化后仍 < totalMin → 一次定向扩写（温度 0.6），artifacts.draft 增 expanded 留痕；E2E 实测触发：低于下限 → 扩写后 3901 字 inBand
+
+### B5 三通道生图回退链
+- zai-image.generateImage 重构：主通道（mode：custom 端点/内置 SDK）→ Agnes 免费池（启用且有可用账号时，走 agnes-image provider + URL/dataURI 下载落盘）→ SDK 兜底（去重不重试主通道）；每级失败进链路字符串（「custom✗… → agnes-image✗… → builtin-sdk」降级不消失）；GeneratedImage.via 留痕出图通道
+- 回归实测：纯图线 2 张产出（builtin-sdk 主通道）✓、版式卡线 3 张 ✓（card-engine 不经生图端点不受影响）
+
+### A4 研究循环（SEARCH_KEY 不可见 → 降级链诚实落地）
+- 单轮检索后规则 gap 标注：未核实 fact 主张（idx>0 且 !verified）截取前 6 条注入大纲 user 消息「已知研究缺口（规避引用或标注未经证实）」；artifacts.research = {rounds:1, gaps:N, mode, strategy:"单轮+规则 gap 标注（A4 降级链）"}；大纲步骤摘要「研究缺口 N 条已标注」
+- SEARCH_KEY 配置后升级两轮研究循环（STORM 多视角定向补搜）留待后续批次
+
+### 验证（批次二收口）
+- 离线 `test-b2-offline.ts` **42/42**（新增：3774 全量/bigram+拉丁双通道检索/范例块格式/八风格/密度分档/data-card 事实源/五骨架+轮换覆盖/骨架注入/缺口注入/expand 分节）+ `test-b1-offline.ts` **68/68** 复跑全绿；tsc 零错误
+- 服务器冒烟 b1-smoke **11/11**（新增 skeletons 清单下发 + 非法骨架 400）
+- 聚焦 E2E 三次全链路：① versus 222s done（骨架/缺口/导演 3/3/VLM 全链验证，暴露数据卡解析 bug）② 修复后 versus 96s done（**数据卡 2/2 出卡入文、A5 expanded:true 3901 字落带、VLM 1 过/1 未过重生 1**）③ medium 301s done（批次一复验）
+- 全量回归 REG_SKIP_VIDEO：18 主题/Agnes/pi-ai/搜索/纯图线/版式卡/视频直出全绿；文章线两次被 429 瞬时窗口打断（诚实 error 终态、不静默）——当日已消耗 5 轮文章级 E2E，日池见底属环境限制，代码路径已由上述三次成功 E2E 覆盖
+- 浏览器冒烟 5/5 复验（向导档位卡/设置文章产线卡）
+- 调试资产入库：scripts/tmp/debug-datacard.ts（数据卡链路诊断，可复用）
+
+### 遗留与下一步
+- 批次三（视频，~5 日）：C1 AI 首帧 i2v 混合通道 / C2 导演规划器（预览即所提交）/ C3 视频协议族抽象 / C4 Agnes 池限流 / C5 1080P+BGM / C6 合成诊断
+- A4 完整两轮研究循环待 SEARCH_KEY；版式卡 VLM 质检本日一轮 3 未过（内容相关波动，非代码回归，下批观察）
+- LLM 日池今日已耗尽（5 轮文章 E2E + 3 轮回归 + 调试），批次三开工前留意窗口

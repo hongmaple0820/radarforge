@@ -20,6 +20,7 @@ import {
   type LengthTier,
 } from "../length-tier.ts"
 import { renderSkillPrompt } from "../skill-prompt.ts"
+import { skeletonBlock, type NarrativeSkeleton } from "../narrative-skeletons.ts"
 
 // ---------- 大纲 JSON ----------
 
@@ -44,16 +45,28 @@ export async function outlineMessages(input: {
   claims: { idx: number; text: string; verified: boolean | null }[]
   stylePrompt?: string
   tier?: LengthTier // A2：篇幅档位（缺省 medium，与设置默认一致）
+  skeleton?: NarrativeSkeleton | null // A3：叙事骨架（null = 默认结构；自动轮换由调用方决定后传入）
+  /** A4：研究缺口清单（单轮检索未证实的 fact 主张；大纲规避或标注不确定性） */
+  researchGaps?: string[]
 }): Promise<ChatMessage[]> {
   const tier = input.tier ?? resolveLengthTier()
   const evidence = input.claims
     .map((c) => `[${c.idx}] ${c.verified === null ? "非事实" : c.verified ? "已核实" : "无来源"}｜${c.text}`)
     .join("\n")
+  const gapBlock =
+    input.researchGaps && input.researchGaps.length > 0
+      ? [
+          "",
+          "【已知研究缺口（单轮检索未证实——大纲与写作时规避引用，或明确标注「未经证实」）】",
+          ...input.researchGaps.map((g) => `- ${g}`),
+        ].join("\n")
+      : ""
   const system = await renderSkillPrompt("wewrite-outline", undefined, {
     style_block: input.stylePrompt ? `\n【创作者风格定位】\n${input.stylePrompt}\n` : "",
     sections_rule: tierOutlineRule(tier),
     total_words_rule: tierTotalWordsRule(tier),
     section_words_rule: tierSectionWordsRule(tier),
+    skeleton_block: skeletonBlock(input.skeleton ?? null),
   })
   return [
     { role: "system", content: system },
@@ -72,6 +85,7 @@ export async function outlineMessages(input: {
         "",
         "【证据账本（claims）】",
         evidence || "（无证据）",
+        gapBlock,
       ].join("\n"),
     },
   ]

@@ -18,7 +18,7 @@ export async function GET() {
     return NextResponse.json({
       runs,
       usages: IMAGE_USAGES.map((u) => ({ id: u.id, label: u.label, size: u.size, desc: u.desc })),
-      styles: IMAGE_STYLES.map((s) => ({ id: s.id, label: s.label })),
+      styles: IMAGE_STYLES.map((s) => ({ id: s.id, label: s.label, desc: s.desc ?? "" })),
       families: CARD_FAMILIES.map((f) => ({ id: f.id, label: f.label, desc: f.desc })),
       templates: CARD_TEMPLATES.map((t) => ({ id: t.id, label: t.label, desc: t.desc })),
     })

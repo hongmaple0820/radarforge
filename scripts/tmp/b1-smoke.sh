@@ -11,13 +11,17 @@ pass=0; fail=0
 ok(){ pass=$((pass+1)); echo "  ✓ $1"; }
 bad(){ fail=$((fail+1)); echo "  ✗ $1"; }
 
-echo "── ① GET /api/runs tiers ──"
+echo "── ① GET /api/runs tiers/skeletons ──"
 TIERS=$(curl -s -m 10 "$BASE/api/runs" | python3 -c "import json,sys; d=json.load(sys.stdin); print('|'.join(t['id'] for t in d.get('tiers',[])))" 2>/dev/null)
 [ "$TIERS" = "short|medium|deep" ] && ok "tiers=short|medium|deep（实际 $TIERS）" || bad "tiers 异常：$TIERS"
+SKELS=$(curl -s -m 10 "$BASE/api/runs" | python3 -c "import json,sys; d=json.load(sys.stdin); print('|'.join(s['id'] for s in d.get('skeletons',[])))" 2>/dev/null)
+[ "$SKELS" = "|pyramid|timeline|problem-solution|versus|scene-narrative" ] && ok "skeletons=自动+五骨架（实际 $SKELS）" || bad "skeletons 异常：$SKELS"
 
-echo "── ② 非法档位 400 ──"
+echo "── ② 非法档位/骨架 400 ──"
 CODE=$(curl -s -m 10 -o /dev/null -w "%{http_code}" -X POST "$BASE/api/runs" -H 'content-type: application/json' -d '{"ideaTitle":"冒烟-非法档位","lengthTier":"gigantic"}')
 [ "$CODE" = "400" ] && ok "非法 lengthTier → 400" || bad "非法档位期望 400 实得 $CODE"
+CODE=$(curl -s -m 10 -o /dev/null -w "%{http_code}" -X POST "$BASE/api/runs" -H 'content-type: application/json' -d '{"ideaTitle":"冒烟-非法骨架","skeleton":"nonexistent"}')
+[ "$CODE" = "400" ] && ok "非法 skeleton → 400" || bad "非法骨架期望 400 实得 $CODE"
 
 echo "── ③ 合法档位受理 ──"
 RESP=$(curl -s -m 10 -X POST "$BASE/api/runs" -H 'content-type: application/json' -d '{"ideaTitle":"冒烟-b1-合法deep档","lengthTier":"deep","persona":"cold-analyst"}')

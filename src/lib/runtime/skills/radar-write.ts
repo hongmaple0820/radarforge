@@ -190,3 +190,29 @@ export async function draftMessages(input: DraftInput): Promise<ChatMessage[]> {
     { role: "user", content: user },
   ]
 }
+
+// ---------- A5 扩写补救（低于档位下限的一次定向扩写，不注水原则） ----------
+
+export async function expandMessages(input: {
+  draft: string
+  persona: Persona
+  tier: LengthTier
+  stylePrompt?: string
+}): Promise<ChatMessage[]> {
+  const system = await renderSkillPrompt("wewrite-draft", "expand", {
+    tier_word_rule: tierWordRule(input.tier),
+    style_block: input.stylePrompt ? `\n【创作者风格定位（扩写同此风格）】\n${input.stylePrompt}` : "",
+  })
+  const current = input.draft.replace(/\s/g, "").length
+  const user = [
+    `当前 ${current} 字，目标 ${input.tier.totalMin}~${input.tier.totalMax} 字（还差约 ${Math.max(0, input.tier.totalMin - current)} 字）。`,
+    `人格基调：${input.persona.label}（${input.persona.voice.slice(0, 60)}）`,
+    "",
+    "【待扩写全文】",
+    input.draft.slice(0, 12000),
+  ].join("\n")
+  return [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ]
+}

@@ -20,33 +20,59 @@ export interface ImageStylePreset {
   label: string
   /** 追加到生图 prompt 尾部的风格 token（中英混写，模型都吃） */
   prompt: string
+  /** 一句话风格说明（UI 提示用，可选） */
+  desc?: string
 }
 
+// B2 八风格包：覆盖科技媒体常用八种视觉调性；「无文字无水印」是共同铁律（生图模型文字不可靠）
 export const IMAGE_STYLES: ImageStylePreset[] = [
   {
     id: "modern-flat",
     label: "现代扁平插画",
     prompt: "现代扁平插画风，几何构图，蓝灰科技配色，大面积留白，干净利落，无文字无水印",
+    desc: "几何图形+大留白，科技资讯安全牌",
   },
   {
     id: "tech-data",
     label: "科技数据可视化",
     prompt: "科技感信息图风格，深色背景，发光线条与数据网格，蓝紫青配色，精确几何图形，无文字无水印",
+    desc: "深底发光网格，数据/AI 主题首选",
   },
   {
     id: "hand-drawn",
     label: "手绘线稿",
     prompt: "手绘线稿风，钢笔笔触，米白纸底，单色墨线，少量琥珀色点缀， doodle 细节，无文字无水印",
+    desc: "钢笔墨线+纸底，轻松解读复杂概念",
   },
   {
     id: "isometric",
     label: "2.5D 等轴",
     prompt: "isometric 2.5D 等轴测风格，柔和渐变色块，微缩场景与建筑结构，精致细节，无文字无水印",
+    desc: "微缩场景俯视视角，架构/流程类题材",
   },
   {
     id: "neon-cyber",
     label: "赛博霓虹",
     prompt: "赛博朋克霓虹风，深藏青底，品红青色霓虹光效，雨夜氛围，电影感构图，无文字无水印",
+    desc: "雨夜霓虹电影感，前沿/争议性话题",
+  },
+  {
+    id: "editorial-photo",
+    label: "编辑质感摄影",
+    prompt: "编辑级商业摄影风，柔和影棚光，浅景深，低饱和莫兰迪色调，极简布景，杂志大片质感，无文字无水印",
+    desc: "影棚光浅景深，商业/产业分析成质感",
+  },
+  {
+    id: "ink-wash",
+    label: "新水墨",
+    prompt: "现代水墨风，宣纸底，浓淡干湿墨色晕染，大面积留白构图，一点朱砂色点睛，东方意境，无文字无水印",
+    desc: "墨韵留白东方意境，人文/深度思辨题材",
+  },
+  {
+    id: "glass-3d",
+    label: "玻璃拟态 3D",
+    prompt: "玻璃拟态 3D 渲染，磨砂半透明材质，柔和折射与焦散光，奶油色渐变背景，C4D 质感，精致细节，无文字无水印",
+    desc: "磨砂玻璃折射光，产品/AI 工具新锐感",
   },
 ]
 
@@ -173,14 +199,20 @@ export function cardPlanMessages(input: { subject: string; usageId: string; coun
 
 export interface IllustrationPlanItem {
   anchor: string // 锚定的小节标题原文（必须逐字来自正文 ## 标题）
-  concept: string // 画面描述
+  /** B6 职责分离：data=代码排版数据卡（零错字）；mood=生成式意境图（缺省按 mood） */
+  kind?: "mood" | "data"
+  concept: string // 画面描述（mood）或核心数据方向说明（data）
   caption: string // 图注
 }
 
 export const ILLUSTRATION_STYLE_TOKEN =
   "现代扁平插画风，几何构图，蓝灰科技配色，与文章气质一致的克制配色，干净留白，无文字无水印"
 
-export async function illustrationPlanMessages(draft: string, outlineHints?: { heading: string; illustration: string; imageCaption: string }[]): Promise<ChatMessage[]> {
+export async function illustrationPlanMessages(
+  draft: string,
+  outlineHints?: { heading: string; illustration: string; imageCaption: string }[],
+  opts?: { countRule?: string },
+): Promise<ChatMessage[]> {
   const hintBlock =
     outlineHints && outlineHints.length > 0
       ? [
@@ -191,10 +223,39 @@ export async function illustrationPlanMessages(draft: string, outlineHints?: { h
             .map((h) => `- 「${h.heading}」：${h.illustration}${h.imageCaption ? `（图说方向：${h.imageCaption}）` : ""}`),
         ].join("\n")
       : ""
-  const system = await renderSkillPrompt("wewrite-illustrate", undefined, {})
+  const system = await renderSkillPrompt("wewrite-illustrate", undefined, {
+    count_rule: opts?.countRule ?? "2~3 张",
+  })
   return [
     { role: "system", content: system + hintBlock },
     { role: "user", content: draft.slice(0, 6000) },
+  ]
+}
+
+// ---------- ②-b 图文线数据卡文案（B6：data 类插图走代码排版零错字） ----------
+
+/**
+ * 单张数据卡文案规划（B6 职责分离的 data 通道）：
+ * 从小节标题+论点+证据（claims 已含真实数字）提炼 2~4 组 metrics，
+ * 渲染由 card-engine 代码排版完成（零错字），与生图链路完全解耦。
+ */
+export async function dataCardMessages(input: {
+  heading: string
+  point: string
+  evidence: string[] // 本节证据文本（含数字/来源）
+  caption: string
+}): Promise<ChatMessage[]> {
+  const system = await renderSkillPrompt("wewrite-art-direct", "data-card", {})
+  const user = [
+    `小节标题：${input.heading.slice(0, 60)}`,
+    `本节论点：${input.point.slice(0, 200)}`,
+    "【证据（metrics 只能从这里提炼，禁止编造精确数字；不足 2 组就改用定性词）】",
+    input.evidence.length > 0 ? input.evidence.map((e, i) => `[${i + 1}] ${e.slice(0, 160)}`).join("\n") : "（无证据，用定性对比）",
+    `图注（caption 参考）：${input.caption.slice(0, 30)}`,
+  ].join("\n")
+  return [
+    { role: "system", content: system },
+    { role: "user", content: user },
   ]
 }
 

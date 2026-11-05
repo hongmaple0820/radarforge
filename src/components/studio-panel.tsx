@@ -40,6 +40,9 @@ export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { tit
   // A2 篇幅三档（默认 medium，与设置中心一致）
   const [tiers, setTiers] = useState<TierInfo[]>([])
   const [tier, setTier] = useState("medium")
+  // A3 叙事骨架（默认自动轮换；高级表单可选）
+  const [skeletons, setSkeletons] = useState<{ id: string; label: string; desc: string }[]>([])
+  const [skeleton, setSkeleton] = useState("")
   const [ideas, setIdeas] = useState<IdeaItem[]>([])
   const [ideaTitle, setIdeaTitle] = useState("")
   const [ideaAngle, setIdeaAngle] = useState("")
@@ -100,6 +103,7 @@ export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { tit
     setRuns(r.runs ?? [])
     setPersonas(r.personas ?? [])
     setTiers(r.tiers ?? [])
+    setSkeletons(r.skeletons ?? [])
     setThemes(r.themes ?? [])
     setIdeas(i.ideas ?? [])
     setExemplars(e.exemplars ?? [])
@@ -118,7 +122,7 @@ export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { tit
     return () => clearInterval(t)
   }, [runs, refresh])
 
-  const start = async (payload?: { ideaTitle: string; ideaAngle: string; persona: string; theme: string; exemplarId: string; ideaId?: string; lengthTier?: string }) => {
+  const start = async (payload?: { ideaTitle: string; ideaAngle: string; persona: string; theme: string; exemplarId: string; ideaId?: string; lengthTier?: string; skeleton?: string }) => {
     const t = payload?.ideaTitle ?? ideaTitle
     if (!t.trim()) return
     setStarting(true)
@@ -134,6 +138,7 @@ export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { tit
           exemplarId: payload?.exemplarId ?? exemplarId,
           ideaId: payload?.ideaId,
           lengthTier: payload?.lengthTier ?? tier,
+          skeleton: payload?.skeleton ?? skeleton,
         }),
       })
       const json = await res.json()
@@ -226,8 +231,8 @@ export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { tit
           <p className="text-[11px] text-muted-foreground">brief → claims 取证 → 大纲先行 → 分节初稿 → 跨家族审稿（成对比较）→ 原子断言核验 → 正文配图 → 封面 → 微信排版</p>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid grid-cols-1 md:grid-cols-[1fr_150px_130px_120px_auto] gap-2">
-            <Input placeholder="选题标题，如：具身智能融资观察" value={ideaTitle} onChange={(e) => setIdeaTitle(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void start() }} />
+          <div className="grid grid-cols-2 md:grid-cols-[1fr_140px_110px_120px_120px_auto] gap-2">
+            <Input placeholder="选题标题，如：具身智能融资观察" value={ideaTitle} onChange={(e) => setIdeaTitle(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void start() }} className="col-span-2 md:col-span-1" />
             <select value={persona} onChange={(e) => setPersona(e.target.value)} className="h-9 rounded-md border bg-background px-2 text-xs">
               {personas.map((p) => (
                 <option key={p.id} value={p.id}>{p.label}</option>
@@ -235,6 +240,11 @@ export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { tit
             </select>
             <select value={tier} onChange={(e) => setTier(e.target.value)} className="h-9 rounded-md border bg-background px-2 text-xs" aria-label="篇幅档位" title={(tiers.find((x) => x.id === tier))?.desc ?? "篇幅档位"}>
               {(tiers.length > 0 ? tiers : [{ id: "medium", label: "标准深度", desc: "" }]).map((x) => (
+                <option key={x.id} value={x.id}>{x.label}</option>
+              ))}
+            </select>
+            <select value={skeleton} onChange={(e) => setSkeleton(e.target.value)} className="h-9 rounded-md border bg-background px-2 text-xs max-w-[150px]" aria-label="叙事骨架" title={(skeletons.find((x) => x.id === skeleton))?.desc ?? "叙事骨架（默认自动轮换）"}>
+              {(skeletons.length > 0 ? skeletons : [{ id: "", label: "骨架·自动", desc: "" }]).map((x) => (
                 <option key={x.id} value={x.id}>{x.label}</option>
               ))}
             </select>

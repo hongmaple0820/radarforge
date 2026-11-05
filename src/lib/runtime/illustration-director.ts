@@ -12,6 +12,7 @@
 
 import { extractJson } from "./json.ts"
 import { renderSkillPrompt } from "./skill-prompt.ts"
+import { exemplarBlock as buildExemplarBlock, retrieveTemplates } from "./prompt-library.ts"
 import type { ChatMessage } from "../gateway/types.ts"
 
 /** 可注入的对话函数（默认惰性走 gateway；测试可注入 mock 零依赖） */
@@ -98,17 +99,31 @@ export interface DirectInlineInput {
   stylePrompt: string
   /** 上一次质检未过的改进建议（重生时注入；首次不传） */
   retryHint?: string
+  /** B4：模板库检索范例块（调用方可用 injectExemplars 自动生成；也可显式传入） */
+  exemplarBlock?: string
+}
+
+/** B4：按「选题+锚点+概念」检索模板库并拼范例块（导演 few-shot 参考） */
+export async function exemplarHintFor(topic: string, anchor: string, concept: string, limit = 2): Promise<string> {
+  try {
+    const hits = await retrieveTemplates([topic, anchor, concept].join(" "), { limit })
+    return buildExemplarBlock(hits)
+  } catch {
+    return "" // 检索失败不影响导演主链路
+  }
 }
 
 export async function directInlineIllustration(input: DirectInlineInput, chat: DirectorChat = defaultChat): Promise<DirectedImagePrompt> {
   try {
     const system = await renderSkillPrompt("wewrite-art-direct", "inline", {})
+    const exemplar = input.exemplarBlock ?? (await exemplarHintFor(input.topic, input.anchor, input.concept))
     const user = [
       `文章选题：${input.topic.slice(0, 120)}`,
       `小节标题：${input.anchor.slice(0, 60)}`,
       `配图概念：${input.concept.slice(0, 200)}`,
       `图注：${input.caption.slice(0, 40)}`,
       `风格基准（style_ref 从此发展）：${input.stylePrompt.slice(0, 200)}`,
+      exemplar ? `\n${exemplar}` : "",
       input.retryHint ? `\n【上一次质检未过的改进建议（针对性修正）】\n${input.retryHint.slice(0, 160)}` : "",
     ]
       .filter(Boolean)
@@ -139,6 +154,8 @@ export interface DirectCoverInput {
   stylePrompt: string
   /** 上一次质检未过的改进建议（重生时注入） */
   retryHint?: string
+  /** B4：模板库检索范例块（不传则按标题自动检索） */
+  exemplarBlock?: string
 }
 
 export async function directCoverImage(input: DirectCoverInput, chat: DirectorChat = defaultChat): Promise<DirectedImagePrompt> {
@@ -150,9 +167,11 @@ export async function directCoverImage(input: DirectCoverInput, chat: DirectorCh
     )
   try {
     const system = await renderSkillPrompt("wewrite-art-direct", "cover", {})
+    const exemplar = input.exemplarBlock ?? (await exemplarHintFor(input.title, "公众号文章封面", "封面概念图", 2))
     const user = [
       `文章标题：${input.title.slice(0, 120)}`,
       `风格基准（style_ref 从此发展）：${input.stylePrompt.slice(0, 200)}`,
+      exemplar ? `\n${exemplar}` : "",
       input.retryHint ? `\n【上一次质检未过的改进建议（针对性修正）】\n${input.retryHint.slice(0, 160)}` : "",
     ]
       .filter(Boolean)

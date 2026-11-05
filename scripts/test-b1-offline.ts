@@ -22,7 +22,7 @@ import {
 import { assemblePromptFull } from "../src/lib/runtime/illustration-director.ts"
 import { parseOutline, sectionMessages, outlineMessages } from "../src/lib/runtime/skills/radar-outline.ts"
 import { draftMessages } from "../src/lib/runtime/skills/radar-write.ts"
-import { getImageStyle } from "../src/lib/runtime/skills/radar-image.ts"
+import { getImageStyle, IMAGE_STYLES } from "../src/lib/runtime/skills/radar-image.ts"
 
 let pass = 0
 let fail = 0
@@ -215,7 +215,7 @@ console.log("━━ ④ B1 配图导演（纯函数） ━━")
 
   // 风格预设（A2/B2 前置：图文线风格入口）
   const styles = ["modern-flat", "tech-data", "hand-drawn", "isometric", "neon-cyber"]
-  assert(styles.every((id) => getImageStyle(id).prompt.length > 10), "五种风格预设可用")
+  assert(styles.every((id) => getImageStyle(id).prompt.length > 10) && IMAGE_STYLES.length >= 8, "八风格包可用（B2）")
   assert(getImageStyle("bogus").id === "modern-flat", "非法风格回退 modern-flat")
 }
 

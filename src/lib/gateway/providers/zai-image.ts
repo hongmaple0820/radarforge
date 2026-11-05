@@ -24,6 +24,8 @@ export interface GeneratedImage {
   absPath: string
   error?: string
   sizeBytes: number
+  /** B5：实际出图通道（builtin-sdk / agnes-image / custom），留痕用 */
+  via?: string
 }
 
 /** 自定义 OpenAI 兼容生图端点（设置中心配置后启用） */
@@ -86,7 +88,7 @@ async function generateViaSdk(prompt: string, fileName: string, size: ImageSize)
       const absPath = path.join(ASSET_DIR, fileName)
       const buf = Buffer.from(b64, "base64")
       await writeFile(absPath, buf)
-      return { ok: true, filePath: `/assets/${fileName}`, absPath, sizeBytes: buf.length }
+      return { ok: true, filePath: `/assets/${fileName}`, absPath, sizeBytes: buf.length, via: "builtin-sdk" }
     } catch (e) {
       const msg = (e as Error).message || ""
       const waf = msg.includes("405") || msg.includes("空数据")
@@ -100,9 +102,34 @@ async function generateViaSdk(prompt: string, fileName: string, size: ImageSize)
   throw new Error("生图重试后仍失败")
 }
 
+/** B5：Agnes 免费池生图（URL/dataURI → 下载落盘；账号池与限频由 agnes pool 管） */
+async function generateViaAgnes(prompt: string, fileName: string, size: ImageSize): Promise<GeneratedImage> {
+  const { agnesImage } = await import("./agnes/agnes-image")
+  const generate = agnesImage.generate?.bind(agnesImage)
+  if (!generate) throw new Error("Agnes 生图通道不可用")
+  const res = await generate({ prompt: prompt.slice(0, 500), size })
+  const src = res.images[0]
+  if (!src) throw new Error("Agnes 生图返回空")
+  let buf: Buffer
+  if (src.startsWith("data:")) {
+    buf = Buffer.from(src.split(",")[1] ?? "", "base64")
+  } else {
+    const img = await fetch(src, { signal: AbortSignal.timeout(60_000) })
+    if (!img.ok) throw new Error(`Agnes 生图结果下载失败 HTTP ${img.status}`)
+    buf = Buffer.from(await img.arrayBuffer())
+  }
+  if (buf.length === 0) throw new Error("Agnes 生图返回空")
+  await mkdir(ASSET_DIR, { recursive: true })
+  const absPath = path.join(ASSET_DIR, fileName)
+  await writeFile(absPath, buf)
+  return { ok: true, filePath: `/assets/${fileName}`, absPath, sizeBytes: buf.length, via: "agnes-image" }
+}
+
 /**
- * 通用生图（slug 区分文件名，避免同 run 多图互相覆盖；size 走白名单）
- * 失败自动降级（GeneratedImage.ok=false + error 留痕），绝不阻断流水线
+ * 通用生图（slug 区分文件名，避免同 run 多图互相覆盖；size 走白名单）。
+ * B5 三通道回退链：主通道（设置 mode：custom 端点 / builtin SDK）→ Agnes 免费池
+ * （若启用且有可用账号）→ SDK 兜底（去重不重试主通道）。每级失败进链路字符串
+ * （降级不消失），全部失败才 ok=false 留痕，绝不阻断流水线。
  */
 export async function generateImage(prompt: string, runId: string, slug: string, size?: string): Promise<GeneratedImage> {
   const safeSlug = (slug || "img").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 24) || "img"
@@ -110,12 +137,27 @@ export async function generateImage(prompt: string, runId: string, slug: string,
   const finalSize = safeSize(size)
   try {
     const s = await getSettings()
-    if (s.image.mode === "custom" && s.image.baseUrl && s.image.apiKey) {
-      return await generateViaCustom(prompt, fileName, finalSize, s.image.baseUrl, s.image.apiKey, s.image.model)
+    const agnesReady = s.agnes.enabled && s.agnes.accounts.some((a) => a.enabled && a.apiKey)
+    const customReady = s.image.mode === "custom" && Boolean(s.image.baseUrl && s.image.apiKey)
+    // 链路：主通道 → agnes → sdk（若主通道已是 sdk 则不重复；custom 配了但 mode=builtin 时也作为末级备用）
+    const chain: { name: string; run: () => Promise<GeneratedImage> }[] = []
+    if (customReady) chain.push({ name: "custom", run: () => generateViaCustom(prompt, fileName, finalSize, s.image.baseUrl, s.image.apiKey, s.image.model).then((r) => ({ ...r, via: "custom" })) })
+    else chain.push({ name: "builtin-sdk", run: () => generateViaSdk(prompt, fileName, finalSize) })
+    if (agnesReady) chain.push({ name: "agnes-image", run: () => generateViaAgnes(prompt, fileName, finalSize) })
+    if (!chain.some((c) => c.name === "builtin-sdk")) chain.push({ name: "builtin-sdk", run: () => generateViaSdk(prompt, fileName, finalSize) })
+
+    const tried: string[] = []
+    for (const c of chain) {
+      try {
+        const img = await c.run()
+        return img
+      } catch (e) {
+        tried.push(`${c.name}✗ ${(e as Error).message.slice(0, 80)}`)
+      }
     }
-    return await generateViaSdk(prompt, fileName, finalSize)
+    return { ok: false, filePath: "", absPath: "", sizeBytes: 0, error: `三通道均失败（${tried.join(" → ")}）` }
   } catch (e) {
-    // 沙箱网关可能拦截生图端点 —— 降级留痕，不阻断
+    // 设置读取等意外失败 —— 降级留痕，不阻断
     return { ok: false, filePath: "", absPath: "", error: (e as Error).message, sizeBytes: 0 }
   }
 }
@@ -129,7 +171,7 @@ export const zaiImage: ImageProvider = {
   kind: "IMAGE",
   name: "zai-image",
   label: "Z.ai 生图（SDK）",
-  notes: "封面/内文配图/纯图线生图；可在设置中心切换为自定义 OpenAI 兼容生图端点；内置端点失败自动降级留痕不阻断",
+  notes: "B5 三通道回退链：主通道（自定义端点/内置 SDK）→ Agnes 免费池（启用时）→ SDK 兜底；每级失败进链路留痕（降级不消失），全失败才降级无图不阻断",
   isConfigured: () => true,
   async health(): Promise<HealthReport> {
     const t0 = Date.now()
