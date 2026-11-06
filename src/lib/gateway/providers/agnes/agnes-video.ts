@@ -1,16 +1,17 @@
 // ============================================================
 // agnes-video.ts —— Agnes 视频模型 provider（异步三件套）
-// 协议族（学 dsh imagegen-video 的 agnes 家族 + dsh-agnes-multimodal
-// 的实测差异）：提交 POST /videos → 轮询取 url。两上游仓库对轮询端点
-// 描述不一致（/v1/videos/{id} 取 metadata.url vs /agnesapi 取顶层 url），
-// 故做成「可配置模板」：pollPath 支持 /videos/{id} 与 /agnesapi 两种，
-// 解析兼容 metadata.url / url / video_url 三种字段。
-// 每账号 1 任务/分钟（acquireVideoSlot 记账）；无远程取消。
+// 协议整形/轮询解析已下沉 family.ts（C3 协议族抽象）：本文件只
+// 保留 Agnes 特有的账号池取号、双端点轮询模板与错误上报。
+// 双上游仓库对轮询端点描述不一致（/v1/videos/{id} 取
+// metadata.url vs /agnesapi 取顶层 url），故保留「可配置模板」：
+// 两端点依次尝试。每账号 1 任务/分钟（acquireVideoSlot 记账）；
+// 无远程取消。模型 id 非agnes 协议族时显式报错（C3 守卫）。
 // ============================================================
 
 import type { HealthReport, VideoGenerateRequest, VideoProvider, VideoTask } from "../../types"
 import { getSettings, peekSettings } from "@/lib/settings"
 import { acquireVideoSlot, accountBaseUrl, reportFailure, reportSuccess } from "./pool"
+import { detectVideoFamily, parseAgnesPoll, shapeAgnesSubmit, videoFamilyMeta } from "../video/family"
 
 interface SubmitResponse {
   id?: string
@@ -20,39 +21,24 @@ interface SubmitResponse {
   message?: string
 }
 
-interface PollResponse {
-  status?: string
-  state?: string
-  url?: string
-  video_url?: string
-  metadata?: { url?: string }
-  error?: string
-  message?: string
-  progress?: number
-}
-
 function extractTaskId(json: SubmitResponse): string | undefined {
   return json.id ?? json.video_id ?? json.task_id
 }
 
-function extractUrl(json: PollResponse): string | undefined {
-  return json.url ?? json.video_url ?? json.metadata?.url
-}
-
-function mapStatus(raw: string | undefined): VideoTask["status"] {
-  const s = (raw ?? "").toLowerCase()
-  if (["completed", "success", "succeeded", "done"].includes(s)) return "completed"
-  if (["failed", "error", "cancelled", "canceled"].includes(s)) return "failed"
-  if (["queued", "pending", "created", "submitted"].includes(s)) return "queued"
-  if (["running", "processing", "generating", "in_progress"].includes(s)) return "running"
-  return "unknown"
+/** C3 族守卫：视频模型清单可能混入其它协议族 id（如 doubao-seedance-*），提交前显式拦截 */
+function assertAgnesFamily(model: string): void {
+  const family = detectVideoFamily(model)
+  if (family !== "agnes") {
+    const meta = videoFamilyMeta(family)
+    throw new Error(`模型「${model}」属于${meta.label}（${meta.notes}）——不能经 Agnes 端点提交，请在设置中心换用 agnes-* 模型或等待该协议族接入`)
+  }
 }
 
 export const agnesVideo: VideoProvider = {
   kind: "VIDEO",
   name: "agnes-video",
   label: "Agnes 免费视频模型（多账号池）",
-  notes: "agnes-video-2.5-flash（720P · 4-12s）；每账号 1 任务/分钟；text/keyframe/reference 三模式",
+  notes: "agnes-video-2.5-flash（720P/1080P · 4-12s）；每账号 1 任务/分钟；text/keyframe/reference 三模式（keyframe=AI 首帧 i2v 主轨）",
   isConfigured() {
     const s = peekSettings()?.agnes
     return Boolean(s?.enabled && s.accounts.some((a) => a.enabled && a.apiKey))
@@ -60,6 +46,9 @@ export const agnesVideo: VideoProvider = {
   async submitVideo(req: VideoGenerateRequest): Promise<VideoTask> {
     const s = await getSettings(true)
     if (!s.agnes.enabled) throw new Error("Agnes 未启用（设置中心 → Agnes 账号池）")
+    // P1-5：模型从视频通道卡收敛配置（回退 Agnes 池旧字段保兼容）
+    const model = s.video.model || s.agnes.videoModel
+    assertAgnesFamily(model)
     const { slot, reason, waitMs } = await acquireVideoSlot(s.agnes)
     if (!slot) {
       throw new Error(
@@ -67,17 +56,8 @@ export const agnesVideo: VideoProvider = {
       )
     }
     try {
-      const body: Record<string, unknown> = {
-        // P1-5：模型从视频通道卡收敛配置（回退 Agnes 池旧字段保兼容）
-        model: s.video.model || s.agnes.videoModel,
-        prompt: req.prompt,
-        mode: req.mode,
-        seconds: String(Math.min(12, Math.max(4, Math.round(req.seconds)))),
-        size: s.video.resolution === "1080P" ? "1080P" : "720P",
-      }
-      if (req.aspectRatio) body.aspect_ratio = req.aspectRatio
-      if (req.firstFrame) body.first_frame = req.firstFrame
-      if (req.images?.length) body.images = req.images
+      // C3：请求整形下沉协议族模块（mode/seconds/size/first_frame/images）
+      const body = shapeAgnesSubmit(req, { model, resolution: s.video.resolution })
       const res = await fetch(`${accountBaseUrl(slot.account)}/videos`, {
         method: "POST",
         headers: {
@@ -116,7 +96,11 @@ export const agnesVideo: VideoProvider = {
     if (!account) throw new Error("Agnes 账号池为空")
     const base = accountBaseUrl(account)
     // 双端点模板兼容：先 /videos/{id}（OpenAI 风格），404/解析失败再试 /agnesapi?video_id=
-    const endpoints = [`${base}/videos/${encodeURIComponent(remoteTaskId)}`, `${base.replace(/\/v1$/, "")}/agnesapi?video_id=${encodeURIComponent(remoteTaskId)}&model_name=${encodeURIComponent(s.agnes.videoModel)}`]
+    const model = s.video.model || s.agnes.videoModel
+    const endpoints = [
+      `${base}/videos/${encodeURIComponent(remoteTaskId)}`,
+      `${base.replace(/\/v1$/, "")}/agnesapi?video_id=${encodeURIComponent(remoteTaskId)}&model_name=${encodeURIComponent(model)}`,
+    ]
     let lastError = ""
     for (const url of endpoints) {
       try {
@@ -132,19 +116,16 @@ export const agnesVideo: VideoProvider = {
           reportFailure(account, res.status === 429 ? "rate-limit" : "error")
           return { id: remoteTaskId, status: "unknown", remoteTaskId, error: `HTTP ${res.status}` }
         }
-        const json = (await res.json()) as PollResponse
+        const json = (await res.json()) as Record<string, unknown>
         reportSuccess(account)
-        const status = mapStatus(json.status ?? json.state)
-        const resultUrl = extractUrl(json)
-        if (status === "completed" && !resultUrl) {
-          return { id: remoteTaskId, status: "running", remoteTaskId }
-        }
+        // C3：轮询解析下沉协议族模块（metadata.url / url / video_url 兼容）
+        const parsed = parseAgnesPoll(json)
         return {
           id: remoteTaskId,
-          status: status === "unknown" && resultUrl ? "completed" : status,
+          status: parsed.status,
           remoteTaskId,
-          resultUrl,
-          error: status === "failed" ? (json.error ?? json.message ?? "生成失败") : undefined,
+          resultUrl: parsed.resultUrl,
+          error: parsed.error,
         }
       } catch (e) {
         lastError = (e as Error).message
@@ -170,7 +151,7 @@ export const agnesVideo: VideoProvider = {
         status: res.ok || res.status === 429 ? "healthy" : res.status === 401 ? "down" : "degraded",
         latencyMs: Date.now() - t0,
         error: res.ok ? undefined : `HTTP ${res.status}`,
-        detail: `${s.agnes.videoModel} · 720P · 4-12s`,
+        detail: `${s.video.model || s.agnes.videoModel} · 720P/1080P · 4-12s · keyframe i2v`,
       }
     } catch (e) {
       return { status: "down", latencyMs: Date.now() - t0, error: (e as Error).message }

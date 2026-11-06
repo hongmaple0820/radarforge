@@ -20,6 +20,7 @@ export const PIPELINE_SKILL_IDS: ReadonlySet<string> = new Set([
   "wewrite-fact-check",
   "wewrite-illustrate",
   "wewrite-art-direct",
+  "huashu-video-direct",
 ])
 
 export class SkillPromptMissingError extends Error {

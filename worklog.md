@@ -1052,3 +1052,27 @@ Stage Summary:
 - 批次三（视频，~5 日）：C1 AI 首帧 i2v 混合通道 / C2 导演规划器（预览即所提交）/ C3 视频协议族抽象 / C4 Agnes 池限流 / C5 1080P+BGM / C6 合成诊断
 - A4 完整两轮研究循环待 SEARCH_KEY；版式卡 VLM 质检本日一轮 3 未过（内容相关波动，非代码回归，下批观察）
 - LLM 日池今日已耗尽（5 轮文章 E2E + 3 轮回归 + 调试），批次三开工前留意窗口
+
+---
+Task ID: CQ-batch3
+Agent: 主 Agent（Z.ai）
+Task: 内容质量升级批次三·视频线 C1~C6（用户指令：继续推进下一步；开工令与批次顺序沿既定方案）
+
+Work Log:
+- 前情：批次一（4825f55 A1+A2+B1+B3）与批次二（80d8fe0 B4+B2+B6+A3+A5+B5+A4降级链）均已提交推送，本批为收官批次（视频线六项）
+- **C3 协议族抽象** `src/lib/gateway/providers/video/family.ts`：id 前缀判族+别名归一（agnes-* / doubao-seedance-*|seedance*|ark-* / 其余 openai-compat）+ 能力元数据（modes/秒数范围/分辨率/远程取消/wired）+ 三族独立整形器（agnes：mode/seconds 字符串/size/first_frame/images；ark-seedance：content 数组+role first_frame/reference_image+ratio+小写分辨率——本期只留协议不接 key；compat：prompt/seconds/size）+ 三族轮询解析器；agnes-video.ts 协议知识全部迁入 family（保留池取号/双端点模板/错误上报），新增族守卫（模型非 agnes 族显式拦截提交）；GET /api/video-runs 透出 capabilities+agnesPool（UI 提前拦截的数据源）
+- **C4 池状态显式化**：池化（RPM 滑窗+熔断+round-robin）此前已落地，本批补 UI 显式指引——视频面板通道卡池徽章（账号数/当前可提交/熔断中），池空不再只有一行小字
+- **C2 导演规划器** `src/lib/runtime/video-director.ts` + `db/skills/huashu-video-direct/SKILL.md`（A1 纪律：SKILL.md 唯一事实源，入 PIPELINE_SKILL_IDS 不可停用）：LLM 拆结构化分镜计划 {shots: sceneId/seconds/首帧提示词中英/运动描述中英/转场}；契约校验 1:1 逐镜、收紧不放大（要 20s 钳到原分镜 8s；低于模型地板取地板）、转场白名单、缺字段判废；失败/非 JSON/异常 → 规则规划降级（固定运镜轮换）留痕 planner=rule-based；**预览即所提交**：render-video 支持 preview=true（只出分镜计划+AI 首帧不花 i2v 额度，stage=preview 等确认）+ reuseKeyframes（确认后复用预览首帧）
+- **C1 AI 首帧 i2v 主轨**（video.ts v4）：agnes/auto 通道全镜走「导演规划 → B1 首帧导演（wewrite-art-direct 新增 prompt: keyframe 分节，风格基准与文章配图同源→图-文-视频视觉统一）→ 三通道生图 → sharp cover 裁切对齐画幅 → VLM 审帧闭环（未过带 hint 定向重生一次，二次未过采用并标注）→ agnes keyframe 模式 i2v（首帧 jpeg dataURI + 导演运动描述，不再是「visual+口播截断 500 字」拼凑）→ 字幕烧录+定格延长混音」；hybrid 的 model 镜头同链路；生图失败→场景卡兜底首帧（code-card 留痕，i2v 主轨不整线回退）；首帧落 Asset（role=video-keyframe，run 详情页可见）；segments[] 每镜来源留痕（i2v/code+keyframe 来源+失败段定位）；成片 provider 标 `agnes-i2v(Ni2v+Mcode)`
+- **C5 画质与音频**：预设层抽 `video-presets.ts`（纯函数可离线自测）；分辨率 720P/1080P 贯通（scaledLayout 1.5x 等比缩放+dimsFor，族能力闸门降档）；BGM 3→6 预设（新增紧张/悬念/温暖，本地 aevalsrc 无版权，AI 配乐接口预留）；i2v 片段 drawtext 字幕三预设（清爽描边/强调底条/柔和暗底，expansion=none+单引号弯引号转义，每行一条 drawtext 避换行地狱，字体缺失诚实降级无字幕）；TTS 失败降级文案改「字幕主导模式」+重试指引；口播长于 i2v 上限时 tpad 定格延长
+- **C6 合成诊断** `video-diagnostics.ts`：环形缓冲 100 条/run，diagRun 包裹计时（submit/poll/download/tts/keyframe/vlm/ffmpeg/concat/bgm 分腿）；汇总写入 Asset.meta.diag（分腿 n/errors/avgMs/lastError）；成片卡显示「合成诊断：N 条留痕·M 处失败（leg×n）」
+- UI：video-panel v3（通道卡 i2v 文案+池徽章+能力秒数/分辨率、预览先行开关、预览确认区=首帧画廊+「确认渲染成片（复用首帧）」+「重生成首帧」、成片卡镜头来源 chips+首帧质量统计+诊断行+planner/i2v 占比徽章）；settings 视频卡字幕样式三预设（PUT 白名单校验）；run-detail 渲染按钮签名同步
+- 环境抢救实录：沙箱回收清了 prisma client，prisma generate 撞 DNS 死路（binaries.prisma.sh 双 A 记录，Node fetch 撞死路）——发现 prisma-mirror 的 execSync 会冻结事件循环导致镜像服务无法应答（历史 bug），改异步 spawn + curl 预热引擎后 generate 成功；boot-restore 自愈恢复 RSS 源
+- **实测取证（诚实降级链全部按设计工作）**：当日生图端点 WAF 405 全封 → 3/3 首帧走 code-card 场景卡兜底（keyframes.fallback=3 留痕，i2v 主轨不因此断线）；TTS 端点不可达 → 字幕主导模式（audioMode=muted+新文案）；Agnes 账号池密钥随沙箱回收丢失（用户侧需重配，已记遗留）→ auto 通道诚实回退 local
+- **验证**：离线 `test-c-offline.ts` **81/81**（三族判族/整形/轮询解析、规划契约 12 项、诊断环形缓冲、预设层、C2→C1 贯通）+ `test-b1-offline.ts` **68/68**（管线技能 7→8 断言更新）+ `test-b2-offline.ts` **42/42** 复跑全绿；tsc/eslint 零错误；服务器冒烟 c3-smoke **10/10**（能力元数据/池状态/subtitleStyle 往返+白名单/管线守卫 8 技能/入口契约）；聚焦 E2E 两段全绿：preview **8/8**（planner=director 真实 LLM 规划、3 首帧落库 HTTP 200、VLM 闭环留痕、未花 i2v 额度）+ 全片 **11/11**（21.1s 成片、segments 每镜留痕、diag=tts+concat+bgm 0 错、BGM warm 混音、v2 版本树、分段留存）；浏览器冒烟 **14/14**（通道卡/池徽章/预览开关/BGM 六选项/镜头来源行/预览画廊+确认按钮/字幕预设）+ 4 截图程序化核验；全量回归因当日生图/TTS 双不可达（降级路径会稀释信噪）以聚焦 E2E+离线三套替代，代码路径已由离线契约与两段 E2E 覆盖
+
+### 遗留与下一步
+- **Agnes 账号池密钥随沙箱回收丢失**：i2v 提交腿（agnes keyframe 模式真实远端调用）本日无法实测，需用户在设置中心重配账号后跑一次 channel=agnes 全片验证「i2v 片段占比 ≥80%」验收项；协议整形/轮询解析已由离线契约 81 项覆盖
+- prisma-mirror.mjs 的 execSync 阻塞事件循环 bug 已定位（本批用 gen-prisma-inline.mjs 异步 spawn 绕过），根治改造留待下批
+- A4 完整两轮研究循环仍待 SEARCH_KEY；SEARCH_KEY 与 Agnes 密钥同随沙箱回收丢失
+- 内容质量升级三批全部落地（A 线 5 项/B 线 6 项/C 线 6 项），后续可做：eval50 重测（配额窗口）、视频线指向分镜重规划的指着改增强

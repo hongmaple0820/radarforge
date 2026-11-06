@@ -70,7 +70,7 @@ export interface AgnesSettings {
 }
 
 export interface VideoSettings {
-  /** 视频通道：local=本地渲染（motion/art 双风格）/ agnes=AI 视频模型 / auto=优先 agnes 回退 local / hybrid=混合通道（P1：按分镜 render 标注分发，code 主轨 + model 插播） */
+  /** 视频通道：local=本地渲染（motion/art 双风格）/ agnes=AI 模型（C1：AI 首帧 i2v 主轨）/ auto=优先 agnes 回退 local / hybrid=混合通道（model 镜头 i2v + code 镜头本地） */
   channel: "local" | "agnes" | "auto" | "hybrid"
   /** Agnes 视频生成时每镜秒数（4-12s） */
   secondsPerScene: number
@@ -78,10 +78,12 @@ export interface VideoSettings {
   model: string
   /** 可编辑模型清单（预置 + 用户自添；不维护远端目录拉取） */
   models: string[]
-  /** 分辨率预设（720P 起步；1080P 视模型支持，Agnes 上传时透传 size 字段） */
+  /** 分辨率预设（720P 起步；1080P 视模型支持，C3 协议族能力元数据闸门） */
   resolution: "720P" | "1080P"
   /** 默认画幅（render-video 请求未指定时采用） */
   aspect: "9:16" | "16:9"
+  /** C5 字幕烧录预设（i2v 片段；AI 画面无文字，字幕由合成层渲染） */
+  subtitleStyle: "clean" | "strong" | "soft"
 }
 
 /** 网络代理（P0-2）：全局 http/https 代理地址，空 = 直连。
@@ -129,6 +131,7 @@ const DEFAULTS: AppSettings = {
     models: ["agnes-video-2.5-flash"],
     resolution: "720P",
     aspect: "9:16",
+    subtitleStyle: "clean",
   },
   // 决策①：默认 medium（2500~4000 字）
   article: {

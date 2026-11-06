@@ -120,7 +120,8 @@ export function SettingsPanel({ jump }: { jump?: SettingsJumpTarget | null }) {
     models: string[]
     resolution: "720P" | "1080P"
     aspect: "9:16" | "16:9"
-  }>({ channel: "local", secondsPerScene: 8, model: "agnes-video-2.5-flash", models: ["agnes-video-2.5-flash"], resolution: "720P", aspect: "9:16" })
+    subtitleStyle: "clean" | "strong" | "soft"
+  }>({ channel: "local", secondsPerScene: 8, model: "agnes-video-2.5-flash", models: ["agnes-video-2.5-flash"], resolution: "720P", aspect: "9:16", subtitleStyle: "clean" })
   // A2 文章产线（默认篇幅档位 + 插图风格统一入口）
   const [articleForm, setArticleForm] = useState<{ lengthTier: "short" | "medium" | "deep"; imageStyleId: string }>({ lengthTier: "medium", imageStyleId: "modern-flat" })
   // 插图风格清单（复用纯图线 /api/image-runs 的 styles 字段，避免客户端 import 服务端模块）
@@ -157,6 +158,7 @@ export function SettingsPanel({ jump }: { jump?: SettingsJumpTarget | null }) {
       models: s.video.models?.length ? s.video.models : ["agnes-video-2.5-flash"],
       resolution: s.video.resolution ?? "720P",
       aspect: s.video.aspect ?? "9:16",
+      subtitleStyle: (s.video as { subtitleStyle?: "clean" | "strong" | "soft" }).subtitleStyle ?? "clean",
     })
     setArticleForm({
       lengthTier: s.article?.lengthTier ?? "medium",
@@ -992,6 +994,22 @@ export function SettingsPanel({ jump }: { jump?: SettingsJumpTarget | null }) {
                 className="flex-1"
               />
               <span className="text-xs font-semibold w-6 text-right">{videoForm.secondsPerScene}s</span>
+            </div>
+            {/* C5 字幕烧录预设（i2v 片段；AI 画面无文字，字幕由合成层渲染） */}
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground shrink-0">字幕样式（i2v 片段烧录）</span>
+              <div className="flex gap-1.5">
+                {(["clean", "strong", "soft"] as const).map((st) => (
+                  <button
+                    key={st}
+                    onClick={() => setVideoForm((f) => ({ ...f, subtitleStyle: st }))}
+                    className={`text-[10px] border rounded-full px-2 py-0.5 transition-colors ${videoForm.subtitleStyle === st ? "border-rose-400 bg-rose-50 dark:bg-rose-950/30 text-rose-600 font-semibold" : "hover:border-rose-300 text-muted-foreground"}`}
+                    title={st === "clean" ? "白字细黑边，最轻干扰" : st === "strong" ? "大字 + 半透明黑底条，强可读" : "小字 + 淡暗底，氛围优先"}
+                  >
+                    {st === "clean" ? "清爽描边" : st === "strong" ? "强调底条" : "柔和暗底"}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
           {(videoForm.channel === "agnes" || videoForm.channel === "auto") && !agnesEnabled && (

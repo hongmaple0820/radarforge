@@ -193,3 +193,66 @@ export async function directCoverImage(input: DirectCoverInput, chat: DirectorCh
     return legacy()
   }
 }
+
+// ---------- 视频首帧导演（C1：AI 首帧 i2v 主轨） ----------
+
+export interface DirectKeyframeInput {
+  /** 片子标题（整片语境） */
+  topic: string
+  /** 分镜号（1 起，导演知道这是第几镜） */
+  shotIndex: number
+  /** 分镜首帧概念（C2 导演规划器产出的 firstFrame 描述，中英任一） */
+  concept: string
+  /** 该镜字幕（画面语义参考） */
+  subtitle: string
+  /** 风格基准（与文章配图同源 → 图-文-视频视觉统一） */
+  stylePrompt: string
+  /** 上一次质检未过的改进建议（重生时注入） */
+  retryHint?: string
+  /** B4：模板库检索范例块（不传则按选题+概念自动检索） */
+  exemplarBlock?: string
+}
+
+/** 视频首帧提示词导演（wewrite-art-direct prompt: keyframe 分节）；失败降级概念拼接并标注 legacy */
+export async function directVideoKeyframe(input: DirectKeyframeInput, chat: DirectorChat = defaultChat): Promise<DirectedImagePrompt> {
+  const legacy = () =>
+    legacyPrompt(
+      `${input.concept}，电影感构图，主体居中留出运动空间`,
+      input.stylePrompt,
+      "首帧导演不可达，回退概念拼接",
+    )
+  try {
+    const system = await renderSkillPrompt("wewrite-art-direct", "keyframe", {})
+    const exemplar = input.exemplarBlock ?? (await exemplarHintFor(input.topic, `视频分镜 ${input.shotIndex}`, input.concept, 2))
+    const user = [
+      `片子标题：${input.topic.slice(0, 100)}`,
+      `分镜序号：${input.shotIndex}`,
+      `首帧概念：${input.concept.slice(0, 240)}`,
+      `该镜字幕（语义参考，禁止画进画面）：${input.subtitle.slice(0, 40)}`,
+      `风格基准（style_ref 从此发展，全片首帧色调连贯）：${input.stylePrompt.slice(0, 200)}`,
+      exemplar ? `\n${exemplar}` : "",
+      input.retryHint ? `\n【上一次质检未过的改进建议（针对性修正）】\n${input.retryHint.slice(0, 160)}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n")
+    for (const temp of [0.4, 0.2]) {
+      const raw = await chat(
+        [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        { temperature: temp },
+      )
+      if (!raw) continue
+      const parts = parseDirectorReply(raw)
+      if (parts) return { promptFull: assemblePromptFull(parts, input.stylePrompt), parts, source: "director" }
+    }
+    return legacy()
+  } catch (e) {
+    return legacyPrompt(
+      `${input.concept}，电影感构图，主体居中留出运动空间`,
+      input.stylePrompt,
+      `首帧导演调用失败：${(e as Error).message}`,
+    )
+  }
+}

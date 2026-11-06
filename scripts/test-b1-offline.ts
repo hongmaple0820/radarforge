@@ -135,7 +135,7 @@ console.log("━━ ② A1 SKILL 接管 ━━")
   rmSync(tmpRoot, { recursive: true, force: true })
 
   // 管线技能清单
-  assert(PIPELINE_SKILL_IDS.size === 7, "七个管线技能（brief/outline/draft/review/fact-check/illustrate/art-direct）")
+  assert(PIPELINE_SKILL_IDS.size === 8, "八个管线技能（brief/outline/draft/review/fact-check/illustrate/art-direct + 批次三新增 huashu-video-direct）")
   assert(PIPELINE_SKILL_IDS.has("wewrite-draft") && !PIPELINE_SKILL_IDS.has("wewrite-polish"), "polish 等下游技能不在管线清单")
 }
 

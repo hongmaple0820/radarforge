@@ -1,14 +1,17 @@
 "use client"
 
 // ============================================================
-// video-panel —— 视频线工作台 v2（Phase 6 四件套）
+// video-panel —— 视频线工作台 v3（批次三 · C1~C6）
 // ① 导演三方向提案（学 huashu-motion director §4：A·Fit /
 //    B·Amplify / C·Unexpected，palette 色带预览，选定注入分镜）
 // ② 指着改编辑器（学 huashu-motion studio：时间轴点击 / 分镜卡
 //    「改这镜」→ 意见浮层 → 单场景局部重渲染 → 版本树）
-// ③ BGM 本地合成（三预设开关，作曲配乐务实版）
-// ④ 三通道渲染（motion 商业片 / art 艺术动画 / Agnes AI 模型）
-// 选稿 → 三方向 → 分镜 → 通道+音色+画幅+BGM → 渲染进度 → 成片播放/下载
+// ③ BGM 本地合成（C5 六预设，无版权作曲配乐务实版）
+// ④ 四通道渲染：C1 AI 首帧 i2v 主轨（导演规划→B1 首帧→VLM 审帧
+//    →keyframe i2v→字幕烧录）/ hybrid（code+model·i2v）/ art / motion
+// ⑤ C2 预览即所提交：首帧画廊先行确认，不浪费 i2v 额度
+// ⑥ C3 能力元数据 + C4 池状态徽章 + C6 镜头来源构成/诊断留痕
+// 选稿 → 三方向 → 分镜 → 通道+音色+画幅+BGM → 预览/渲染 → 成片播放/下载
 // ============================================================
 
 import { useCallback, useEffect, useRef, useState } from "react"
@@ -29,7 +32,7 @@ interface DirectionCard { key: string; kind: "fit" | "amplify" | "unexpected"; n
 interface SceneRevision { sceneId: number; feedback: string; reason: string; at: string }
 
 interface VideoMeta {
-  stage: "queued" | "tts" | "spec" | "frames" | "submit" | "poll" | "download" | "encode" | "concat" | "revise" | "done" | "error"
+  stage: "queued" | "tts" | "spec" | "plan" | "keyframes" | "preview" | "frames" | "submit" | "poll" | "download" | "encode" | "concat" | "revise" | "done" | "error"
   percent: number
   sceneDone: number
   sceneTotal: number
@@ -52,12 +55,34 @@ interface VideoMeta {
   version?: number
   durations?: number[]
   revisions?: SceneRevision[]
-  bgm?: "none" | "uplift" | "tech" | "calm"
+  bgm?: "none" | "uplift" | "tech" | "calm" | "tense" | "suspense" | "warm"
   bgmNote?: string
+  /** C5 分辨率档位 */
+  resolution?: "720P" | "1080P"
+  /** C2 规划器来源 */
+  planner?: "director" | "rule-based"
+  /** C1 每镜头来源构成 */
+  segments?: { sceneId: number; source: "i2v" | "code"; keyframe?: string; seconds?: number; error?: string }[]
+  /** C1 首帧质量统计（VLM 闭环证据） */
+  keyframes?: { ok: number; fallback: number; vlmPass: number; vlmFail: number; vlmSkip: number; via: string[] }
+  /** C6 分腿诊断汇总 */
+  diag?: { entries: number; errors: number; legs: Record<string, { n: number; errors: number; avgMs: number; lastError?: string }> }
+}
+
+interface FamilyMeta {
+  id: string
+  label: string
+  notes: string
+  modes: string[]
+  seconds: { min: number; max: number }
+  resolutions: string[]
+  remoteCancel: boolean
+  wired: boolean
 }
 
 const STAGE_LABELS: Record<string, string> = {
   queued: "排队中", tts: "TTS 口播合成", spec: "分镜转动画 spec（LLM）",
+  plan: "导演规划分镜（C2 · LLM）", keyframes: "AI 首帧生成（B1 管线）", preview: "分镜预览就绪",
   frames: "逐帧渲染", submit: "提交 AI 模型", poll: "AI 生成中", download: "下载成片",
   encode: "分段编码", concat: "合成 MP4", revise: "剪辑师修订分镜（LLM）", done: "完成", error: "失败",
 }
@@ -73,6 +98,9 @@ const BGM_OPTIONS: { id: string; label: string }[] = [
   { id: "uplift", label: "明快琶音" },
   { id: "tech", label: "科技脉冲" },
   { id: "calm", label: "沉静长音" },
+  { id: "tense", label: "紧张脉冲" },
+  { id: "suspense", label: "悬念长音" },
+  { id: "warm", label: "温暖行进" },
 ]
 
 type VideoStyle = "motion" | "art"
@@ -113,14 +141,21 @@ export function VideoPanel() {
   const [reviseSceneId, setReviseSceneId] = useState<number | null>(null)
   const [feedback, setFeedback] = useState("")
   const videoRef = useRef<HTMLVideoElement>(null)
-  // 设置（agnes 可用性 + 默认通道）
+  // 设置（agnes 可用性 + 默认通道 + C3 协议族能力 + C4 池状态）
   const [agnesReady, setAgnesReady] = useState(false)
   const [settingsChannel, setSettingsChannel] = useState<VideoChannel>("local")
+  const [caps, setCaps] = useState<{ families: FamilyMeta[]; current: FamilyMeta } | null>(null)
+  const [pool, setPool] = useState<{ configured: boolean; accounts: number; videoReady: number; cooldown: number; imageCapacity: number } | null>(null)
+  // C2 预览即所提交：i2v 通道先出 AI 首帧预览，确认后再花 i2v 额度
+  const [previewFirst, setPreviewFirst] = useState(true)
+  // C1 首帧物料（role=video-keyframe；预览画廊与成片页展示）
+  const [keyframeAssets, setKeyframeAssets] = useState<{ id: string; path: string; meta: string }[]>([])
 
   const refresh = useCallback(async () => {
-    const [r, s] = await Promise.all([
+    const [r, s, vr] = await Promise.all([
       fetch("/api/runs").then((x) => x.json()),
       fetch("/api/settings").then((x) => x.json()),
+      fetch("/api/video-runs").then((x) => x.json()).catch(() => null),
     ])
     const doneRuns = (r.runs ?? []).filter((x: RunItem) => (x._count?.articles ?? 0) > 0 || x.status === "done")
     setRuns(doneRuns)
@@ -128,6 +163,11 @@ export function VideoPanel() {
     const ready = settings.agnes.enabled && settings.agnes.accounts.some((a) => a.enabled && a.apiKey)
     setAgnesReady(ready)
     setSettingsChannel(settings.video.channel ?? "local")
+    // C3 能力元数据 + C4 池状态（池空/全熔断显式指引）
+    if (vr && typeof vr === "object" && vr.capabilities) {
+      setCaps(vr.capabilities as { families: FamilyMeta[]; current: FamilyMeta })
+      setPool(vr.agnesPool as { configured: boolean; accounts: number; videoReady: number; cooldown: number; imageCapacity: number })
+    }
     if (!runId && doneRuns.length > 0) setRunId(doneRuns[0].id)
   }, [runId])
 
@@ -145,6 +185,8 @@ export function VideoPanel() {
     const videos = run.assets.filter((a) => a.role === "video-final")
     setVideoAssets(videos)
     setActiveIdx(videos.length - 1)
+    // C1 首帧物料（预览画廊 + 成片页镜头来源标注用）
+    setKeyframeAssets(run.assets.filter((a) => a.role === "video-keyframe" && a.path))
     // 已有分镜（从最近视频 meta 里恢复）
     const withSb = [...videos].reverse().find((v) => {
       try {
@@ -176,7 +218,7 @@ export function VideoPanel() {
   } catch {
     activeMeta = null
   }
-  const rendering = activeMeta ? ["queued", "tts", "spec", "frames", "submit", "poll", "download", "encode", "concat", "revise"].includes(activeMeta.stage) : false
+  const rendering = activeMeta ? ["queued", "tts", "spec", "plan", "keyframes", "frames", "submit", "poll", "download", "encode", "concat", "revise"].includes(activeMeta.stage) : false
   useEffect(() => {
     if (!rendering || !runId) return
     const t = setInterval(() => void loadRun(runId), 2000)
@@ -242,21 +284,23 @@ export function VideoPanel() {
     }
   }
 
-  const doRender = async () => {
+  const doRender = async (override?: { preview?: boolean; reuseKeyframes?: boolean }) => {
     if (!runId || !storyboard) {
       toast({ title: "请先生成视频分镜", variant: "destructive" })
       return
     }
     setBusy("render")
+    const usePreview = override?.preview ?? ((channel === "agnes" || channel === "auto" || channel === "hybrid") && previewFirst)
+    const reuse = override?.reuseKeyframes ?? activeMeta?.stage === "preview"
     try {
       const res = await fetch(`/api/runs/${runId}/actions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "render-video", storyboard, voice, aspect, style, channel, bgm }),
+        body: JSON.stringify({ action: "render-video", storyboard, voice, aspect, style, channel, bgm, preview: usePreview, reuseKeyframes: reuse }),
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error)
-      toast({ title: "成片渲染已开始", description: json.message })
+      toast({ title: usePreview ? "分镜预览已开始" : "成片渲染已开始", description: json.message })
       await loadRun(runId)
     } catch (e) {
       toast({ title: "渲染启动失败", description: (e as Error).message, variant: "destructive" })
@@ -655,33 +699,40 @@ export function VideoPanel() {
                 )
               })}
             </div>
-            {/* AI 模型通道 */}
+            {/* AI 模型通道（C1：AI 首帧 i2v 主轨） */}
             <button
               onClick={() => setChannel(channel === "agnes" ? "local" : "agnes")}
               className={`w-full text-left rounded-lg border p-3 space-y-1.5 transition-colors ${channel === "agnes" ? "border-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/20" : "hover:border-emerald-200"}`}
             >
               <div className="flex items-center gap-1.5 flex-wrap">
                 <Video className="h-4 w-4 text-emerald-600" />
-                <span className="text-xs font-bold">AI 视频模型 · Agnes</span>
+                <span className="text-xs font-bold">AI 首帧 i2v 主轨 · Agnes</span>
                 <Badge variant={agnesReady ? "default" : "secondary"} className={`text-[8px] ${agnesReady ? "bg-emerald-600" : ""}`}>
                   {agnesReady ? "已配置（账号池可用）" : "未配置（设置中心 → Agnes 账号池）"}
                 </Badge>
+                {pool && agnesReady && (
+                  <Badge variant={pool.videoReady > 0 ? "outline" : "secondary"} className={`text-[8px] ${pool.videoReady > 0 ? "text-emerald-700" : "text-amber-600"}`}>
+                    池 {pool.accounts} 号 · 当前可提交 {pool.videoReady}{pool.cooldown > 0 ? ` · ${pool.cooldown} 熔断中` : ""}
+                  </Badge>
+                )}
               </div>
-              <p className="text-[10px] text-muted-foreground leading-snug">agnes-video-2.5-flash（720P · 4-12s）；每账号 1 任务/分钟，失败自动本地兜底{settingsChannel === "auto" ? "；设置中心默认 auto" : ""}</p>
+              <p className="text-[10px] text-muted-foreground leading-snug">
+                导演规划拆分镜（C2）→ B1 管线生成 AI 首帧（与文章配图同风格包，图-文-视频视觉统一）→ VLM 审帧 → keyframe 模式 i2v 动起来 → 字幕烧录 + TTS + BGM{caps ? `；${caps.current.seconds.min}~${caps.current.seconds.max}s · ${caps.current.resolutions.join("/")}` : ""}；失败单镜本地兜底{settingsChannel === "auto" ? "；设置中心默认 auto" : ""}
+              </p>
             </button>
-            {/* 混合通道（P1）：code 主轨 + model 插播 */}
+            {/* 混合通道：code 镜头本地 + model 镜头 i2v */}
             <button
               onClick={() => setChannel(channel === "hybrid" ? "local" : "hybrid")}
               className={`w-full text-left rounded-lg border p-3 space-y-1.5 transition-colors ${channel === "hybrid" ? "border-violet-400 bg-violet-50/50 dark:bg-violet-950/20" : "hover:border-violet-200"}`}
             >
               <div className="flex items-center gap-1.5 flex-wrap">
                 <Blend className="h-4 w-4 text-violet-600" />
-                <span className="text-xs font-bold">混合通道 · code 主轨 + model 插播</span>
+                <span className="text-xs font-bold">混合通道 · code 主轨 + model 镜头 i2v</span>
                 <Badge variant={agnesReady ? "default" : "secondary"} className={`text-[8px] ${agnesReady ? "bg-violet-600" : ""}`}>
                   {agnesReady ? `分镜已标注 ${storyboard?.scenes?.filter((s) => s.render === "model").length ?? 0} 个 model 镜头` : "Agnes 未配置 → 全代码动画"}
                 </Badge>
               </div>
-              <p className="text-[10px] text-muted-foreground leading-snug">按分镜 render 标注智能分发：数据/字排 → 代码动画（确定零错字），实景/情绪 → AI 模型 5~10s 插播，单镜失败自动回落代码动画，成本 ≈ 纯模型 1/3</p>
+              <p className="text-[10px] text-muted-foreground leading-snug">按分镜 render 标注智能分发：数据/字排 → 代码动画（确定零错字），实景/情绪 → AI 首帧 i2v，单镜失败自动回落代码动画，成本 ≈ 纯模型 1/3</p>
             </button>
 
             {/* 音色 + 画幅 + BGM + 渲染按钮 */}
@@ -707,9 +758,26 @@ export function VideoPanel() {
                   ))}
                 </select>
               </div>
-              <Button size="sm" className="h-7 text-[11px] bg-rose-500 hover:bg-rose-600 text-white ml-auto" onClick={doRender} disabled={busy === "render" || rendering}>
+              {(channel === "agnes" || channel === "auto" || channel === "hybrid") && (
+                <button
+                  onClick={() => setPreviewFirst((v) => !v)}
+                  className={`text-[10px] border rounded-full px-2 py-0.5 transition-colors ${previewFirst ? "border-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 font-semibold" : "hover:border-emerald-300 text-muted-foreground"}`}
+                  title="先出 AI 首帧分镜预览供确认，确认后再提交 i2v（不浪费额度）"
+                >
+                  {previewFirst ? "分镜预览先行 ✓" : "直接渲染"}
+                </button>
+              )}
+              <Button size="sm" className="h-7 text-[11px] bg-rose-500 hover:bg-rose-600 text-white ml-auto" onClick={() => doRender()} disabled={busy === "render" || rendering}>
                 {busy === "render" || rendering ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Play className="h-3 w-3 mr-1" />}
-                {channel === "agnes" ? "AI 通道渲染 MP4" : channel === "hybrid" ? "混合通道渲染 MP4" : style === "art" ? "艺术动画渲染 MP4" : "商业片渲染 MP4"}
+                {(channel === "agnes" || channel === "auto" || channel === "hybrid") && previewFirst
+                  ? "生成首帧预览"
+                  : channel === "agnes" || channel === "auto"
+                    ? "AI 首帧 i2v 渲染 MP4"
+                    : channel === "hybrid"
+                      ? "混合通道渲染 MP4"
+                      : style === "art"
+                        ? "艺术动画渲染 MP4"
+                        : "商业片渲染 MP4"}
               </Button>
             </div>
           </CardContent>
@@ -763,10 +831,43 @@ export function VideoPanel() {
                 {activeMeta.ttsNote && <p className="text-[10px] text-muted-foreground">{activeMeta.ttsNote}</p>}
               </div>
             )}
+            {/* C2 预览即所提交：AI 首帧画廊 + 确认后才花 i2v 额度 */}
+            {activeMeta.stage === "preview" && (
+              <div className="space-y-2 rounded-lg border border-emerald-200 bg-emerald-50/40 dark:bg-emerald-950/20 p-2.5">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-[11px] font-semibold text-emerald-700">分镜预览确认区 · {keyframeAssets.length} 张 AI 首帧{activeMeta.planner ? `（${activeMeta.planner === "director" ? "导演规划" : "规则规划"}）` : ""}</span>
+                  <div className="flex items-center gap-1.5">
+                    <Button size="sm" variant="ghost" className="h-6 text-[10px]" onClick={() => doRender({ preview: true, reuseKeyframes: false })} disabled={busy === "render"}>
+                      <RefreshCw className="h-3 w-3 mr-1" />重生成首帧
+                    </Button>
+                    <Button size="sm" className="h-6 text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => doRender({ preview: false, reuseKeyframes: true })} disabled={busy === "render"}>
+                      {busy === "render" ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Play className="h-3 w-3 mr-1" />}确认渲染成片（复用首帧）
+                    </Button>
+                  </div>
+                </div>
+                {activeMeta.aiNote && <p className="text-[10px] text-muted-foreground">{activeMeta.aiNote}</p>}
+                {keyframeAssets.length > 0 && (
+                  <div className="grid grid-cols-3 md:grid-cols-5 gap-1.5">
+                    {keyframeAssets.map((k) => {
+                      let km: { sceneId?: number; vlm?: string; planner?: string } = {}
+                      try { km = JSON.parse(k.meta) } catch { /* ignore */ }
+                      return (
+                        <div key={k.id} className="space-y-0.5">
+                          <img src={k.path} alt={`分镜 ${km.sceneId} 首帧`} className="w-full rounded border" />
+                          <p className="text-[9px] text-muted-foreground text-center truncate">
+                            分镜 {km.sceneId} · VLM {km.vlm === "pass" ? "✓" : km.vlm === "pass-after-retry" ? "✓重生" : km.vlm === "failed" ? "✗" : "–"}
+                          </p>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
             {activeMeta.stage === "error" && (
               <div className="rounded-lg border border-red-200 bg-red-50/50 dark:bg-red-950/20 px-3 py-2">
                 <p className="text-[11px] text-red-600">渲染失败：{activeMeta.error}</p>
-                <Button size="sm" variant="outline" className="h-6 text-[10px] mt-1" onClick={doRender} disabled={busy === "render"}>重试整片渲染</Button>
+                <Button size="sm" variant="outline" className="h-6 text-[10px] mt-1" onClick={() => doRender()} disabled={busy === "render"}>重试整片渲染</Button>
               </div>
             )}
             {activeMeta.stage === "done" && activeVideo.path && (
@@ -844,8 +945,18 @@ export function VideoPanel() {
                     {activeMeta.audioMode === "tts" ? `${TTS_VOICES.find((v) => v.id === activeMeta?.voice)?.label ?? activeMeta.voice} 口播` : activeMeta.audioMode === "partial" ? "部分口播" : "静音降级（字幕可读）"}
                   </Badge>
                   <Badge variant="outline" className="text-[9px]">
-                    {activeMeta.channel === "agnes" ? "Agnes AI 模型" : activeMeta.channel === "hybrid" ? `混合（${activeMeta.codeScenes ?? 0}code+${activeMeta.modelScenes ?? 0}model）` : activeMeta.style === "art" ? "艺术动画" : "商业片"} · {activeMeta.aspect}
+                    {activeMeta.channel === "agnes" ? `AI 首帧 i2v 主轨${activeMeta.resolution ? ` · ${activeMeta.resolution}` : ""}` : activeMeta.channel === "hybrid" ? `混合（${activeMeta.codeScenes ?? 0}code+${activeMeta.modelScenes ?? 0}model·i2v）` : activeMeta.style === "art" ? "艺术动画" : "商业片"} · {activeMeta.aspect}
                   </Badge>
+                  {activeMeta.planner && (
+                    <Badge variant="outline" className={`text-[9px] ${activeMeta.planner === "director" ? "text-emerald-700" : "text-amber-600"}`}>
+                      {activeMeta.planner === "director" ? "导演规划（LLM）" : "规则规划降级"}
+                    </Badge>
+                  )}
+                  {activeMeta.segments && activeMeta.segments.length > 0 && (
+                    <Badge variant="outline" className="text-[9px] text-emerald-700">
+                      i2v {activeMeta.segments.filter((s) => s.source === "i2v").length}/{activeMeta.segments.length} 镜
+                    </Badge>
+                  )}
                   {activeMeta.bgm && activeMeta.bgm !== "none" && (
                     <Badge variant="outline" className="text-[9px] gap-0.5"><Music4 className="h-2.5 w-2.5" />{BGM_OPTIONS.find((b) => b.id === activeMeta.bgm)?.label ?? activeMeta.bgm}</Badge>
                   )}
@@ -853,11 +964,29 @@ export function VideoPanel() {
                   <a href={activeVideo.path} download className="text-[10px] text-amber-600 hover:underline flex items-center gap-0.5">
                     <Download className="h-3 w-3" />下载 MP4
                   </a>
-                  <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={doRender} disabled={busy === "render"}>
+                  <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => doRender()} disabled={busy === "render"}>
                     <RefreshCw className="h-3 w-3 mr-1" />整体重新渲染
                   </Button>
                 </div>
                 {activeMeta.audioMode !== "tts" && activeMeta.ttsNote && <p className="text-[10px] text-muted-foreground">{activeMeta.ttsNote}</p>}
+                {activeMeta.stage === "done" && activeMeta.segments && activeMeta.segments.length > 0 && (
+                  <div className="flex items-center gap-1 flex-wrap text-[10px] text-muted-foreground">
+                    <span className="font-semibold">镜头来源：</span>
+                    {activeMeta.segments.map((sg, i) => (
+                      <span key={i} className={`border rounded-full px-1.5 py-0.5 ${sg.source === "i2v" ? "border-emerald-300 text-emerald-700" : "border-slate-300"}`}>
+                        #{sg.sceneId} {sg.source === "i2v" ? "i2v" : "code"}{sg.seconds ? ` ${sg.seconds}s` : ""}{sg.error ? " ✗" : ""}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {activeMeta.stage === "done" && activeMeta.keyframes && (
+                  <p className="text-[10px] text-muted-foreground">
+                    AI 首帧 {activeMeta.keyframes.ok} 张{activeMeta.keyframes.fallback > 0 ? ` · 兜底 ${activeMeta.keyframes.fallback} 张` : ""} · VLM 通过 {activeMeta.keyframes.vlmPass}（未过 {activeMeta.keyframes.vlmFail} · 未质检 {activeMeta.keyframes.vlmSkip}）{activeMeta.keyframes.via.length ? ` · 通道 ${activeMeta.keyframes.via.join("/")}` : ""}
+                  </p>
+                )}
+                {activeMeta.stage === "done" && activeMeta.diag && activeMeta.diag.errors > 0 && (
+                  <p className="text-[10px] text-amber-600">合成诊断：{activeMeta.diag.entries} 条留痕 · {activeMeta.diag.errors} 处失败（{Object.entries(activeMeta.diag.legs).filter(([, v]) => v.errors > 0).map(([k, v]) => `${k}×${v.errors}`).join(" ")}）</p>
+                )}
               </>
             )}
           </CardContent>

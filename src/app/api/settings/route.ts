@@ -96,6 +96,8 @@ export async function PUT(req: Request) {
       }
       if (v.resolution === "720P" || v.resolution === "1080P") patch.resolution = v.resolution
       if (v.aspect === "9:16" || v.aspect === "16:9") patch.aspect = v.aspect
+      // C5 字幕烧录预设（i2v 片段；白名单三档）
+      if (v.subtitleStyle === "clean" || v.subtitleStyle === "strong" || v.subtitleStyle === "soft") patch.subtitleStyle = v.subtitleStyle
       await saveSetting("video", patch)
       const fresh = await getSettings(true)
       return NextResponse.json({
@@ -108,7 +110,7 @@ export async function PUT(req: Request) {
               : patch.channel === "local"
                 ? "视频通道：本地双风格渲染（motion 商业片 / art 艺术动画）"
                 : patch.model !== undefined || patch.resolution !== undefined || patch.aspect !== undefined
-                  ? "视频配置已保存（模型 / 分辨率 / 画幅 / 秒数全套，下一次生成请求即携带）"
+                  ? "视频配置已保存（模型 / 分辨率 / 画幅 / 秒数 / 字幕样式全套，下一次生成请求即携带）"
                   : "视频配置已保存",
       })
     }

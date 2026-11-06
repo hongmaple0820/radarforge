@@ -2,8 +2,12 @@ import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { createVideoRun, executeVideoRunInBackground, generateDirectStoryboard } from "@/lib/runtime/video-runs"
 import type { DirectionBrief } from "@/lib/runtime/skills/radar-rewrite"
+import { videoFamilyForModel, videoFamilyList } from "@/lib/gateway/providers/video/family"
+import { agnesPoolStatus } from "@/lib/gateway/providers/agnes/pool"
+import { getSettings } from "@/lib/settings"
 
 // GET /api/video-runs —— 视频直出 run 列表（选题直出线入口）
+// C3/C4：附带协议族能力元数据（UI 提前拦截分辨率/时长）+ Agnes 池实时状态（池空显式指引）
 export async function GET() {
   try {
     const runs = await db.agentRun.findMany({
@@ -12,7 +16,15 @@ export async function GET() {
       take: 30,
       include: { _count: { select: { assets: true } } },
     })
-    return NextResponse.json({ runs })
+    const settings = await getSettings()
+    return NextResponse.json({
+      runs,
+      capabilities: {
+        families: videoFamilyList(),
+        current: videoFamilyForModel(settings.video.model || settings.agnes.videoModel),
+      },
+      agnesPool: agnesPoolStatus(),
+    })
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 })
   }

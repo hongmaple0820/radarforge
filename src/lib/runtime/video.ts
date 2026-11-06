@@ -1,20 +1,25 @@
 // ============================================================
-// video.ts —— 视频成片渲染引擎 v3（四项能力）
+// video.ts —— 视频成片渲染引擎 v4（六项能力，方案线 C）
 // 通道 A（motion 商业片）：storyboard → SVG 场景卡（sharp 栅格化，方向调色板）
 //   → 每场景 TTS 口播 → ffmpeg 分段（淡入淡出）→ concat
 // 通道 B（art 艺术动画）：storyboard → LLM 转 clip spec（8 语法×8 色板）
 //   → huashu-art-motion Canvas 引擎（Playwright 逐帧）→ 分段 → 混音 → concat
-// 通道 C（agnes AI 模型）：storyboard → agnes-video 提交/轮询/下载
-//   → 混音 → concat（学 dsh 协议族；每账号 1 任务/分钟）
+// 通道 C（agnes AI 模型 · C1 AI 首帧主轨）：导演规划器拆分镜（C2）
+//   → 每镜 B1 管线生成 AI 首帧（与文章配图同风格包）→ VLM 审帧（B3 闭环）
+//   → agnes-video keyframe 模式 i2v（首帧+运动描述）→ 字幕烧录（C5 三预设）
+//   → 混音合成；失败降级链每镜留痕（segments.source）。
+// 通道 D（hybrid 混合）：model 镜头走 C1 i2v，code 镜头本地代码动画。
 // 指着改（学 huashu-motion studio）：渲染留存场景分段 → 单场景局部重渲染
 //   → concat 新版本成片 → 版本树 + 改动留痕（Asset.meta.revisions）
-// BGM 本地合成（作曲配乐务实版）：ffmpeg aevalsrc 三预设 + amix 口播垫底
-// TTS 端点不可达时诚实降级为静音+计划时长，字幕可读。
-// Asset.meta 全程留痕（stage / percent / style / channel / version / bgm）。
+// BGM 本地合成（C5 六预设：无版权，ffmpeg aevalsrc）+ TTS 失败诚实降级。
+// C6 合成诊断：各腿分相计时留痕（Asset.meta.diag + video-diagnostics 环形缓冲）。
+// 分辨率：720P/1080P 由设置卡驱动（C3 协议族能力元数据闸门）。
+// Asset.meta 全程留痕（stage / percent / style / channel / version / bgm / planner / segments）。
 // ============================================================
 
 import { db } from "@/lib/db"
 import { execFile } from "child_process"
+import { existsSync } from "fs"
 import { copyFile, mkdir, rm, stat, writeFile } from "fs/promises"
 import { promisify } from "util"
 import path from "path"
@@ -27,6 +32,25 @@ import { registry } from "@/lib/gateway/registry"
 import { getSettings } from "@/lib/settings"
 import { extractJson } from "./json"
 import { mustResolve } from "@/lib/media/binaries"
+import { planShots, type ShotPlan, type VideoShot } from "./video-director"
+import { diagRecord, diagRun, diagSummary } from "./video-diagnostics"
+import { directVideoKeyframe } from "./illustration-director"
+import { generateImage } from "@/lib/gateway/providers/zai-image"
+import { vlmCheckImage } from "@/lib/gateway/vlm"
+import { getImageStyle } from "./skills/radar-image"
+import { videoFamilyForModel } from "@/lib/gateway/providers/video/family"
+import {
+  BGM_PRESETS,
+  BGM_RECIPES,
+  dimsFor,
+  scaledLayout,
+  subtitleFilters,
+  wrapCJK,
+  type BgmPreset,
+  type Layout,
+  type SubtitleStyle,
+  type VideoResolution,
+} from "./video-presets"
 
 const execFileP = promisify(execFile)
 
@@ -35,14 +59,30 @@ const TMP_ROOT = "/home/z/my-project/.videotmp"
 
 export type VideoAspect = "9:16" | "16:9"
 export type VideoStyle = "motion" | "art"
-/** local=本地代码动画｜agnes=全模型｜auto=可用则 agnes｜hybrid=混合通道（P1：按分镜 render 标注分发，code 为主轨、model 补 b-roll） */
+/** local=本地代码动画｜agnes=AI 模型（C1：AI 首帧 i2v 主轨）｜auto=可用则 agnes｜hybrid=混合通道（model 镜头 i2v + code 镜头本地） */
 export type VideoChannel = "local" | "agnes" | "auto" | "hybrid"
-export type BgmPreset = "none" | "uplift" | "tech" | "calm"
+// C5 预设层下沉 video-presets.ts（纯函数可离线自测）；此处 re-export 保公共 API 不变
+export { BGM_PRESETS, SUBTITLE_STYLES, dimsFor, scaledLayout } from "./video-presets"
+export type { BgmPreset, SubtitleStyle, VideoResolution } from "./video-presets"
 
-export const BGM_PRESETS: Record<Exclude<BgmPreset, "none">, { label: string; desc: string }> = {
-  uplift: { label: "明快琶音", desc: "大三和弦垫 + 4Hz 律动（本地合成，无版权）" },
-  tech: { label: "科技脉冲", desc: "低频正弦 + 2Hz 脉冲调制（本地合成）" },
-  calm: { label: "沉静长音", desc: "纯五度长音 + 慢波动 + 回声（本地合成）" },
+/** C1 每镜头来源留痕（成片元数据标注通道构成；验收「i2v 占比 ≥80%」的凭证） */
+export interface SegmentSource {
+  sceneId: number
+  source: "i2v" | "code"
+  /** i2v 首帧来源：b1(director/legacy) / code-card / cached */
+  keyframe?: string
+  seconds?: number
+  error?: string
+}
+
+/** C1 首帧质量统计（VLM 闭环证据） */
+export interface KeyframeStats {
+  ok: number
+  fallback: number
+  vlmPass: number
+  vlmFail: number
+  vlmSkip: number
+  via: string[]
 }
 
 export interface SceneRevision {
@@ -53,7 +93,22 @@ export interface SceneRevision {
 }
 
 export interface RenderProgress {
-  stage: "queued" | "tts" | "spec" | "frames" | "submit" | "poll" | "download" | "encode" | "concat" | "revise" | "done" | "error"
+  stage:
+    | "queued"
+    | "tts"
+    | "spec"
+    | "plan" // C2 导演规划
+    | "keyframes" // C1 AI 首帧生成
+    | "preview" // C2 预览即所提交：首帧就绪等确认（未花 i2v 额度）
+    | "frames"
+    | "submit"
+    | "poll"
+    | "download"
+    | "encode"
+    | "concat"
+    | "revise"
+    | "done"
+    | "error"
   percent: number
   sceneDone: number
   sceneTotal: number
@@ -84,6 +139,16 @@ export interface RenderProgress {
   /** 混合通道统计：代码动画 / AI 模型镜头数（成本与验收证据） */
   codeScenes?: number
   modelScenes?: number
+  /** C5 分辨率（720P/1080P；协议族能力闸门后的实际档位） */
+  resolution?: VideoResolution
+  /** C2 规划器来源：director=LLM 分镜规划 / rule-based=规则降级 */
+  planner?: "director" | "rule-based"
+  /** C1 每镜头来源构成（i2v/code + 失败段定位） */
+  segments?: SegmentSource[]
+  /** C1 首帧质量统计（VLM 闭环证据） */
+  keyframes?: KeyframeStats
+  /** C6 合成诊断分腿汇总（完成时写入；环形缓冲全量在内存态） */
+  diag?: { entries: number; errors: number; legs: Record<string, { n: number; errors: number; avgMs: number; lastError?: string }> }
 }
 
 // ---------- 文本工具 ----------
@@ -92,28 +157,7 @@ function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
 }
 
-/** CJK 按字符数折行（无空格语义），返回至多 maxLines 行 */
-function wrapCJK(text: string, max: number, maxLines: number): string[] {
-  const clean = text.replace(/\s+/g, " ").trim()
-  if (!clean) return []
-  const lines: string[] = []
-  let cur = ""
-  for (const ch of clean) {
-    if (cur.length >= max) {
-      lines.push(cur)
-      cur = ""
-      if (lines.length >= maxLines) break
-    }
-    cur += ch
-  }
-  if (cur && lines.length < maxLines) lines.push(cur)
-  if (lines.length === maxLines && clean.length > max * maxLines) {
-    lines[maxLines - 1] = lines[maxLines - 1].slice(0, -1) + "…"
-  }
-  return lines.length > 0 ? lines : [clean.slice(0, max)]
-}
-
-// ---------- 场景卡 SVG（motion 商业片线，品牌化设计，两档画幅） ----------
+// ---------- 场景卡 SVG（motion 商业片线，品牌化设计，两档画幅；布局/缩放见 video-presets） ----------
 
 /** 方向调色板：从 storyboard.direction 派生（无方向时保持 amber 默认）
  *  注意：背景仅接受深色 base（亮度<0.55），浅色方向自动回退深色底保证文字可读 */
@@ -141,48 +185,7 @@ function paletteFor(sb: Storyboard): ScenePalette {
   }
 }
 
-interface Layout {
-  w: number
-  h: number
-  brandY: number
-  titleFont: number
-  titleLh: number
-  titleWrap: number
-  subFont: number
-  subLh: number
-  subWrap: number
-  subY: number
-  hookFont: number
-  hookY: number
-  narrFont: number
-  narrLh: number
-  narrWrap: number
-  narrY: number
-  dotsY: number
-  footerY: number
-}
-
-const LAYOUTS: Record<VideoAspect, Layout> = {
-  "9:16": {
-    w: 720, h: 1280, brandY: 96,
-    titleFont: 58, titleLh: 76, titleWrap: 10,
-    subFont: 64, subLh: 84, subWrap: 10, subY: 560,
-    hookFont: 30, hookY: 700,
-    narrFont: 26, narrLh: 40, narrWrap: 22, narrY: 900,
-    dotsY: 1140, footerY: 1204,
-  },
-  "16:9": {
-    w: 1280, h: 720, brandY: 64,
-    titleFont: 48, titleLh: 62, titleWrap: 18,
-    subFont: 54, subLh: 68, subWrap: 16, subY: 330,
-    hookFont: 26, hookY: 430,
-    narrFont: 22, narrLh: 34, narrWrap: 40, narrY: 520,
-    dotsY: 640, footerY: 688,
-  },
-}
-
-function sceneSvg(scene: StoryboardScene, i: number, n: number, sb: Storyboard, aspect: VideoAspect): string {
-  const L = LAYOUTS[aspect]
+function sceneSvg(scene: StoryboardScene, i: number, n: number, sb: Storyboard, L: Layout): string {
   const P = paletteFor(sb)
   const cx = L.w / 2
   const isFirst = i === 0
@@ -278,27 +281,6 @@ async function ttsWav(narration: string, voice: string, outFile: string): Promis
 
 // ---------- BGM 本地合成（作曲配乐务实版：ffmpeg 正弦合成，无版权问题） ----------
 
-const BGM_RECIPES: Record<Exclude<BgmPreset, "none">, { expr: string; chain: string; volume: number }> = {
-  // C 大三和弦 + 八度垫（262/330/392/524Hz），4Hz 律动调制 + 空间回声
-  uplift: {
-    expr: "0.13*sin(262*2*PI*t)+0.10*sin(330*2*PI*t)+0.08*sin(392*2*PI*t)+0.06*sin(524*2*PI*t)",
-    chain: "tremolo=f=4:d=0.55,aecho=0.6:0.35:120|180:0.22|0.15,afade=t=in:st=0:d=1.2",
-    volume: 0.24,
-  },
-  // 低频双正弦（110/220Hz），2Hz 脉冲感
-  tech: {
-    expr: "0.16*sin(110*2*PI*t)+0.09*sin(220*2*PI*t)",
-    chain: "tremolo=f=2:d=0.75,aecho=0.5:0.3:80|160:0.18|0.12,afade=t=in:st=0:d=0.8",
-    volume: 0.22,
-  },
-  // 纯五度长音（196/294/392Hz），慢波动 + 长回声
-  calm: {
-    expr: "0.11*sin(196*2*PI*t)+0.09*sin(294*2*PI*t)+0.07*sin(392*2*PI*t)",
-    chain: "tremolo=f=0.6:d=0.3,aecho=0.6:0.45:240|380:0.28|0.2,afade=t=in:st=0:d=1.5",
-    volume: 0.18,
-  },
-}
-
 /** 合成 BGM wav（时长对齐成片，尾部淡出） */
 async function synthesizeBgm(preset: Exclude<BgmPreset, "none">, seconds: number, outFile: string): Promise<void> {
   const r = BGM_RECIPES[preset]
@@ -366,7 +348,17 @@ export function startVideoRenderInBackground(
   runId: string,
   assetId: string,
   storyboard: Storyboard,
-  opts: { voice: string; aspect: VideoAspect; style?: VideoStyle; channel?: VideoChannel; bgm?: BgmPreset },
+  opts: {
+    voice: string
+    aspect: VideoAspect
+    style?: VideoStyle
+    channel?: VideoChannel
+    bgm?: BgmPreset
+    /** C2 预览即所提交：只出分镜计划 + AI 首帧（不花 i2v 额度） */
+    preview?: boolean
+    /** 复用上一轮 preview 生成的首帧（确认后继续渲染时传 true） */
+    reuseKeyframes?: boolean
+  },
 ): void {
   const key = `${runId}:${assetId}`
   if (inflightVideo.has(key)) return
@@ -397,51 +389,104 @@ async function convertToArtSpecs(storyboard: Storyboard, aspect: VideoAspect): P
   }))
 }
 
-/** Agnes 通道：单场景 提交→轮询→下载 */
+/** C1 首帧结果（生成链留痕：B1 导演→生图→裁切，或 code-card 兜底，或 preview 缓存复用） */
+interface KeyframeResult {
+  file: string
+  /** b1(director) / b1(legacy) / code-card / cached */
+  source: string
+  vlm: "pass" | "pass-after-retry" | "failed" | "skipped"
+  via?: string
+  note?: string
+}
+
+/** Agnes 通道：单场景 提交→轮询→下载（C1：keyframe i2v + C6 三腿分相诊断） */
 async function agnesSceneToMp4(
   scene: StoryboardScene,
   seconds: number,
   aspect: VideoAspect,
   outFile: string,
   onWait: (waited: number) => void,
+  opts: { runId: string; sceneId: number; firstFrame?: string; motionPrompt?: string },
 ): Promise<string> {
   const p = registry.get("agnes-video")
   if (p.kind !== "VIDEO" || !p.submitVideo || !p.getVideoTask) throw new Error("agnes-video provider 未就绪")
-  const prompt = `${scene.visual}。口播要点：${scene.narration}`.slice(0, 500)
-  const task = await p.submitVideo({
-    prompt,
-    mode: "text",
-    seconds,
-    aspectRatio: aspect === "9:16" ? "9:16" : "16:9",
-  })
+  // C1：keyframe 模式用导演规划的运动描述（不再是「visual+口播截断 500 字」的拼凑）；text 模式保留旧拼接作降级
+  const prompt = (opts.motionPrompt ?? `${scene.visual}。口播要点：${scene.narration}`).slice(0, 500)
+  const mode = opts.firstFrame ? "keyframe" : "text"
+  const task = await diagRun(
+    opts.runId,
+    "submit",
+    () =>
+      p.submitVideo!({
+        prompt,
+        mode,
+        seconds,
+        aspectRatio: aspect === "9:16" ? "9:16" : "16:9",
+        ...(opts.firstFrame ? { firstFrame: opts.firstFrame } : {}),
+      }),
+    { sceneId: opts.sceneId, detail: mode },
+  )
   const deadline = Date.now() + 10 * 60_000
+  const pollT0 = Date.now()
   let waited = 0
+  let resultUrl: string | null = null
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 8000))
     waited += 8
     onWait(waited)
     const t = await p.getVideoTask(task.remoteTaskId ?? task.id)
     if (t.status === "completed" && t.resultUrl) {
-      const res = await fetch(t.resultUrl, { signal: AbortSignal.timeout(120_000) })
+      resultUrl = t.resultUrl
+      break
+    }
+    if (t.status === "failed") {
+      diagRecord(opts.runId, "poll", false, Date.now() - pollT0, { sceneId: opts.sceneId, error: t.error ?? "生成失败" })
+      throw new Error(`Agnes 生成失败：${t.error ?? "未知"}`)
+    }
+  }
+  if (!resultUrl) {
+    diagRecord(opts.runId, "poll", false, Date.now() - pollT0, { sceneId: opts.sceneId, error: "轮询超时（10 分钟）" })
+    throw new Error("Agnes 轮询超时（10 分钟）")
+  }
+  diagRecord(opts.runId, "poll", true, Date.now() - pollT0, { sceneId: opts.sceneId, detail: `waited ${waited}s` })
+  await diagRun(
+    opts.runId,
+    "download",
+    async () => {
+      const res = await fetch(resultUrl!, { signal: AbortSignal.timeout(120_000) })
       if (!res.ok) throw new Error(`下载成片失败：HTTP ${res.status}`)
       const buf = Buffer.from(new Uint8Array(await res.arrayBuffer()))
       if (buf.length < 10_000) throw new Error(`成片过小（${buf.length}B）`)
       await writeFile(outFile, buf)
-      return outFile
-    }
-    if (t.status === "failed") throw new Error(`Agnes 生成失败：${t.error ?? "未知"}`)
-  }
-  throw new Error("Agnes 轮询超时（10 分钟）")
+    },
+    { sceneId: opts.sceneId },
+  )
+  return outFile
 }
 
-/** 分段混音：视频段 + 音频（无音 → 静音轨）→ 统一参数分段 */
-async function muxSegment(videoIn: string, audioIn: string | null, dur: number, outFile: string): Promise<void> {
+/** 分段混音：视频段 + 音频（无音 → 静音轨）→ 统一参数分段
+ *  C5：i2v 片段可烧录字幕（三预设）；C1：口播长于 i2v 上限时定格尾帧延长（tpad clone） */
+interface MuxSegmentOpts {
+  subtitle?: { scene: StoryboardScene; style: SubtitleStyle; dims: { w: number; h: number } }
+  pad?: boolean
+}
+
+async function muxSegment(videoIn: string, audioIn: string | null, dur: number, outFile: string, opts: MuxSegmentOpts = {}): Promise<void> {
+  const vfParts: string[] = []
+  if (opts.pad) {
+    const rawDur = await ffprobeSeconds(videoIn)
+    if (Number.isFinite(rawDur) && rawDur > 0.5 && rawDur < dur - 0.3) {
+      vfParts.push(`tpad=stop_mode=clone:stop_duration=${(dur - rawDur).toFixed(2)}`)
+    }
+  }
+  if (opts.subtitle) vfParts.push(...subtitleFilters(opts.subtitle.scene, opts.subtitle.style, opts.subtitle.dims))
+  vfParts.push("format=yuv420p")
   const args = [
     "-y", "-i", videoIn,
     ...(audioIn ? ["-i", audioIn] : ["-f", "lavfi", "-t", dur.toFixed(2), "-i", "anullsrc=r=24000:cl=mono"]),
     "-map", "0:v:0", "-map", "1:a:0",
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-    "-vf", "format=yuv420p",
+    "-vf", vfParts.join(","),
     "-c:a", "aac", "-b:a", "96k", "-ar", "24000", "-ac", "1",
     "-t", dur.toFixed(2), "-shortest",
     outFile,
@@ -453,9 +498,16 @@ async function renderVideo(
   runId: string,
   assetId: string,
   storyboard: Storyboard,
-  opts: { voice: string; aspect: VideoAspect; style?: VideoStyle; channel?: VideoChannel; bgm?: BgmPreset },
+  opts: {
+    voice: string
+    aspect: VideoAspect
+    style?: VideoStyle
+    channel?: VideoChannel
+    bgm?: BgmPreset
+    preview?: boolean
+    reuseKeyframes?: boolean
+  },
 ): Promise<void> {
-  const L = LAYOUTS[opts.aspect]
   const scenes = storyboard.scenes
   const n = scenes.length
   const style: VideoStyle = opts.style ?? "motion"
@@ -468,7 +520,12 @@ async function renderVideo(
   // ---- 通道解析（settings 默认 + 请求覆盖；auto = agnes 可用则 agnes）----
   const settings = await getSettings(true)
   const channelChoice: VideoChannel = opts.channel ?? settings.video.channel
+  // C3 协议族能力闸门：模型非 agnes 族（如 doubao-seedance-*，本期未接 key）→ 显式降级本地并留痕，不提交吃 400
+  const videoModel = settings.video.model || settings.agnes.videoModel
+  const familyMeta = videoFamilyForModel(videoModel)
+  const familyOk = familyMeta.id === "agnes" && familyMeta.wired
   const agnesReady = (() => {
+    if (!familyOk) return false
     const p = registry.get("agnes-video")
     return p.kind === "VIDEO" && p.isConfigured() && Boolean(p.submitVideo)
   })()
@@ -478,7 +535,12 @@ async function renderVideo(
   else if (channelChoice === "auto") channel = agnesReady ? "agnes" : "local"
   else channel = "local"
   let aiNote = ""
-  if (channelChoice === "agnes" && !agnesReady) {
+  if (channelChoice !== "local" && !familyOk) {
+    if (channelChoice === "agnes") channel = "local"
+    aiNote = `视频模型「${videoModel}」属于${familyMeta.label}（本期未接 key）→ ${
+      channelChoice === "hybrid" ? "model 镜头将全部本地渲染" : "已回退本地渲染"
+    }；换用 agnes-* 模型可启用 AI 首帧 i2v 主轨`
+  } else if (channelChoice === "agnes" && !agnesReady) {
     channel = "local"
     aiNote = "Agnes 未配置（账号池为空或未启用）→ 已回退本地渲染"
   } else if (channelChoice === "auto" && !agnesReady) {
@@ -486,7 +548,17 @@ async function renderVideo(
   } else if (channelChoice === "hybrid" && !agnesReady) {
     aiNote = "混合通道：Agnes 未配置 → 全部代码动画渲染（配置 Agnes 账号池后 model 镜头自动启用）"
   }
-  // 混合通道的分发判定（P1：LLM 已在分镜 JSON 标注 render=code|model）
+  // C5 分辨率：能力元数据闸门后的实际档位（族不支持 1080P 时降至 720P）
+  const resolution: VideoResolution = familyMeta.resolutions.includes(settings.video.resolution) ? settings.video.resolution : "720P"
+  const dims = dimsFor(opts.aspect, resolution)
+  const L = scaledLayout(opts.aspect, resolution)
+  // C5 字幕预设（i2v 片段烧录；非法值回 clean）
+  const subtitleStyle: SubtitleStyle = ["clean", "strong", "soft"].includes(
+    (settings.video as { subtitleStyle?: string }).subtitleStyle ?? "",
+  )
+    ? ((settings.video as { subtitleStyle?: string }).subtitleStyle as SubtitleStyle)
+    : "clean"
+  // 混合通道的分发判定（P1：LLM 已在分镜 JSON 标注 render=code|model；C1 后 model 镜头走 i2v）
   const agnesForScene = (i: number): boolean => {
     if (channel === "agnes") return true
     if (channel !== "hybrid") return false
@@ -498,7 +570,7 @@ async function renderVideo(
   const progress: RenderProgress = {
     stage: "queued", percent: 0, sceneDone: 0, sceneTotal: n,
     audioMode: "pending", voice: opts.voice, aspect: opts.aspect,
-    style: channel === "agnes" ? style : style, channel, version,
+    style: channel === "agnes" ? style : style, channel, version, resolution,
     ...(aiNote ? { aiNote } : {}),
     ...(bgm !== "none" ? { bgm } : {}),
     ...(channel === "hybrid" ? { codeScenes: codeSceneCount, modelScenes: agnesReady ? modelSceneCount : 0 } : {}),
@@ -519,47 +591,216 @@ async function renderVideo(
     await mkdir(tmp, { recursive: true })
     await mkdir(ASSET_DIR, { recursive: true })
 
-    // ===== Stage 1: TTS 口播（失败 → 静音降级，字幕可读） =====
-    saveProgress({ stage: "tts" })
+    // ===== Stage 1: TTS 口播（失败 → 字幕主导模式降级；preview 模式跳过——不花配额） =====
     let ttsOk = 0
     let ttsDown = false
     let ttsNote = ""
     const durations: number[] = []
     const audioFiles: string[] = []
-    for (let i = 0; i < n; i++) {
-      const wav = path.join(tmp, `a${i}.wav`)
-      let ok = false
-      if (!ttsDown && scenes[i].narration.trim()) {
-        ok = await ttsWav(scenes[i].narration, opts.voice, wav)
-        if (!ok) {
-          ttsDown = true
-          ttsNote = "TTS 端点不可达（已静音降级：按分镜计划时长出片，口播字幕已烧录，可正常观看）"
-        }
-      }
-      if (ok) {
-        ttsOk++
-        durations.push(Math.max(1, await ffprobeSeconds(wav)))
-        audioFiles.push(wav)
-      } else {
-        const planned =
-          channel === "agnes"
-            ? settings.video.secondsPerScene
-            : channel === "hybrid" && agnesForScene(i)
-              ? Math.min(10, Math.max(5, scenes[i].seconds)) // model 镜头 5~10s 插播（P1 混合通道）
-              : Math.min(15, Math.max(2, scenes[i].seconds))
-        durations.push(planned)
+    if (opts.preview) {
+      for (let i = 0; i < n; i++) {
+        durations.push(Math.min(15, Math.max(2, scenes[i].seconds)))
         audioFiles.push("")
       }
-      saveProgress({ sceneDone: i + 1, percent: Math.round(5 + (25 * (i + 1)) / n) })
+      saveProgress({ audioMode: "pending", ttsNote: "预览模式：跳过 TTS（确认渲染成片时再合成口播）" })
+    } else {
+      saveProgress({ stage: "tts" })
+      for (let i = 0; i < n; i++) {
+        const wav = path.join(tmp, `a${i}.wav`)
+        let ok = false
+        if (!ttsDown && scenes[i].narration.trim()) {
+          ok = await diagRun(runId, "tts", () => ttsWav(scenes[i].narration, opts.voice, wav), { sceneId: scenes[i].id })
+          if (!ok) {
+            ttsDown = true
+            ttsNote = "TTS 端点不可达 → 已降级「字幕主导模式」：按分镜计划时长出片、字幕已烧录可正常观看；口播就绪后点「重新渲染」可恢复配音"
+          }
+        }
+        if (ok) {
+          ttsOk++
+          durations.push(Math.max(1, await ffprobeSeconds(wav)))
+          audioFiles.push(wav)
+        } else {
+          const planned =
+            channel === "agnes"
+              ? settings.video.secondsPerScene
+              : channel === "hybrid" && agnesForScene(i)
+                ? Math.min(10, Math.max(5, scenes[i].seconds)) // model 镜头 5~10s 插播（P1 混合通道）
+                : Math.min(15, Math.max(2, scenes[i].seconds))
+          durations.push(planned)
+          audioFiles.push("")
+        }
+        saveProgress({ sceneDone: i + 1, percent: Math.round(5 + (25 * (i + 1)) / n) })
+      }
     }
     saveProgress({
-      audioMode: ttsOk === n ? "tts" : ttsOk > 0 ? "partial" : "muted",
-      ttsNote: ttsOk === n ? "全部分镜 TTS 口播完成" : ttsNote || `${ttsOk}/${n} 分镜有口播`,
+      audioMode: ttsOk === n ? "tts" : ttsOk > 0 ? "partial" : opts.preview ? "pending" : "muted",
+      ttsNote: opts.preview ? "预览模式：跳过 TTS（确认渲染成片时再合成口播）" : ttsOk === n ? "全部分镜 TTS 口播完成" : ttsNote || `${ttsOk}/${n} 分镜有口播`,
       sceneDone: 0,
     })
 
-    // ===== Stage 2: 分段生成（四通道分叉：agnes / hybrid / art / motion） =====
+    // ===== Stage 1.5: C1 AI 首帧主轨（C2 导演规划 → B1 首帧生成 → B3 VLM 审帧闭环） =====
+    // preview 或任一 i2v 镜头时执行；hybrid 只为 model 镜头生成（code 镜头本地确定零错字）
+    const wantI2v = (i: number): boolean =>
+      opts.preview ? true : channel === "agnes" ? true : channel === "hybrid" ? agnesForScene(i) : false
+    const anyI2v = scenes.some((_, i) => wantI2v(i))
+    let plan: ShotPlan | null = null
+    const keyframes: (KeyframeResult | null)[] = new Array(n).fill(null)
+    const keyframeStats: KeyframeStats = { ok: 0, fallback: 0, vlmPass: 0, vlmFail: 0, vlmSkip: 0, via: [] }
+    if (anyI2v) {
+      // -- C2 导演规划（LLM 拆结构化分镜计划：首帧提示词中英 + 运动描述；失败规则降级留痕）--
+      saveProgress({ stage: "plan", percent: 27, aiNote: `导演规划中：为 ${scenes.filter((_, i) => wantI2v(i)).length} 个 i2v 镜头拆分镜计划（首帧提示词+运动描述）…` })
+      plan = await diagRun(
+        runId,
+        "plan",
+        () =>
+          planShots({
+            title: storyboard.title,
+            hook: storyboard.hook,
+            aspect: opts.aspect,
+            secondsRange: familyMeta.seconds,
+            scenes: scenes.map((s) => ({ id: s.id, seconds: s.seconds, visual: s.visual, narration: s.narration, subtitle: s.subtitle })),
+          }),
+      )
+      saveProgress({ planner: plan.planner, ...(plan.note ? { aiNote: plan.note } : {}) })
+
+      // -- C1 首帧生成（B1 首帧导演 → 三通道生图 → 裁切对齐画幅）+ B3 VLM 审帧 --
+      saveProgress({ stage: "keyframes", sceneDone: 0, percent: 30 })
+      const framesDir = path.join(ASSET_DIR, "video-frames", runId)
+      await mkdir(framesDir, { recursive: true })
+      // 风格基准与文章配图同源（settings.article.imageStyleId）→ 图-文-视频视觉统一（C1 免费收益）
+      const stylePrompt = getImageStyle(settings.article.imageStyleId).prompt
+      const i2vIdx = scenes.map((_, i) => i).filter((i) => wantI2v(i))
+      let kfDone = 0
+      for (const i of i2vIdx) {
+        const shot = plan.shots.find((s) => s.sceneId === scenes[i].id)
+        const kfFile = path.join(framesDir, `kf-${scenes[i].id}-${dims.w}x${dims.h}.png`)
+        // preview 缓存复用（确认后继续渲染不重花生图额度）
+        if (opts.reuseKeyframes) {
+          try {
+            await stat(kfFile)
+            keyframes[i] = { file: kfFile, source: "cached", vlm: "skipped" }
+            kfDone++
+            saveProgress({ sceneDone: kfDone, percent: 30 + Math.round((8 * kfDone) / i2vIdx.length), aiNote: `AI 首帧 ${kfDone}/${i2vIdx.length}：复用预览缓存（分镜 ${i + 1}）` })
+            continue
+          } catch {
+            /* 无缓存 → 正常生成 */
+          }
+        }
+        const concept =
+          [shot?.firstFrameZh, shot?.firstFrameEn].filter(Boolean).join("；").slice(0, 240) || scenes[i].visual.slice(0, 160)
+        // B1 首帧导演（wewrite-art-direct prompt: keyframe；失败 legacy 降级留痕）
+        const directed = await directVideoKeyframe({
+          topic: storyboard.title,
+          shotIndex: i + 1,
+          concept,
+          subtitle: scenes[i].subtitle,
+          stylePrompt,
+        })
+        const img = await diagRun(
+          runId,
+          "keyframe",
+          () => generateImage(directed.promptFull, runId, `vkf${scenes[i].id}`, opts.aspect === "9:16" ? "864x1152" : "1344x768"),
+          { sceneId: scenes[i].id, detail: directed.source },
+        )
+        const finishFrame = async (absPath: string): Promise<void> => {
+          await sharp(absPath).resize(dims.w, dims.h, { fit: "cover" }).png({ compressionLevel: 9 }).toFile(kfFile)
+        }
+        if (img.ok) {
+          await finishFrame(img.absPath)
+          const kf: KeyframeResult = { file: kfFile, source: `b1(${directed.source})`, vlm: "skipped", via: img.via }
+          // B3 闭环：VLM 审帧 → 未过带 hint 定向重生一次 → 二次未过采用并标注 failed（诚实留痕不阻断）
+          const vlm = await diagRun(
+            runId,
+            "vlm",
+            () => vlmCheckImage({ absPath: kfFile, concept, caption: scenes[i].subtitle, kind: "gen" }),
+            { sceneId: scenes[i].id },
+          )
+          if (vlm.done && !vlm.pass && vlm.retryHint) {
+            const directed2 = await directVideoKeyframe({
+              topic: storyboard.title,
+              shotIndex: i + 1,
+              concept,
+              subtitle: scenes[i].subtitle,
+              stylePrompt,
+              retryHint: vlm.retryHint,
+            })
+            const img2 = await generateImage(directed2.promptFull, runId, `vkf${scenes[i].id}r`, opts.aspect === "9:16" ? "864x1152" : "1344x768")
+            if (img2.ok) {
+              await finishFrame(img2.absPath)
+              kf.via = img2.via
+              const vlm2 = await vlmCheckImage({ absPath: kfFile, concept, caption: scenes[i].subtitle, kind: "gen" })
+              kf.vlm = vlm2.done ? (vlm2.pass ? "pass-after-retry" : "failed") : "skipped"
+            } else {
+              kf.vlm = "failed"
+            }
+          } else if (vlm.done) {
+            kf.vlm = vlm.pass ? "pass" : "failed"
+          }
+          keyframes[i] = kf
+          keyframeStats.ok++
+          if (img.via && !keyframeStats.via.includes(img.via)) keyframeStats.via.push(img.via)
+        } else {
+          // 生图不可用 → 场景卡兜底首帧（i2v 主轨不因此整线回退；来源留痕 code-card）
+          const svg = sceneSvg(scenes[i], i, n, storyboard, L)
+          await sharp(Buffer.from(svg)).resize(dims.w, dims.h, { fit: "cover" }).png({ compressionLevel: 9 }).toFile(kfFile)
+          keyframes[i] = { file: kfFile, source: "code-card", vlm: "skipped", note: img.error?.slice(0, 100) }
+          keyframeStats.fallback++
+        }
+        const vlmState = keyframes[i]!.vlm
+        if (vlmState === "pass" || vlmState === "pass-after-retry") keyframeStats.vlmPass++
+        else if (vlmState === "failed") keyframeStats.vlmFail++
+        else keyframeStats.vlmSkip++
+        // 首帧落 Asset（run 详情页可见 → C2「预览即所提交」的物料基础）
+        await db.asset
+          .create({
+            data: {
+              runId,
+              kind: "image",
+              role: "video-keyframe",
+              provider: `keyframe(${keyframes[i]!.source})`,
+              path: `/assets/video-frames/${runId}/${path.basename(kfFile)}`,
+              meta: JSON.stringify({
+                sceneId: scenes[i].id,
+                shotIndex: i + 1,
+                vlm: vlmState,
+                planner: plan.planner,
+                aspect: opts.aspect,
+                resolution,
+                dims: `${dims.w}x${dims.h}`,
+              }),
+            },
+          })
+          .catch(() => {})
+        kfDone++
+        saveProgress({
+          sceneDone: kfDone,
+          percent: 30 + Math.round((8 * kfDone) / i2vIdx.length),
+          aiNote: `AI 首帧 ${kfDone}/${i2vIdx.length}（分镜 ${i + 1}：${keyframes[i]!.source}${
+            vlmState !== "skipped"
+              ? ` · VLM ${vlmState === "pass" ? "通过" : vlmState === "pass-after-retry" ? "重生后通过" : "未过（已采用并标注）"}`
+              : ""
+          }）`,
+        })
+      }
+      saveProgress({ keyframes: keyframeStats, sceneDone: 0 })
+      // C2 预览即所提交：首帧与分镜计划就绪即停（不花 i2v 额度），等用户确认
+      if (opts.preview) {
+        saveProgress({
+          stage: "preview",
+          percent: 100,
+          aiNote: `分镜预览就绪：${i2vIdx.length} 张 AI 首帧 + 导演分镜计划（${
+            plan.planner === "director" ? "LLM 规划" : "规则规划降级"
+          }）已生成，未消耗 i2v 额度——确认后点「渲染成片」继续（将复用这些首帧）`,
+        })
+        await rm(tmp, { recursive: true, force: true })
+        return
+      }
+    }
+
+    // ===== Stage 2: 分段生成（四通道分叉：agnes i2v / hybrid / art / motion） =====
     const segs: string[] = []
+    /** C1 每镜头来源留痕（成片元数据标注通道构成；失败段定位） */
+    const segments: SegmentSource[] = []
 
     /** 混合通道的本地代码动画单镜渲染（style=art 走引擎，否则 motion 场景卡；供 code 分镜与 model 回落共用）
      * 修复（2026-10-31）：渲染完成必须 segs.push——此前仅在调用方 model 路径 push，
@@ -609,11 +850,12 @@ async function renderVideo(
         }
         await muxSegment(clipPath, audioFiles[i] || null, spec.duration, seg)
         segs.push(seg)
+        segments.push({ sceneId: scenes[i].id, source: "code", seconds: Math.round(spec.duration * 10) / 10 })
         return
       }
       // motion 场景卡（与纯 motion 通道同配方）
       saveProgress({ stage: "frames", sceneDone: i, aiNote: `混合通道：分镜 ${i + 1}/${n}（code）motion 场景卡渲染中` })
-      const svg = sceneSvg(scenes[i], i, n, storyboard, opts.aspect)
+      const svg = sceneSvg(scenes[i], i, n, storyboard, L)
       const png = await sharp(Buffer.from(svg)).png({ compressionLevel: 9 }).toBuffer()
       const frame = path.join(tmp, `f${i}.png`)
       await writeFile(frame, png)
@@ -627,42 +869,81 @@ async function renderVideo(
         "-t", durations[i].toFixed(2), "-shortest", seg,
       ], { timeout: 120_000 })
       segs.push(seg)
+      segments.push({ sceneId: scenes[i].id, source: "code", seconds: Math.round(durations[i] * 10) / 10 })
     }
 
     if (channel === "agnes") {
-      // ---- 通道 C：Agnes AI 视频模型（逐场景提交→轮询→下载→混音）----
+      // ---- 通道 C：C1 AI 首帧 i2v 主轨（导演运动描述 + keyframe 模式 → 字幕烧录混音；失败单镜本地兜底） ----
       for (let i = 0; i < n; i++) {
         const raw = path.join(tmp, `raw${i}.mp4`)
         const seg = path.join(tmp, `s${i}.mp4`)
+        const shot = plan?.shots.find((s) => s.sceneId === scenes[i].id)
+        const kf = keyframes[i]
         try {
-          saveProgress({ stage: "submit", sceneDone: i })
-          await agnesSceneToMp4(scenes[i], durations[i], opts.aspect, raw, (waited) => {
-            saveProgress({ stage: "poll", percent: Math.round(30 + (45 * (i + Math.min(1, waited / 60))) / n), aiNote: `分镜 ${i + 1}/${n}：Agnes 生成中（已等 ${waited}s）` })
+          saveProgress({
+            stage: "submit",
+            sceneDone: i,
+            aiNote: `分镜 ${i + 1}/${n}：${kf ? `AI 首帧 i2v（${kf.source}）生成中` : "Agnes 文生视频生成中"}`,
           })
+          // C1：运动描述（导演规划产出，不再是「visual+口播截断 500 字」的拼凑）
+          const motionPrompt = shot
+            ? [shot.motionZh, shot.motionEn].filter(Boolean).join("，") + "。保持首帧构图与色调，电影感平滑运动，画面不出现文字。"
+            : undefined
+          // 首帧转 dataURI（jpeg q85 控制 payload；keyframe 模式 = 首帧即第一帧）
+          const firstFrame = kf
+            ? `data:image/jpeg;base64,${(await sharp(kf.file).jpeg({ quality: 85 }).toBuffer()).toString("base64")}`
+            : undefined
+          await agnesSceneToMp4(
+            scenes[i],
+            durations[i],
+            opts.aspect,
+            raw,
+            (waited) => {
+              saveProgress({ stage: "poll", percent: Math.round(38 + (42 * (i + Math.min(1, waited / 60))) / n), aiNote: `分镜 ${i + 1}/${n}：Agnes i2v 生成中（已等 ${waited}s）` })
+            },
+            { runId, sceneId: scenes[i].id, firstFrame, motionPrompt },
+          )
           saveProgress({ stage: "download", sceneDone: i + 1 })
-          await muxSegment(raw, audioFiles[i] || null, durations[i], seg)
+          await diagRun(
+            runId,
+            "ffmpeg",
+            () => muxSegment(raw, audioFiles[i] || null, durations[i], seg, { subtitle: { scene: scenes[i], style: subtitleStyle, dims }, pad: true }),
+            { sceneId: scenes[i].id },
+          )
           segs.push(seg)
+          segments.push({ sceneId: scenes[i].id, source: "i2v", ...(kf ? { keyframe: kf.source } : {}), seconds: Math.round(durations[i] * 10) / 10 })
         } catch (e) {
-          // 单场景失败 → 本地 motion 场景卡兜底（诚实留痕，不整片失败）
+          // 单场景失败 → 本地 motion 场景卡兜底（诚实留痕 + 失败段定位，不整片失败）
           console.warn(`[video] agnes 场景 ${i} 失败，回退本地：${(e as Error).message.slice(0, 120)}`)
-          const svg = sceneSvg(scenes[i], i, n, storyboard, opts.aspect)
+          const svg = sceneSvg(scenes[i], i, n, storyboard, L)
           const png = await sharp(Buffer.from(svg)).png({ compressionLevel: 9 }).toBuffer()
           const frame = path.join(tmp, `f${i}.png`)
           await writeFile(frame, png)
           const localSeg = path.join(tmp, `sl${i}.mp4`)
           const fadeOut = Math.max(0, durations[i] - 0.25).toFixed(2)
-          await execFileP(mustResolve("ffmpeg"), [
-            "-y", "-loop", "1", "-framerate", "30", "-t", durations[i].toFixed(2), "-i", frame,
-            ...(audioFiles[i] ? ["-i", audioFiles[i]] : ["-f", "lavfi", "-t", durations[i].toFixed(2), "-i", "anullsrc=r=24000:cl=mono"]),
-            "-vf", `fade=t=in:st=0:d=0.22,fade=t=out:st=${fadeOut}:d=0.22,format=yuv420p`,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-            "-c:a", "aac", "-b:a", "96k", "-ar", "24000", "-ac", "1",
-            "-t", durations[i].toFixed(2), "-shortest", localSeg,
-          ], { timeout: 120_000 })
+          await diagRun(
+            runId,
+            "ffmpeg",
+            () =>
+              execFileP(
+                mustResolve("ffmpeg"),
+                [
+                  "-y", "-loop", "1", "-framerate", "30", "-t", durations[i].toFixed(2), "-i", frame,
+                  ...(audioFiles[i] ? ["-i", audioFiles[i]] : ["-f", "lavfi", "-t", durations[i].toFixed(2), "-i", "anullsrc=r=24000:cl=mono"]),
+                  "-vf", `fade=t=in:st=0:d=0.22,fade=t=out:st=${fadeOut}:d=0.22,format=yuv420p`,
+                  "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                  "-c:a", "aac", "-b:a", "96k", "-ar", "24000", "-ac", "1",
+                  "-t", durations[i].toFixed(2), "-shortest", localSeg,
+                ],
+                { timeout: 120_000 },
+              ),
+            { sceneId: scenes[i].id },
+          )
           segs.push(localSeg)
+          segments.push({ sceneId: scenes[i].id, source: "code", seconds: Math.round(durations[i] * 10) / 10, error: (e as Error).message.slice(0, 120) })
           saveProgress({ aiNote: `分镜 ${i + 1} Agnes 失败已本地兜底：${(e as Error).message.slice(0, 60)}` })
         }
-        saveProgress({ percent: Math.round(30 + (50 * (i + 1)) / n) })
+        saveProgress({ percent: Math.round(38 + (42 * (i + 1)) / n) })
       }
     } else if (channel === "hybrid") {
       // ---- 通道 D（P1 混合通道）：按分镜 render 标注分发 ----
@@ -676,17 +957,38 @@ async function renderVideo(
       for (let i = 0; i < n; i++) {
         const seg = path.join(tmp, `s${i}.mp4`)
         if (agnesForScene(i)) {
-          // ---- model 镜头：Agnes 插播（失败回落代码动画，诚实留痕） ----
+          // ---- model 镜头：C1 AI 首帧 i2v（失败回落代码动画，诚实留痕） ----
           const raw = path.join(tmp, `raw${i}.mp4`)
+          const shot = plan?.shots.find((s) => s.sceneId === scenes[i].id)
+          const kf = keyframes[i]
           const modelDur = Math.min(12, Math.max(5, durations[i]))
           try {
-            saveProgress({ stage: "submit", sceneDone: i, aiNote: `混合通道：分镜 ${i + 1}/${n}（model）Agnes 生成中 · ${scenes[i].render === "model" ? "实景/情绪镜头" : ""}` })
-            await agnesSceneToMp4(scenes[i], modelDur, opts.aspect, raw, (waited) => {
-              saveProgress({ stage: "poll", percent: Math.round(30 + (45 * (i + Math.min(1, waited / 60))) / n), aiNote: `混合通道：分镜 ${i + 1}/${n}（model）Agnes 生成中（已等 ${waited}s）` })
-            })
+            saveProgress({ stage: "submit", sceneDone: i, aiNote: `混合通道：分镜 ${i + 1}/${n}（model）${kf ? `AI 首帧 i2v（${kf.source}）` : "Agnes 文生视频"}生成中 · ${scenes[i].render === "model" ? "实景/情绪镜头" : ""}` })
+            const motionPrompt = shot
+              ? [shot.motionZh, shot.motionEn].filter(Boolean).join("，") + "。保持首帧构图与色调，电影感平滑运动，画面不出现文字。"
+              : undefined
+            const firstFrame = kf
+              ? `data:image/jpeg;base64,${(await sharp(kf.file).jpeg({ quality: 85 }).toBuffer()).toString("base64")}`
+              : undefined
+            await agnesSceneToMp4(
+              scenes[i],
+              modelDur,
+              opts.aspect,
+              raw,
+              (waited) => {
+                saveProgress({ stage: "poll", percent: Math.round(38 + (42 * (i + Math.min(1, waited / 60))) / n), aiNote: `混合通道：分镜 ${i + 1}/${n}（model）Agnes i2v 生成中（已等 ${waited}s）` })
+              },
+              { runId, sceneId: scenes[i].id, firstFrame, motionPrompt },
+            )
             saveProgress({ stage: "download", sceneDone: i + 1 })
-            await muxSegment(raw, audioFiles[i] || null, durations[i], seg)
+            await diagRun(
+              runId,
+              "ffmpeg",
+              () => muxSegment(raw, audioFiles[i] || null, durations[i], seg, { subtitle: { scene: scenes[i], style: subtitleStyle, dims }, pad: true }),
+              { sceneId: scenes[i].id },
+            )
             segs.push(seg)
+            segments.push({ sceneId: scenes[i].id, source: "i2v", ...(kf ? { keyframe: kf.source } : {}), seconds: Math.round(durations[i] * 10) / 10 })
             modelDone++
           } catch (e) {
             modelFallback++
@@ -760,13 +1062,14 @@ async function renderVideo(
         }
         await muxSegment(clipPath, audioFiles[i] || null, spec.duration, seg)
         segs.push(seg)
+        segments.push({ sceneId: scenes[i].id, source: "code", seconds: Math.round(spec.duration * 10) / 10 })
         saveProgress({ sceneDone: i + 1, percent: Math.round(30 + (50 * (i + 1)) / n) })
       }
     } else {
       // ---- 通道 A：motion 商业片（SVG 场景卡）----
       saveProgress({ stage: "frames" })
       for (let i = 0; i < n; i++) {
-        const svg = sceneSvg(scenes[i], i, n, storyboard, opts.aspect)
+        const svg = sceneSvg(scenes[i], i, n, storyboard, L)
         const png = await sharp(Buffer.from(svg)).png({ compressionLevel: 9 }).toBuffer()
         await writeFile(path.join(tmp, `f${i}.png`), png)
         saveProgress({ sceneDone: i + 1, percent: Math.round(30 + (20 * (i + 1)) / n) })
@@ -786,27 +1089,34 @@ async function renderVideo(
         ]
         await execFileP(mustResolve("ffmpeg"), args, { timeout: 120_000 })
         segs.push(seg)
+        segments.push({ sceneId: scenes[i].id, source: "code", seconds: Math.round(dur * 10) / 10 })
         saveProgress({ sceneDone: i + 1, percent: Math.round(50 + (40 * (i + 1)) / n) })
       }
     }
 
-    // ===== Stage 3: concat 合成 + 校验 =====
+    // ===== Stage 3: concat 合成 + 校验（C6 分腿留痕） =====
     saveProgress({ stage: "concat", percent: 93 })
     const listFile = path.join(tmp, "list.txt")
     await writeFile(listFile, segs.map((s) => `file '${s}'`).join("\n"))
     const outPath = finalPath
-    await execFileP(mustResolve("ffmpeg"), ["-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", outPath], { timeout: 120_000 })
+    await diagRun(
+      runId,
+      "concat",
+      () => execFileP(mustResolve("ffmpeg"), ["-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", outPath], { timeout: 120_000 }),
+      { detail: `${segs.length} 段` },
+    )
 
-    // ===== Stage 3.5: BGM 本地合成混音（可选；口播为主 BGM 垫底） =====
+    // ===== Stage 3.5: BGM 本地合成混音（C5 六预设；口播为主 BGM 垫底） =====
     let bgmNote = ""
     if (bgm !== "none") {
       saveProgress({ stage: "concat", percent: 96, bgmNote: `${BGM_PRESETS[bgm].label}合成中…` })
       const mixed = path.join(tmp, "mixed.mp4")
       try {
-        await mixBgm(outPath, bgm, ttsOk > 0, mixed)
+        await diagRun(runId, "bgm", () => mixBgm(outPath, bgm, ttsOk > 0, mixed))
         await copyFile(mixed, finalPath)
-        bgmNote = `${BGM_PRESETS[bgm].label}已混音${ttsOk > 0 ? "（口播为主、BGM 垫底）" : "（静音降级片，BGM 为主音轨）"}`
+        bgmNote = `${BGM_PRESETS[bgm].label}已混音${ttsOk > 0 ? "（口播为主、BGM 垫底）" : "（字幕主导模式片，BGM 为主音轨）"}`
       } catch (e) {
+        diagRecord(runId, "bgm", false, 0, { error: (e as Error).message })
         bgmNote = `BGM 混音失败（已回退无配乐）：${(e as Error).message.slice(0, 80)}`
       }
     }
@@ -826,12 +1136,17 @@ async function renderVideo(
     await rm(tmp, { recursive: true, force: true })
 
     const size = (await stat(finalPath)).size
+    // C1/C6 收口留痕：每镜头来源构成 + 首帧质量统计 + 分腿诊断汇总（「i2v 片段占比 ≥80%」验收凭证）
+    const i2vSegs = segments.filter((s) => s.source === "i2v").length
     saveProgress({
       stage: "done", percent: 100,
       seconds: Math.round(seconds * 10) / 10,
-      width: L.w, height: L.h, sizeBytes: size,
+      width: dims.w, height: dims.h, sizeBytes: size,
       durations: durations.map((d) => Math.round(d * 10) / 10),
+      segments,
+      ...(i2vSegs > 0 ? { aiNote: `${aiNote ? aiNote + "｜" : ""}i2v 主轨 ${i2vSegs}/${segments.length} 镜（占 ${Math.round((i2vSegs / Math.max(1, segments.length)) * 100)}%）` } : {}),
       ...(bgm !== "none" ? { bgmNote } : {}),
+      diag: diagSummary(runId),
     })
     await db.asset.update({
       where: { id: assetId },
@@ -839,12 +1154,12 @@ async function renderVideo(
         path: path.join("/assets", path.basename(finalPath)),
         provider:
           channel === "agnes"
-            ? `agnes-video${ttsOk > 0 ? "+tts" : ""}${bgm !== "none" ? "+bgm" : ""}`
+            ? `agnes-i2v(${i2vSegs}i2v+${segments.length - i2vSegs}code)${ttsOk > 0 ? "+tts" : "+字幕主导"}${bgm !== "none" ? "+bgm" : ""}`
             : channel === "hybrid"
-              ? `hybrid(${(progress.codeScenes ?? 0)}code+${(progress.modelScenes ?? 0)}model)${ttsOk > 0 ? "+tts" : ""}${bgm !== "none" ? "+bgm" : ""}`
+              ? `hybrid(${(progress.codeScenes ?? 0)}code+${(progress.modelScenes ?? 0)}model·i2v)${ttsOk > 0 ? "+tts" : ""}${bgm !== "none" ? "+bgm" : ""}`
               : style === "art"
                 ? `art-motion${ttsOk > 0 ? "+tts" : ""}${bgm !== "none" ? "+bgm" : ""}`
-                : `ffmpeg${ttsOk > 0 ? "+tts" : "+tts(降级)"}${bgm !== "none" ? "+bgm" : ""}`,
+                : `ffmpeg${ttsOk > 0 ? "+tts" : "+字幕主导"}${bgm !== "none" ? "+bgm" : ""}`,
       },
     })
   } catch (e) {
@@ -884,7 +1199,14 @@ export function startSceneReviseInBackground(runId: string, assetId: string, sto
 }
 
 async function reviseSceneVideo(runId: string, assetId: string, storyboard: Storyboard, opts: ReviseOpts): Promise<void> {
-  const L = LAYOUTS[opts.aspect]
+  // C5：指着改同样吃分辨率档位（与整片一致；族能力闸门同 renderVideo）
+  const revSettings = await getSettings(true)
+  const revResolution: VideoResolution = videoFamilyForModel(revSettings.video.model || revSettings.agnes.videoModel).resolutions.includes(
+    revSettings.video.resolution,
+  )
+    ? revSettings.video.resolution
+    : "720P"
+  const L = scaledLayout(opts.aspect, revResolution)
   const idx = storyboard.scenes.findIndex((s) => s.id === opts.sceneId)
   const tmp = path.join(TMP_ROOT, `rev-${runId.slice(-8)}-${assetId.slice(-8)}`)
   const version = (await latestVideoVersion(runId, assetId)) + 1
@@ -973,7 +1295,7 @@ async function reviseSceneVideo(runId: string, assetId: string, storyboard: Stor
       await muxSegment(clipPath, ttsOk ? wav : null, spec.duration, newSeg)
     } else {
       // motion 线：方向调色板场景卡（与整片一致）
-      const svg = sceneSvg(revised.scene, idx, sceneTotal, newStoryboard, opts.aspect)
+      const svg = sceneSvg(revised.scene, idx, sceneTotal, newStoryboard, L)
       const png = await sharp(Buffer.from(svg)).png({ compressionLevel: 9 }).toBuffer()
       const frame = path.join(tmp, "f.png")
       await writeFile(frame, png)

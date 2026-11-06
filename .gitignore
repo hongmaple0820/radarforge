@@ -73,6 +73,7 @@ server.log
 /public/assets/*.mp4
 /public/assets/cover-*.png
 /public/assets/video-segs/
+/public/assets/video-frames/
 # 用户交付物目录
 /download/
 /public/assets/ill-*.png

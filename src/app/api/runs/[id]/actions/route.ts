@@ -15,7 +15,7 @@ import { resolveThemeId } from "@/lib/runtime/render"
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   try {
-    const body = (await req.json()) as { action?: string; markdown?: string; target?: string; theme?: string; platform?: string; voice?: string; aspect?: string; storyboard?: unknown; style?: string; channel?: string; bgm?: string; direction?: unknown; sceneId?: number; feedback?: string; baseAssetId?: string; force?: boolean; sectionIndex?: number }
+    const body = (await req.json()) as { action?: string; markdown?: string; target?: string; theme?: string; platform?: string; voice?: string; aspect?: string; storyboard?: unknown; style?: string; channel?: string; bgm?: string; direction?: unknown; sceneId?: number; feedback?: string; baseAssetId?: string; force?: boolean; sectionIndex?: number; preview?: boolean; reuseKeyframes?: boolean }
     const action = body.action ?? ""
 
     // ---------- edit：用户改稿 → 喂飞轮 ----------
@@ -229,33 +229,41 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       const style: VideoStyle = body.style === "art" ? "art" : "motion"
       const channel: VideoChannel | undefined =
         body.channel === "agnes" || body.channel === "auto" || body.channel === "local" || body.channel === "hybrid" ? body.channel : undefined
-      const bgm: BgmPreset = ["uplift", "tech", "calm"].includes(body.bgm ?? "") ? (body.bgm as BgmPreset) : "none"
+      const bgm: BgmPreset = ["uplift", "tech", "calm", "tense", "suspense", "warm"].includes(body.bgm ?? "") ? (body.bgm as BgmPreset) : "none"
+      // C2 预览即所提交：preview=true 只出分镜计划+AI 首帧（不花 i2v 额度）；reuseKeyframes 复用预览首帧
+      const preview = body.preview === true
+      const reuseKeyframes = body.reuseKeyframes === true
       const progress: RenderProgress = {
         stage: "queued", percent: 0, sceneDone: 0, sceneTotal: storyboard.scenes.length,
         audioMode: "pending", voice, aspect, style,
         channel: channel === "agnes" ? "agnes" : channel === "hybrid" ? "hybrid" : "local",
+        ...(preview ? { aiNote: "分镜预览模式：先生成 AI 首帧供确认，不消耗 i2v 额度" } : {}),
         ...(bgm !== "none" ? { bgm } : {}),
       }
       const asset = await db.asset.create({
         data: {
           runId: id, kind: "video", role: "video-final",
-          provider: `${channel === "agnes" ? "agnes-video" : channel === "hybrid" ? "hybrid(code+model)" : style === "art" ? "art-motion" : "ffmpeg"}+tts`, path: "",
+          provider: preview
+            ? "preview(keyframes)"
+            : `${channel === "agnes" ? "agnes-i2v" : channel === "hybrid" ? "hybrid(code+model·i2v)" : style === "art" ? "art-motion" : "ffmpeg"}+tts`,
+          path: "",
           meta: JSON.stringify({ ...progress, storyboard }),
         },
       })
-      startVideoRenderInBackground(id, asset.id, storyboard, { voice, aspect, style, channel, bgm })
+      startVideoRenderInBackground(id, asset.id, storyboard, { voice, aspect, style, channel, bgm, preview, reuseKeyframes })
       const modelScenes = storyboard.scenes.filter((s) => s.render === "model").length
-      const styleLabel =
-        channel === "agnes"
-          ? "Agnes AI 模型"
+      const styleLabel = preview
+        ? "分镜预览（AI 首帧先行）"
+        : channel === "agnes"
+          ? "AI 首帧 i2v 主轨（导演规划 → B1 首帧 → i2v 动起来）"
           : channel === "hybrid"
-            ? `混合通道（${storyboard.scenes.length - modelScenes} 镜代码动画 + ${modelScenes} 镜 AI 模型插播）`
+            ? `混合通道（${storyboard.scenes.length - modelScenes} 镜代码动画 + ${modelScenes} 镜 AI 首帧 i2v）`
             : style === "art"
               ? "艺术动画（art-motion 引擎）"
               : "商业片（motion 场景卡）"
       return NextResponse.json({
         assetId: asset.id,
-        message: `成片渲染已开始：${storyboard.scenes.length} 个分镜 · ${aspect} · ${styleLabel}${storyboard.direction ? ` · 方向「${storyboard.direction.name}」` : ""}${bgm !== "none" ? " · BGM" : ""} · ${TTS_VOICES.find((v) => v.id === voice)?.label}`,
+        message: `${preview ? "分镜预览已开始" : "成片渲染已开始"}：${storyboard.scenes.length} 个分镜 · ${aspect} · ${styleLabel}${storyboard.direction ? ` · 方向「${storyboard.direction.name}」` : ""}${bgm !== "none" ? " · BGM" : ""} · ${TTS_VOICES.find((v) => v.id === voice)?.label}`,
       })
     }
 
