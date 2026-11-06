@@ -119,6 +119,8 @@ export interface VideoTask {
   error?: string
   /** 已等待秒数（前端展示进度感） */
   waitedSeconds?: number
+  /** 提交账号 id（Agnes 多账号池：任务按账号隔离，轮询须用提交账号密钥） */
+  accountRef?: string
 }
 
 export interface VideoProvider {
@@ -129,8 +131,8 @@ export interface VideoProvider {
   isConfigured(): boolean
   /** 提交视频生成任务（立即返回，不等待完成） */
   submitVideo?(req: VideoGenerateRequest): Promise<VideoTask>
-  /** 查询任务状态 */
-  getVideoTask?(remoteTaskId: string): Promise<VideoTask>
+  /** 查询任务状态（accountRef：Agnes 池提交账号 id，优先用它轮询） */
+  getVideoTask?(remoteTaskId: string, accountRef?: string): Promise<VideoTask>
   /** 尽力取消（供应商不支持时返回 unsupported 提示） */
   cancelVideoTask?(remoteTaskId: string): Promise<{ supported: boolean; message?: string }>
   health?(): Promise<HealthReport>

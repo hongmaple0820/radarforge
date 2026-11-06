@@ -434,7 +434,8 @@ async function agnesSceneToMp4(
     await new Promise((r) => setTimeout(r, 8000))
     waited += 8
     onWait(waited)
-    const t = await p.getVideoTask(task.remoteTaskId ?? task.id)
+    // 真机实测补强：用提交账号轮询（任务按账号隔离，VideoTask.accountRef）
+    const t = await p.getVideoTask(task.remoteTaskId ?? task.id, task.accountRef)
     if (t.status === "completed" && t.resultUrl) {
       resultUrl = t.resultUrl
       break

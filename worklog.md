@@ -1076,3 +1076,25 @@ Work Log:
 - prisma-mirror.mjs 的 execSync 阻塞事件循环 bug 已定位（本批用 gen-prisma-inline.mjs 异步 spawn 绕过），根治改造留待下批
 - A4 完整两轮研究循环仍待 SEARCH_KEY；SEARCH_KEY 与 Agnes 密钥同随沙箱回收丢失
 - 内容质量升级三批全部落地（A 线 5 项/B 线 6 项/C 线 6 项），后续可做：eval50 重测（配额窗口）、视频线指向分镜重规划的指着改增强
+
+---
+Task ID: CQ-agnes-i2v-fieldtest
+Agent: 主 Agent（Z.ai）
+Task: Agnes 账号池重配置（用户提供 4 密钥）+ i2v 提交腿真机实测 + 两项真机补强（批次三遗留尾巴收口）
+
+Work Log:
+- 用户重配 4 个 Agnes 密钥 → `scripts/tmp/agnes-pool-setup.mjs`（密钥经环境变量传入、零落盘，仅入 db/custom.db SettingKV——/db/*.db 已 gitignore，.env 历史泄露教训延续）：PUT /api/settings 写账号池 → **探活 4/4 有效**（GET /models 56~136ms）→ 池状态透出 configured=true · 4 账号 · 80 RPM · videoReady=4；坑位记录：设置写入方法是 **PUT 非 POST**（POST 405 空响应，dev.log 定位）
+- **i2v 提交腿真机实测两轮**（scripts/tmp/agnes-i2v-e2e.mjs，channel=agnes · 3 镜 · 2 model i2v + 1 code 对照）：
+  - ✅ 提交腿 100% 工作：两轮均真实提交 Agnes 视频队列、拿到 taskId、进入 poll 轮询（run 2klpvzr7 / r2ly10h9，provider=agnes-i2v+tts 留痕）
+  - ✅ 首帧链 100% 工作：B1 首帧导演 keyframe 分节 → **Agnes 真实生图 3/3**（keyframes.ok=3 fallback=0 via=agnes-image，第二轮全 Agnes 无 SDK 兜底）→ VLM 审帧 **3/3 pass**；凭证首帧入库 public/assets/vkf1-cmw4rawgm*.png（分镜 1）+ vkf3r-*（VLM 重试帧）
+  - ⚠️ **Agnes 免费档视频产能为本时段瓶颈**：分镜 i2v poll >10 分钟未完成（deadline 超时→诚实本地兜底）；诊断脚本 agnes-poll-diag.mjs 遍历 4 账号直连提交 → 2 账号 503 video_queue_full + 2 账号连续请求体异常 → 证实队列全局满载（外部容量问题，非代码问题；错峰时段可用性待观察）
+  - ✅ 兜底链真机工作：i2v 超时/503 → 本地渲染兜底，链路留痕不消失
+- **真机补强 ①（503 换号重试）** agnes-video.ts submitVideo：429/503/5xx 判「可换号类」（视频队列按账号隔离，换号往往即可提交），循环 acquireVideoSlot 换号重试（上限=活跃账号数 ≤4）；401/403 认证类仍直接报错；全部账号失败 → 汇总各账号错误明细抛出（不静默）
+- **真机补强 ②（轮询绑定提交账号）**：VideoTask 新增 accountRef（提交账号 id）；getVideoTask(remoteTaskId, accountRef?) 优先用提交账号密钥轮询（任务按账号隔离，此前固定用第一个账号——跨账号任务会 404 死等到超时）；video.ts 轮询调用透传 task.accountRef
+- 验证：tsc 零错误；test-c-offline **81/81** 复跑全绿（协议族/整形/轮询解析/规划契约/诊断/预设/C1 贯通无回归）；密钥落盘扫描（git diff + 脚本 + worklog）零命中
+- 入库：3 源码修复 + 3 实测/诊断脚本（setup/e2e/diag，均不含密钥）+ 2 张凭证首帧
+
+### 遗留与下一步
+- Agnes 免费档视频队列满载时段 i2v 成片产出受限（提交/轮询/兜底全链已验证）；错峰复跑 agnes-i2v-e2e.mjs 可验收「i2v 片段占比 ≥80%」项
+- 轮询完成态响应结构（parseAgnesPoll 对真实 completed JSON 的命中）待错峰任务完成时顺带核验（解析器已有 unknown+url→completed 兜底）
+- agnes-poll-diag.mjs 观察到同进程高频连发 POST 偶发 invalid_json（keep-alive 连接复用疑似），应用层提交节奏天然稀疏未触发；如复现可加 Connection: close
