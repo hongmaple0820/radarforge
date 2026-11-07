@@ -153,6 +153,18 @@ export async function acquireVideoSlot(settings: AgnesSettings): Promise<{ slot?
   return { slot: s, waitMs: 0 }
 }
 
+/**
+ * 释放视频槽位（真机实测补强③）：503/429 等失败提交不占服务端任务位，
+ * 但 acquireVideoSlot 取号时已预记 busy 60s——不释放会把后续分镜
+ * 锁死在「全部账号占用中」秒拒（连 HTTP 都发不出）。失败即释放。
+ * 权衡：若该账号此前确有成功提交在跑，此处提前释放会导致同账号 60s 内
+ * 二次提交——服务端 429 真限流兜底（reportFailure 记账熔断），可接受。
+ */
+export function releaseVideoSlot(slotAccount: AgnesAccount): void {
+  const s = slots.get(slotAccount.id)
+  if (s && s.videoBusyUntil > Date.now()) s.videoBusyUntil = 0
+}
+
 /** 上报失败（429/401 连续 3 次熔断 30s；普通错误衰减计数） */
 export function reportFailure(slotAccount: AgnesAccount, kind: "rate-limit" | "auth" | "error"): void {
   const s = slots.get(slotAccount.id)

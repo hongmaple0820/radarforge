@@ -10,7 +10,7 @@
 
 import type { HealthReport, VideoGenerateRequest, VideoProvider, VideoTask } from "../../types"
 import { getSettings, peekSettings } from "@/lib/settings"
-import { acquireVideoSlot, accountBaseUrl, reportFailure, reportSuccess } from "./pool"
+import { acquireVideoSlot, accountBaseUrl, releaseVideoSlot, reportFailure, reportSuccess } from "./pool"
 import { detectVideoFamily, parseAgnesPoll, shapeAgnesSubmit, videoFamilyMeta } from "../video/family"
 
 interface SubmitResponse {
@@ -49,58 +49,90 @@ export const agnesVideo: VideoProvider = {
     // P1-5：模型从视频通道卡收敛配置（回退 Agnes 池旧字段保兼容）
     const model = s.video.model || s.agnes.videoModel
     assertAgnesFamily(model)
-    // 真机实测补强：503 video_queue_full / 429 / 5xx 时换号重试（视频队列按账号隔离，
-    // 换个账号往往就能提交）；401/403 认证类直接报错不重试。上限 = 活跃账号数（≤4）。
+    // 真机实测补强（三件套）：
+    // ① 503/429/5xx 换号重试（视频队列按账号隔离，换号往往能提交）；
+    // ② 失败即释放槽位（acquireVideoSlot 预记 busy 60s，但失败提交不占
+    //    服务端任务位——不释放会把后续分镜锁死在「全部账号占用中」秒拒）；
+    // ③ 占用等待（全忙但 waitMs 短 → 等账号释放而非立刻抛错）+ 轮间节流
+    //    （一轮全败 sleep 8s 再来，最多 3 轮，避免轰炸免费档队列）。
+    // 401/403 认证类直接报错不重试。总预算 2 分钟（含等待与节流）。
     const activeAccounts = s.agnes.accounts.filter((a) => a.enabled && a.apiKey)
-    const maxAttempts = Math.max(1, Math.min(4, activeAccounts.length))
+    const perRound = Math.max(1, Math.min(4, activeAccounts.length))
+    const maxRounds = 3
+    const submitDeadline = Date.now() + 120_000
     let lastQueueErr: Error | null = null
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const { slot, reason, waitMs } = await acquireVideoSlot(s.agnes)
-      if (!slot) {
-        throw new Error(
-          `Agnes 视频通道繁忙：${reason ?? "未知"}${waitMs > 0 ? `（约 ${Math.ceil(waitMs / 1000)}s 后有账号释放）` : ""}${lastQueueErr ? `；前次：${lastQueueErr.message.slice(0, 80)}` : ""}；可增加账号扩容或切回本地渲染`,
-        )
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+    for (let round = 1; round <= maxRounds && Date.now() < submitDeadline; round++) {
+      let posts = 0
+      let roundFailed = false
+      while (posts < perRound && Date.now() < submitDeadline) {
+        const { slot, reason, waitMs } = await acquireVideoSlot(s.agnes)
+        if (!slot) {
+          // ③ 占用等待：窗口在预算内 → 等账号释放再取号（典型 <60s）
+          if (waitMs > 0 && Date.now() + waitMs + 500 < submitDeadline) {
+            await sleep(Math.min(waitMs + 500, submitDeadline - Date.now()))
+            continue
+          }
+          throw new Error(
+            `Agnes 视频通道繁忙：${reason ?? "未知"}${waitMs > 0 ? `（约 ${Math.ceil(waitMs / 1000)}s 后有账号释放，已超出本轮等待预算）` : ""}${lastQueueErr ? `；前次：${lastQueueErr.message.slice(0, 80)}` : ""}；可增加账号扩容或切回本地渲染`,
+          )
+        }
+        posts++
+        try {
+          // C3：请求整形下沉协议族模块（mode/seconds/size/first_frame/images）
+          const body = shapeAgnesSubmit(req, { model, resolution: s.video.resolution })
+          const res = await fetch(`${accountBaseUrl(slot.account)}/videos`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${slot.account.apiKey}`,
+            },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(60_000),
+          })
+          if (res.status === 401 || res.status === 403) {
+            releaseVideoSlot(slot.account)
+            reportFailure(slot.account, "auth")
+            throw new Error(`Agnes 密钥无效（${res.status}，账号 ${slot.account.label}）`)
+          }
+          if (res.status === 429 || res.status === 503 || (res.status >= 500 && res.status !== 501)) {
+            // ① 可换号类：上报限频/错误 → ② 释放槽位（失败不占任务位）→ 换下一个账号
+            reportFailure(slot.account, res.status === 429 ? "rate-limit" : "error")
+            releaseVideoSlot(slot.account)
+            const text = await res.text().catch(() => "")
+            lastQueueErr = new Error(`HTTP ${res.status} ${text.slice(0, 100)}（账号 ${slot.account.label}）`)
+            roundFailed = true
+            continue
+          }
+          if (!res.ok) {
+            releaseVideoSlot(slot.account)
+            reportFailure(slot.account, "error")
+            const text = await res.text().catch(() => "")
+            throw new Error(`Agnes 视频提交失败：HTTP ${res.status} ${text.slice(0, 120)}`)
+          }
+          const json = (await res.json()) as SubmitResponse
+          reportSuccess(slot.account)
+          const taskId = extractTaskId(json)
+          if (!taskId) {
+            releaseVideoSlot(slot.account)
+            throw new Error(`Agnes 视频提交未返回任务 id（${json.message ?? json.error ?? "无字段"}）`)
+          }
+          // 真机实测补强：记住提交账号（任务按账号隔离，轮询须用同一账号密钥）
+          return { id: taskId, status: "queued", remoteTaskId: taskId, accountRef: slot.account.id }
+        } catch (e) {
+          if ((e as Error).message.includes("fetch failed")) {
+            releaseVideoSlot(slot.account)
+            reportFailure(slot.account, "error")
+          }
+          throw e
+        }
       }
-      try {
-        // C3：请求整形下沉协议族模块（mode/seconds/size/first_frame/images）
-        const body = shapeAgnesSubmit(req, { model, resolution: s.video.resolution })
-        const res = await fetch(`${accountBaseUrl(slot.account)}/videos`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${slot.account.apiKey}`,
-          },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(60_000),
-        })
-        if (res.status === 401 || res.status === 403) {
-          reportFailure(slot.account, "auth")
-          throw new Error(`Agnes 密钥无效（${res.status}，账号 ${slot.account.label}）`)
-        }
-        if (res.status === 429 || res.status === 503 || (res.status >= 500 && res.status !== 501)) {
-          // 可换号类：上报限频/错误 → 换下一个账号再试（队列按账号隔离）
-          reportFailure(slot.account, res.status === 429 ? "rate-limit" : "error")
-          const text = await res.text().catch(() => "")
-          lastQueueErr = new Error(`HTTP ${res.status} ${text.slice(0, 100)}（账号 ${slot.account.label}）`)
-          continue
-        }
-        if (!res.ok) {
-          reportFailure(slot.account, "error")
-          const text = await res.text().catch(() => "")
-          throw new Error(`Agnes 视频提交失败：HTTP ${res.status} ${text.slice(0, 120)}`)
-        }
-        const json = (await res.json()) as SubmitResponse
-        reportSuccess(slot.account)
-        const taskId = extractTaskId(json)
-        if (!taskId) throw new Error(`Agnes 视频提交未返回任务 id（${json.message ?? json.error ?? "无字段"}）`)
-        // 真机实测补强：记住提交账号（任务按账号隔离，轮询须用同一账号密钥）
-        return { id: taskId, status: "queued", remoteTaskId: taskId, accountRef: slot.account.id }
-      } catch (e) {
-        if ((e as Error).message.includes("fetch failed")) reportFailure(slot.account, "error")
-        throw e
+      // 本轮全败（每号都试过）→ 轮间节流 8s 再来一轮（服务端队列消化）
+      if (roundFailed && round < maxRounds && Date.now() + 8000 < submitDeadline) {
+        await sleep(8000)
       }
     }
-    throw new Error(`Agnes 视频提交失败（已试 ${maxAttempts} 个账号）：${lastQueueErr?.message ?? "全部账号不可用"}`)
+    throw new Error(`Agnes 视频提交失败（${maxRounds} 轮×${perRound} 账号均败）：${lastQueueErr?.message ?? "全部账号不可用"}——免费档队列满载时段建议错峰重试或切本地渲染`)
   },
   async getVideoTask(remoteTaskId: string, accountRef?: string): Promise<VideoTask> {
     const s = await getSettings(true)

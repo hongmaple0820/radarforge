@@ -1098,3 +1098,20 @@ Work Log:
 - Agnes 免费档视频队列满载时段 i2v 成片产出受限（提交/轮询/兜底全链已验证）；错峰复跑 agnes-i2v-e2e.mjs 可验收「i2v 片段占比 ≥80%」项
 - 轮询完成态响应结构（parseAgnesPoll 对真实 completed JSON 的命中）待错峰任务完成时顺带核验（解析器已有 unknown+url→completed 兜底）
 - agnes-poll-diag.mjs 观察到同进程高频连发 POST 偶发 invalid_json（keep-alive 连接复用疑似），应用层提交节奏天然稀疏未触发；如复现可加 Connection: close
+
+---
+Task ID: CQ-agnes-i2v-acceptance
+Agent: 主 Agent（Z.ai）
+Task: 错峰复跑 i2v 验收（用户指令：启动运行一下）+ 槽位记账 bug 修复——i2v 真实成片首次落地
+
+Work Log:
+- 沙箱回收重置 db/custom.db（02:27 重建仅剩 tune:draft）→ 重灌 4 密钥（环境变量传入零落盘）→ 探活 4/4 有效（68~201ms）· 池 80 RPM
+- **首轮复跑暴露我昨日补强①引入的记账 bug**：acquireVideoSlot 取号即预记 busy 60s，但 503 失败提交不占服务端任务位——分镜 1 换号 4 连败把 4 账号全标记占用，分镜 2/3 被「全部账号占用中」秒拒（diag 实证：submit n=3 errors=3 avgMs=132ms，连 HTTP 都没发出）——自己锁死自己
+- **补强③（修复）**：pool.ts 新增 releaseVideoSlot（失败即释放）；agnes-video.ts submitVideo 重构为三件套：① 换号重试（429/503/5xx，≤4 账号/轮）② 失败即释放槽位（401/403/无 taskId/fetch failed 路径全覆盖）③ 占用等待（waitMs 在 2min 预算内 → 等账号释放而非秒拒）+ 轮间节流（一轮全败 sleep 8s，最多 3 轮防轰炸免费档队列）；全败错误信息带错峰指引
+- **验收复跑 13/13 全绿**（周六 11:2x，队列半满时段）：分镜 1/2 提交 3 轮×4 账号全 503 → 诚实兜底（每镜 ~20s，不再锁死后续）→ **分镜 3 真实提交成功 → poll ~7min → 下载入片**：segments `#3:i2v 8s` · provider `agnes-i2v(1i2v+2code)` · diag 出现完整 poll+download 腿 · done 文案「i2v 主轨 1/3 镜（占 33%）」；成片 24.1s · 720x1280 · 0.92MB · HTTP 200 · 分段留存
+- 首帧本轮走 code-card 兜底（生图端点此刻 WAF 波动；昨日同链路 b1(director)+agnes-image 3/3）——**i2v 用兜底首帧照常生成成功**，「生图失败不整线回退」设计获实证；TTS 仍不可达（字幕主导模式，环境照旧）
+- 验证：tsc 零错误 + test-c-offline **81/81** 复跑全绿；「i2v ≥80% 占比」验收项剩外部容量约束（队列空闲时段 3/3 提交即达），代码链路已全绿
+
+### 遗留与下一步
+- i2v 占比 80% 验收：待队列空闲时段（工作日清晨/深夜）复跑一次 agnes-i2v-e2e.mjs 即可收口
+- 生图端点间歇 WAF 405（本日 code-card 3/3、昨日 agnes-image 3/3）——三通道回退链已兜住，观察即可
