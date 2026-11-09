@@ -1,0 +1,79 @@
+{
+  "variant": "v0",
+  "completed": 4,
+  "total": 50,
+  "overallMean": 8.375,
+  "gatePass": 4,
+  "gateRate": 1,
+  "dimensions": {
+    "accuracy": 8.5,
+    "viewpoint": 8.1,
+    "usefulness": 8.425,
+    "voice": 8.35,
+    "readability": 8.5
+  },
+  "categories": {
+    "模型发布": 8.375
+  },
+  "rows": [
+    {
+      "topicId": "m01",
+      "category": "模型发布",
+      "average": 8.6,
+      "scores": {
+        "accuracy": 8.5,
+        "viewpoint": 9,
+        "usefulness": 8.7,
+        "voice": 8.3,
+        "readability": 8.5
+      },
+      "wordCount": 2772,
+      "source": "state"
+    },
+    {
+      "topicId": "m02",
+      "category": "模型发布",
+      "average": 8.5,
+      "scores": {
+        "accuracy": 8.5,
+        "viewpoint": 8.2,
+        "usefulness": 8.7,
+        "voice": 8.3,
+        "readability": 8.8
+      },
+      "wordCount": 4023,
+      "source": "state"
+    },
+    {
+      "topicId": "m03",
+      "category": "模型发布",
+      "average": 8.1,
+      "scores": {
+        "accuracy": 8.5,
+        "viewpoint": 8,
+        "usefulness": 7.5,
+        "voice": 8.5,
+        "readability": 8
+      },
+      "wordCount": 2783,
+      "source": "state"
+    },
+    {
+      "topicId": "m05",
+      "category": "模型发布",
+      "average": 8.3,
+      "scores": {
+        "accuracy": 8.5,
+        "viewpoint": 7.2,
+        "usefulness": 8.8,
+        "voice": 8.3,
+        "readability": 8.7
+      },
+      "wordCount": 2910,
+      "source": "state"
+    }
+  ],
+  "failed": [],
+  "startedAt": "2026-11-09T12:41:10.878Z",
+  "generatedAt": "2026-11-09T13:17:31.111Z"
+}

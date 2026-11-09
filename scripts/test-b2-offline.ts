@@ -103,7 +103,7 @@ console.log("━━ ③ B6 密度分档 + 数据卡/意境图职责分离 ━━
   // dataCardMessages：art-direct data-card 分节事实源
   const dmsgs = await dataCardMessages({ heading: "成本下降", point: "推理成本一年降 50%", evidence: ["A100 推理价格从 $x 降到 $y", "批量折扣扩大三倍"], caption: "成本曲线" })
   assert(dmsgs[0].content.includes("数据卡编辑"), "data-card 分节人格")
-  assert(dmsgs[0].content.includes("禁止编造精确数字"), "数字纪律（不编造）")
+  assert(dmsgs[0].content.includes("数字只来自证据材料"), "数字纪律（正向表述，S3 改写）")
   assert(dmsgs[1].content.includes("A100 推理价格"), "证据文本注入 user 消息")
 }
 
@@ -127,7 +127,7 @@ console.log("━━ ④ A3 五种叙事骨架 ━━")
   assert(omsgs[1].content.includes("研究缺口") && omsgs[1].content.includes("未证实的某数据"), "A4 研究缺口注入 user 消息")
   // 无骨架 → 默认结构语义（占位符渲染为空，SKILL.md 内置默认结构行）
   const omsgs2 = await outlineMessages({ brief, ideaTitle: "T", ideaAngle: "", claims: [] })
-  assert(omsgs2[0].content.includes("若未指定骨架则用默认结构"), "无骨架 → SKILL.md 默认结构语义保留")
+  assert(omsgs2[0].content.includes("未指定骨架时用默认结构"), "无骨架 → SKILL.md 默认结构语义保留（S3 措辞）")
   // skeletonBlock 空安全
   assert(skeletonBlock(null) === "", "skeletonBlock 空安全")
 }
@@ -140,7 +140,7 @@ console.log("━━ ⑤ A5 扩写补救（不注水纪律） ━━")
   const emsgs = await expandMessages({ draft: "# T\n\n## 一\n短文", persona: { id: "p", label: "冷面分析师", desc: "", voice: "克制冷静" }, tier: deep })
   assert(emsgs[0].content.includes("扩写编辑"), "expand 分节人格（SKILL.md 事实源）")
   assert(emsgs[0].content.includes("4500~8000"), "档位目标注入")
-  assert(emsgs[0].content.includes("禁止注水"), "不注水纪律")
+  assert(emsgs[0].content.includes("三类之外的增量都算注水"), "不注水纪律（正向表述，S3 改写）")
   assert(emsgs[1].content.includes("当前 7 字") || emsgs[1].content.includes("还差约"), "当前字数与缺口计算注入")
 
   // SKILL.md 分节完整性（draft 三分节）
