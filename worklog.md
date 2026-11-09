@@ -1145,3 +1145,19 @@ Work Log:
 ### 遗留与下一步
 - 全 agnes 通道 3/3 i2v 完整成片：需 20-30min 不中断窗口（建议夜间跑或服务器常驻环境实测），代码无阻塞
 - TTS 端点工作日恢复可用；周末观察到的不可达疑为时段性
+
+---
+Task ID: MP-SKILLS-ADOPTION-PLAN
+Agent: 主 Agent（Z.ai）
+Task: 安装 mattpocock/skills 工作流（vendor 入库）+ 产出引入与优化方案（用户指令：帮我安装这个工作流，然后优化我们的项目，给我一份详细的方案）
+
+Work Log:
+- 调研：WebFetch 仓库主页 + 全量克隆深读——26 个 promoted 技能（工程 18 + 生产力 8，MIT），四层组织纪律（promoted 双登记/ask-matt 路由同步/SCOPE 采纳门槛/em-dash 禁令），理念=对抗 AI 开发四大失败模式（做错方向/话多/代码不工作/系统乱），小而可组、反 GSD/BMAD 式全接管
+- 深读 12 个核心技能原文：ask-matt（主流程地图：grill→to-spec→to-tickets→implement(tdd)→code-review→retro + 三上匝道 triage/diagnosing-bugs/wayfinder + 相位边界五选项）、tdd（seam 前置约定/三反模式/循环规则）、diagnosing-bugs（六阶段，Phase 1 红线反馈环完成判据四项+[DEBUG-xxxx] 标记）、to-spec/to-tickets（tracer-bullet 垂直切片+blocking edges+本地票模板）、code-review（双轴并行子代理+Fowler 12 smell 基线）、grilling（design tree/frontier 轮次/事实我查决策你拍）、handoff、setup（脚手架输出物清单）、writing-for-agents（context pointer/两级负载/信息层级三级阶梯/leading words/正向指令/完成判据两性/no-op 剪枝）
+- **安装（L0 源库层）**：repos/mattpocock-skills vendor 快照入库（1.7MB·125 md·上游 commit 4ae2317·去 .git·NOTICE.md 署名 provenance），跟随 repos/dsh-* 既有先例
+- **方案**：docs/mattpocock-skills-adoption-plan.md——现状逐项对照（12 概念×差距×动作表：grilling↔六决策拍板、to-spec↔docs 方案文档、to-tickets↔批次表、tdd seam↔离线/E2E 体系、diagnosing-bugs↔槽位 bug/WAF 取证、retro↔worklog 1147 行、handoff↔会话延续摘要、research↔research-external-survey 天然符合、writing-for-agents↔A1 纪律）；三层落位（L0 已完成/L1 仓库脚手架+12 技能流程接管/L2 writing-for-agents 六技法反哺 db/skills 八技能）；四批排期（S1 脚手架半天 13 文件含 AGENTS.md 沙箱铁律成文+GLOSSARY 双语+追溯 7 篇 ADR/S2 流程接管随下特性周期/S3 平台反哺 token -20% 量化/S4 可选产品灵感含密钥重灌向导）；适用性评级 A12/B5/C3/D6；六个决策点待拍板；§6 验收度量总表 + §7 五项风险权衡（上下文常驻成本/流程税豁免/vendor 漂移/双轨维护/S3 回归防护）
+- PDF 版：download/RadarForge工作流引入与优化方案.pdf（9 页，gen-mp-skills-plan-pdf.py 复用 CQ 方案 Crystal Blue 风格体系）；程序化核验：9 页全非空白（11~42%）、风险字符扫描零命中、六决策点在文
+- 卫生：方案 md 清理 emoji/未验证符号（✅✓↔≈−→ 已验证集合），密钥零落盘扫描
+
+### 遗留与下一步
+- 待用户拍板六决策点（接管范围/tracker/根约定文件/GLOSSARY 形态/S3 时机/ADR 范围）→ 开工 S1（脚手架，无代码改动半天量）
