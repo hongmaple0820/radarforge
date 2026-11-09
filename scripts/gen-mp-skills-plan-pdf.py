@@ -53,7 +53,7 @@ MARGIN = 54.0
 AVAIL_W = PAGE_W - 2 * MARGIN
 
 DOC_TITLE = "RadarForge 工作流引入与优化方案"
-DOC_AUTHOR = "RadarForge 工程组 · 2026-11-09 · 待拍板稿"
+DOC_AUTHOR = "RadarForge 工程组 · 2026-11-09 · 已拍板（六决策点按推荐项）· S1 已落地"
 
 S = {}
 S["body"] = ParagraphStyle("body", fontName="NotoSerifSC", fontSize=10.5, leading=17.5,

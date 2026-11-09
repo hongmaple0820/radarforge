@@ -1161,3 +1161,25 @@ Work Log:
 
 ### 遗留与下一步
 - 待用户拍板六决策点（接管范围/tracker/根约定文件/GLOSSARY 形态/S3 时机/ADR 范围）→ 开工 S1（脚手架，无代码改动半天量）
+
+---
+Task ID: MP-SKILLS-S1-SCAFFOLD
+Agent: 主 Agent（Z.ai）
+Task: 六决策点拍板（用户指令「按你的推荐建议来」）+ 批次 S1 仓库脚手架落地 + 验收收口
+
+Work Log:
+- **拍板记录**：六决策点全按推荐项（①12 个 A 级技能 ②本地 .scratch/ markdown tracker ③AGENTS.md ④根级双语单语境 GLOSSARY ⑤S3 本期做 ⑥7 篇里程碑 ADR）——写入方案 §5 拍板记录块，状态行改「已拍板并开工」；§4-S1 标记已落地；§6 S1 度量修正 13→14 文件（7 脚手架+7 ADR，原为笔误）
+- **S1 落地 14 文件**（纯文档新增，零代码改动）：
+  - AGENTS.md（76 行 ≤150 约束）：Agent skills 三指针块（仿 setup-matt-pocock-skills 输出格式）+ 沙箱铁律 7 条成文（with-server/10min 窗/回收重置/密钥零落盘含 PUT 405 坑/推送凭证还原//tmp 不持久/配额纪律）+ 工作流地图（仿 ask-matt 适配单代理 IM 节奏：磨利想法→落规范→拆票→实现→双轴评审→收尾回看 + 上匝道/词汇底层）+ 豁免规则（四类免票）+ 语言文风（em-dash 豁免声明）+ 回归门命令块
+  - GLOSSARY.md：42 条双语（数据模型 12/内容管线 11/视频线 10/工作流 9），每条「中文|English|一句定义|代码锚点」，锚点全为真实代码位置（超出预估 25~35 上限，检索性优先，方案已记偏差）
+  - docs/agents/ 五文件：issue-tracker（本地票制约定+票模板+tracer-bullet/blocking edges 纪律）、triage-labels（五标签词汇先立住）、domain（消费规则：探索前先读 GLOSSARY+相关 ADR、用词汇表的话说话、冲突显式报）、coding-standards（14 条，全部带实证来源：分层测试/红线命令/诚实降级/职责分离/密钥零落盘/Fowler 12 smell 底座）、spec-template（to-spec 中文化+writing-for-agents 写作纪律五条）
+  - docs/adr/ 七篇追溯 ADR（上游叙事体+状态/日期/溯源头）：0001 篇幅三档默认 medium（4825f55）、0002 视频通道默认 auto（含 hybrid 方法论）、0003 模板库全量带署名、0004 Agnes 池化与密钥存放（3022dd9+d18ab8b）、0005 批次顺序文章→配图→视频（依赖方向论证）、0006 i2v 换号重试与槽位释放（含自锁事故完整复盘：avgMs=132ms 取证+三轮实证数据）、0007 SKILL.md 唯一事实源（PIPELINE_SKILL_IDS 八技能=S3 反哺目标集）
+- **验收（scripts/tmp/s1-acceptance.mjs，48/48 全绿）**：14 文件齐备；AGENTS.md 76 行 ≤150；指针可达 12/12（占位符与运行时文件 db/custom.db 豁免）；GLOSSARY 锚点全量存在 21/21（强于方案要求的抽 20）；命名一致率 20/20=100%（门槛 ≥90%）；词条计数 42 精确命中
+- **回归门**：tsc 零错 + 离线三套 68/68、42/42、81/81 全绿（纯文档新增不影响代码路径的实证）
+- **PDF 同步重生成**：gen-mp-skills-plan-pdf.py DOC_AUTHOR 改「已拍板（六决策点按推荐项）· S1 已落地」→ 9 页重渲；程序化核验：9 页全非空白（18~42%）、「拍板」18 处在文、状态行/拍板记录/14 文件/42 条修正数字全部落 PDF、页脚 9 页全带新署名；风险字符扫描仅命中既存 →（上一版已有，Noto Serif SC 有字形非本批引入）
+- 卫生：新文件 emoji 零使用；密钥零落盘（本批纯文档无密钥接触）
+
+### 遗留与下一步
+- **S3 平台反哺**（下一可开工批次，决策⑤本期做、不依赖 S2）：writing-for-agents 六技法 → db/skills 八技能（wewrite-brief/outline/draft/review/fact-check/illustrate/art-direct + huashu-video-direct）；纪律=逐技能改+聚焦 E2E+eval 抽样，不一次性全改；先做 token before 基线计数
+- S2 流程接管：待下个特性周期（开工令 → frontier 轮次 → spec → .scratch/ 票制首演）
+- 全 agnes 通道 3/3 i2v 完整成片：外部窗口约束不变（夜间/常驻环境跑一次即收口）

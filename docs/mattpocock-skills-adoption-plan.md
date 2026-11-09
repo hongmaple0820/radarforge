@@ -1,6 +1,6 @@
 # RadarForge × mattpocock/skills：工作流引入与项目优化方案
 
-> 状态：待拍板（六个决策点见 §5）
+> 状态：**已拍板并开工**（六决策点全按推荐项，2026-11-09 用户指令「按你的推荐建议来」；S1 当批落地，见 §5 拍板记录）
 > 日期：2026-11-09 · 作者：主 Agent（Z.ai）
 > 源库：https://github.com/mattpocock/skills （MIT，Matt Pocock）· 已 vendor 至 `repos/mattpocock-skills/`（上游 commit `4ae2317`，见其 NOTICE.md）
 > 姊妹篇：`docs/content-quality-upgrade-plan.md`（产品内容质量，已三批落地收口）；本方案针对**开发工作流与技能工程质量**，两者互补不重叠
@@ -132,7 +132,7 @@
 
 ## 4. 分批落地方案
 
-### 批次 S1：仓库脚手架（半天，无代码改动）
+### 批次 S1：仓库脚手架（半天，无代码改动）——**2026-11-09 已落地**（提交含 AGENTS.md ≤150 行 / GLOSSARY 双语 42 条 / docs/agents/ 五文件 / docs/adr/ 七篇追溯 ADR）
 
 新增文件（全部一次提交）：
 
@@ -141,7 +141,7 @@
    - `## 沙箱铁律`：进程不跨调用存活（with-server.sh 用法）、/tmp 不持久、LLM 配额窗口、密钥只入 db/custom.db 与环境变量、git 推送凭证重配流程——**把六批次以来用血换的隐性知识成文**
    - `## 工作流地图`：仿 ask-matt 的主流程图（想法→grill→spec→tickets→implement(tdd)→review→retro），C/D 级技能标注何时查阅
    - `## 豁免规则`：单文件微改/文案修正/凭证重配类任务免票免评审（流程税控制，决策点⑤相关）
-2. **GLOSSARY.md**（仓库根，双语）：Run/Asset/AgentRun/选题 Idea/方向 Direction/分镜 Storyboard/首帧 Keyframe/i2v/篇幅三档 Length Tier/叙事骨架 Skeleton/三通道回退链/诊断分腿 diag legs/向导…约 25~35 条，每条「中文名 | English | 一句定义 | 首用位置」
+2. **GLOSSARY.md**（仓库根，双语）：Run/Asset/AgentRun/选题 Idea/方向 Direction/分镜 Storyboard/首帧 Keyframe/i2v/篇幅三档 Length Tier/叙事骨架 Skeleton/三通道回退链/诊断分腿 diag legs/向导…约 25~35 条，每条「中文名 | English | 一句定义 | 首用位置」（实落 42 条，四分区：数据模型 12 / 内容管线 11 / 视频线 10 / 工作流 9——检索性优先，超出预估上限属可接受偏差）
 3. **docs/agents/issue-tracker.md**：本地 markdown tracker 约定（.scratch/<feature>/issues/，一票一文件，编号即依赖序）（决策点②）
 4. **docs/agents/triage-labels.md**：五标签词汇（needs-triage/needs-info/ready-for-agent/ready-for-human/wontfix）——即使暂不用 triage 全流程，标签词汇先立住
 5. **docs/agents/domain.md**：GLOSSARY 与 ADR 的消费规则（技能运行时先读哪个）
@@ -194,13 +194,15 @@
 | ⑤ | 批次 S3（平台反哺）时机 | **本期做**（S1→S2→S3 顺序） | 缓到下期 | 与 A1 纪律同线、收益最大且不依赖 S2 实战数据；S2 需等下个特性周期才有验收场景，S3 不用等 |
 | ⑥ | 追溯 ADR 范围 | **7 篇里程碑**（§4-S1 清单） | 挖掘全部 64 提交 | 7 篇覆盖所有影响今日行为的决策；全量挖掘是考古不是工程，增量 ADR 随 S2 起常态化补 |
 
+> **拍板记录（2026-11-09）**：用户指令「按你的推荐建议来」，六项均采用选项 A——① 12 个 A 级技能接管；② 本地 `.scratch/` markdown tracker（票随仓库推送获远端持久性）；③ 创建 AGENTS.md（harness 中立）；④ 根级单语境双语 GLOSSARY；⑤ S3 本期做（S1→S2→S3 顺序；S3 不依赖 S2 实战数据，S2 需等下个特性周期）；⑥ 追溯 7 篇里程碑 ADR。S1 当批落地，S2 待下个特性周期，S3 为下一可开工批次。
+
 ---
 
 ## 6. 验收与度量总表
 
 | 批次 | 度量 | 目标值 | 采集方式 |
 | --- | --- | --- | --- |
-| S1 | 脚手架文件齐备 | 13 个新文件全在 | ls + AGENTS.md 指针可达性脚本 |
+| S1 | 脚手架文件齐备 | 14 个新文件全在（7 脚手架 + 7 ADR，§4-S1 清单实数） | ls + AGENTS.md 指针可达性脚本 |
 | S1 | GLOSSARY 命名一致性 | ≥90%（抽 20 条） | 人工+rg 抽样比对 src/ 标识符 |
 | S2 | 五技能链周期闭环 | ≥1 个完整特性全链留痕 | .scratch/ 票 checkbox 全勾/显式作废 |
 | S2 | 红线纪律 | bug 修复类提交 100% 附红线命令输出 | git log 抽查 + worklog |
