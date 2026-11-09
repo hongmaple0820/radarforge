@@ -2,6 +2,7 @@
 
 > 状态：已接受（池化引入 2026-10-29；四密钥扩容 2026-11-06，commit `d18ab8b`）
 > 溯源：`src/lib/gateway/providers/agnes/pool.ts`（移植自 dsh-agnes-multimodal 调度设计）；`scripts/tmp/agnes-pool-setup.mjs`
+> 注记：重灌脚本已于 2026-11-09 晋升为常驻 `scripts/agnes-pool-setup.mjs`（S4 密钥重灌向导的 server 腿，见 ADR-0008）；原 tmp 路径仅存历史记录。
 
 ## 背景
 

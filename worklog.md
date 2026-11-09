@@ -1205,3 +1205,29 @@ Work Log:
 - S2 流程接管：待下个特性周期（frontier 轮次 + spec + .scratch/ 票制首演）
 - 全 agnes 通道 3/3 i2v 完整成片：外部窗口约束不变
 - S4 可选批（密钥重灌向导/选题采访器/引用留痕）：低优先待排期
+
+---
+Task ID: S4-WIZARD-S2-DEBUT
+Agent: 主 Agent（Z.ai）
+Task: S4 批次首项「密钥重灌向导」落地，兼 S2 流程接管首演（用户开工令「继续推进」）——frontier 轮次 → spec → .scratch/ 三票 → 红-绿实现 → 双轴评审 → retro 全链走通留痕
+
+Work Log:
+- **Frontier 轮次（grilling 纪律）**：设计树一轮收敛 10 决策点（D1 形态/D2 输入通道/D3 零落盘边界/D4 server 编排/D5 脚本晋升/D6 验收判据/D7 测试落位/D8 文档回写/D9 非交互确认语义/D10 留痕范围），事实类先行自查证（PUT 语义、env 传播、gitignore 覆盖、shellcheck 缺失、引用面 6 处、README 结构）；依据开工令 + 用户既有「按推荐建议来」模式全按选项 A 采纳，留痕方案 §5 可翻案
+- **规范与拆票**：`docs/agnes-key-wizard-plan.md`（模板全节 + 测试缝前置声明：--dry-run 与 AGNES_WIZARD_SERVER_CMD）；`.scratch/agnes-key-wizard/issues/` 三票 tracer-bullet 线性链 01→02→03（晋升/向导核心/端到端回写）
+- **票 01（晋升）红-绿**：红线 `node scripts/agnes-pool-setup.mjs` 先红（MODULE_NOT_FOUND）→ `git mv` tmp→scripts/ → 绿（缺失 env 标准提示 rc=1）；AGENTS.md 铁律 4 与 ADR-0004 注记同步
+- **票 02（向导核心）红-绿**：selftest 先行先红（5/6 断言红，rc=127）→ 库区逐字复用上游 template.sh（曾手抄引入 set_var 两处漂移，awk 提取库区 diff 抓到后回正，复验 LIB-IDENTICAL）→ 7/7 全绿。**真坑实证**：沙箱 stdin 是常开管道，库区 pause 的 read 永不返回（selftest 悬挂 120s 超时）——修复=STAGES 区开头非 TTY 时 `exec < /dev/null`（交互契约：非 TTY 只认 AGNES_KEYS），库区未动一字；修复后 timeout 60 全绿
+- **票 03（端到端与回写）**：真密钥本会话不可得（沙箱回收 + 密钥零落盘的代价）→ 按方案风险 6 诚实降级：假格式密钥走**真实默认链路**——向导 → with-server → boot-restore 全新库自愈 → PUT 保存✓/回读一致✓/agnesPool.configured✓/探活 401 预期红（实证出站连通，真密钥同链路即全绿）→ rc=1 透传✓ + 明文 0 次命中✓；环境插曲：首跑挂 prisma 引擎下载网络抖（boot-restore 两轮+镜像兜底均败，/tmp 镜像回收后为空），第三次直跑 generate（121ms）+ db push（14ms）即通。文档回写：ADR-0008（三决策+两不变量）/GLOSSARY 43 条（+密钥重灌向导）/README 快速开始一行/AGENTS.md 铁律 4 一条命令
+- **回归门**：tsc 零错｜离线 68/42/81｜c3 冒烟 10/10（含管线守卫 8 技能停用 400 不回退）
+- 卫生：密钥零落盘（假格式测试串也全程不入盘不写库——dry-run 断言实证）；探活仅 2 次 401（零配额）；提交含 .scratch/ 全链留痕
+
+### 环境改进（retro）
+- **stdin 常开管道悬挂 read**（机械错误→确定性检查，已回写铁律 2）：代理管道下跑含交互 read 的脚本必须套 `timeout`；脚本自身非 TTY 先 `exec < /dev/null`（agnes-key-wizard 先例）
+- **with-server 传参形态**（机械错误，已回写铁律 1）：`.sh` 结尾的测试命令走文件分支，必须传裸路径；带 `bash ` 前缀整串被当文件名报 No such file
+- **prisma 引擎校验网络抖**（已回写铁律 3）：boot-restore 两轮重试窗不够宽（本批实证第三次直跑成功）；gen-prisma-inline 的 /tmp 镜像回收后为空非首选；恢复序改为「重跑 generate + db push」
+- **密钥零落盘的代价面**（判断题，记入本 log 不改规则）：沙箱回收后真密钥不可恢复属设计内行为——向导把重灌成本降到一条命令即为对冲；真密钥端到端待下个密钥可用会话一条命令收口（票 03 首项 checkbox 待勾）
+
+### 遗留与下一步
+- 票 03 首项待补：`AGNES_KEYS="<真实密钥>" bash scripts/agnes-key-wizard.sh` 四腿全绿即闭环（.scratch 票已留收口路径）
+- db/custom.db 现含 2 个 401 假键（探活红实证留存）：首次真密钥重灌 PUT 整池替换自动清理
+- S2 首演完成：本特性即首个完整特性周期（五技能链全走通留痕：frontier→spec→tickets→implement+红绿→双轴评审报告 2 份→retro）
+- S4 余项（选题采访器/引用留痕）：待排期

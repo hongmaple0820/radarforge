@@ -1,6 +1,8 @@
 // agnes-pool-setup.mjs —— Agnes 账号池配置 + 逐账号探活（密钥零落盘版）
 // 密钥来源：环境变量 AGNES_KEYS（逗号分隔），仅写入 db/custom.db SettingKV（已 gitignore）
-// 运行：AGNES_KEYS="sk-...,sk-..." bash scripts/with-server.sh "node scripts/tmp/agnes-pool-setup.mjs"
+// 常驻基础设施（2026-11-09 由 scripts/tmp/ 晋升，S4 密钥重灌向导的 server 腿；溯源见 ADR-0004/0008）
+// 直跑：AGNES_KEYS="sk-...,sk-..." bash scripts/with-server.sh "node scripts/agnes-pool-setup.mjs"
+// 推荐：AGNES_KEYS="sk-...,sk-..." bash scripts/agnes-key-wizard.sh（向导含输入校验/脱敏预览/探活汇总）
 // 输出全程脱敏：仅显示前 6 位 + 长度
 const BASE = "http://localhost:3000"
 

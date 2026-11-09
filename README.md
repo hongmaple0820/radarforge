@@ -84,6 +84,8 @@ bun run dev        # http://localhost:3000
 
 > 💡 所有模型密钥在应用内「设置中心」配置（落库 `SettingKV`），`.env` 只需要 `DATABASE_URL`——密钥永不进 git。
 
+> 🔁 Agnes 账号池重灌一条命令（换机/环境重置后）：`AGNES_KEYS="sk-...,sk-..." bash scripts/agnes-key-wizard.sh`——校验脱敏 → 落库 → 逐账号探活 → 池状态；加 `--dry-run` 可零副作用预览（ADR-0008）。
+
 ## 质量基线
 
 - `tsc` 与 `eslint src/` 双零

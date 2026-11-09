@@ -65,3 +65,4 @@
 | 双轴评审 | Two-axis Review | Standards 轴（编码标准+smell 基线）与 Spec 轴（规范/票）分开报告 | 源技能 `skills/engineering/code-review/` |
 | 诚实降级 | Honest Degradation | 所有失败显式降级 + 标注来源，禁止静默吞错（全局哲学） | `docs/agents/coding-standards.md` |
 | 会话交接 | Handoff | 跨会话/跨 harness 的交接文档（引用不复制） | 源技能 `skills/productivity/handoff/` |
+| 密钥重灌向导 | Key Re-injection Wizard | 沙箱回收后一条命令重灌 Agnes 账号池的 bash 向导（env 输入 → 校验脱敏 → PUT → 探活 → 池状态），密钥零落盘 | `scripts/agnes-key-wizard.sh`；ADR-0008 |

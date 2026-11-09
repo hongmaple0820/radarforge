@@ -23,10 +23,10 @@ RadarForge：AI 资讯内容生产平台（情报 → 选题 → 文章 → 配�
 
 ## 沙箱铁律（六批次实测换来的约束，违反即返工）
 
-1. **进程不跨 Bash 调用存活**：dev server 与测试必须在同一次调用内完成，一律 `bash scripts/with-server.sh "<测试命令>"`（自动：boot-restore 自愈 → 清旧 server → 起 next dev → 跑测试 → 退出）。
-2. **Bash 单调用 10 分钟硬上限**：超窗任务拆腿跑或换非交互环境（实证：3 镜串行 i2v 需 20-30min 被截断 → 改用「1 model + 2 code」hybrid 最小验证法）。
-3. **沙箱回收重置运行时**：`db/custom.db`（SettingKV 密钥/调优态）、prisma client、git 推送凭证都会丢。恢复顺序：`node scripts/boot-restore.mjs --quiet`（幂等）→ Agnes 密钥重灌（见第 4 条）→ prisma client 丢失时 `node scripts/tmp/gen-prisma-inline.mjs`。
-4. **密钥零落盘**：密钥只进 `db/custom.db`（gitignored）与环境变量，绝不写仓库文件/日志/提交。Agnes 重灌：`AGNES_KEYS="k1,k2,..." bash scripts/with-server.sh "node scripts/tmp/agnes-pool-setup.mjs"`（写 SettingKV 用 **PUT**，POST 会 405）。
+1. **进程不跨 Bash 调用存活**：dev server 与测试必须在同一次调用内完成，一律 `bash scripts/with-server.sh "<测试命令>"`（自动：boot-restore 自愈 → 清旧 server → 起 next dev → 跑测试 → 退出）。传 `.sh` 用裸路径（`scripts/tmp/x.sh`），带 `bash ` 前缀会被当文件名报 No such file。
+2. **Bash 单调用 10 分钟硬上限**：超窗任务拆腿跑或换非交互环境（实证：3 镜串行 i2v 需 20-30min 被截断 → 改用「1 model + 2 code」hybrid 最小验证法）。交互式脚本（含 read）在代理管道下会悬挂：跑时套 `timeout`，脚本自身非 TTY 先 `exec < /dev/null`（`agnes-key-wizard.sh` 先例）。
+3. **沙箱回收重置运行时**：`db/custom.db`（SettingKV 密钥/调优态）、prisma client、git 推送凭证都会丢。恢复顺序：`node scripts/boot-restore.mjs --quiet`（幂等）→ Agnes 密钥重灌（见第 4 条）→ prisma client 丢失时重跑 `npx prisma generate` + `npx prisma db push`（引擎校验有网络抖动，本批实证 boot-restore 两轮重试失败后第三次直跑成功；`scripts/tmp/gen-prisma-inline.mjs` 依赖的 /tmp 镜像回收后为空，非首选）。
+4. **密钥零落盘**：密钥只进 `db/custom.db`（gitignored）与环境变量，绝不写仓库文件/日志/提交。Agnes 重灌一条命令：`AGNES_KEYS="k1,k2,..." bash scripts/agnes-key-wizard.sh`（向导：校验脱敏→PUT 落库→探活→池状态；写 SettingKV 用 **PUT**，POST 会 405；server 腿 `scripts/agnes-pool-setup.mjs`）。
 5. **git 推送凭证重配**：凭证随沙箱丢失时，`git remote set-url` 临时带令牌推送，推完立即还原 URL，令牌不回显不入库。
 6. **/tmp 与仓库外路径不持久**：外部仓库先 clone 到 /tmp 阅读，需要保留的文件必须转移入库（`repos/` 先例：精选 + NOTICE.md 署名）。
 7. **LLM/生图/视频配额是共享稀缺资源**：离线契约测试优先；真实远端调用做最小验证；白天跑批警惕 429/日池耗尽（诚实报错不静默重试轰炸）。
