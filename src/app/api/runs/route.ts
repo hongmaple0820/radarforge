@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { createArticleRun, executeArticleRunInBackground } from "@/lib/runtime/run-manager"
 import { PERSONAS } from "@/lib/runtime/skills/radar-write"
+import { validateIdeaCard } from "@/lib/content/idea-card"
 import { LENGTH_TIERS } from "@/lib/runtime/length-tier"
 import { SKELETON_IDS, skeletonList } from "@/lib/runtime/narrative-skeletons"
 import { themeList, resolveThemeId } from "@/lib/runtime/render"
@@ -26,7 +27,7 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as { ideaTitle?: string; ideaAngle?: string; persona?: string; theme?: string; exemplarId?: string; ideaId?: string; lengthTier?: string; skeleton?: string }
+    const body = (await req.json()) as { ideaTitle?: string; ideaAngle?: string; persona?: string; theme?: string; exemplarId?: string; ideaId?: string; lengthTier?: string; skeleton?: string; ideaCard?: unknown }
     const ideaTitle = (body.ideaTitle ?? "").trim()
     if (!ideaTitle) return NextResponse.json({ error: "ideaTitle 不能为空" }, { status: 400 })
     if (body.lengthTier && !LENGTH_TIERS.some((t) => t.id === body.lengthTier)) {
@@ -35,6 +36,8 @@ export async function POST(req: Request) {
     if (body.skeleton && !SKELETON_IDS.includes(body.skeleton)) {
       return NextResponse.json({ error: `skeleton 须是 ${SKELETON_IDS.join(" / ")}（或不传=自动轮换）` }, { status: 400 })
     }
+    // S4 选题卡：无效卡忽略不硬凑（卡无效→无卡 run，用户无感；流水线照常）
+    const ideaCard = validateIdeaCard(body.ideaCard) ?? undefined
     const id = await createArticleRun({
       ideaTitle,
       ideaAngle: body.ideaAngle,
@@ -44,6 +47,7 @@ export async function POST(req: Request) {
       ideaId: (body.ideaId ?? "").trim() || undefined,
       lengthTier: body.lengthTier,
       skeleton: body.skeleton,
+      ideaCard,
     })
     executeArticleRunInBackground(id)
     return NextResponse.json({ id })

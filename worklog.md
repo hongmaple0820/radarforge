@@ -1231,3 +1231,31 @@ Work Log:
 - db/custom.db 现含 2 个 401 假键（探活红实证留存）：首次真密钥重灌 PUT 整池替换自动清理
 - S2 首演完成：本特性即首个完整特性周期（五技能链全走通留痕：frontier→spec→tickets→implement+红绿→双轴评审报告 2 份→retro）
 - S4 余项（选题采访器/引用留痕）：待排期
+
+---
+Task ID: S4-TOPIC-INTERVIEWER
+Agent: 主 Agent（Z.ai）
+Task: S4 批次余项①「选题采访器」落地——grilling frontier 轮次纪律产品化到文章创作入口（用户开工令「继续推进」）——frontier 轮次 → spec → .scratch/ 三票 → 红-绿实现 → 双轴评审 → retro 全链留痕（S2 流程第二次全链首演）
+
+Work Log:
+- **进度核对**：开工先核 git/远端（0/0 同步）——S3 与 S4 首项+首演均已在远端（交接摘要滞后于实际仓库状态，以仓库为准）；S4 余项=选题采访器+引用留痕，本批做前者
+- **Frontier 轮次（10 项事实自查证 F1~F10 + D1~D9 决策点）**：关键事实——「三方向」字面只在视频线（blocked 态），选题卡三字段与 brief 六字段精确对应才是真缺口（brief 现状 title+angle 凭空发明六字段，radar-write.ts:113-124）；AgentRun.input 被纯图线/UI 字符串消费不能塞 JSON；artifacts 在 executeArticleRun 空对象起步会抹预置键。D1~D9 全按选项 A（依据开工令+用户既有「按推荐」模式，方案 §5 可翻案）：向导第 1 步同步一轮问答/卡落 AgentRun.artifacts.ideaCard 预置+起始继承/新 SKILL.md 非产线技能（停用=409=入口隐藏，与 PIPELINE 守卫语义对照：可降级的能力不钉成不可降级）/{{idea_card_block}} 占位符（style_block 同线先例，无卡字节级不变）/eval 1 题带卡宽门 7.88
+- **规范与拆票**：`docs/topic-interviewer-plan.md`（模板全节+测试缝前置声明）；`.scratch/topic-interviewer/` 三票 tracer-bullet 线性链 01→02→03
+- **票 01（事实源+纯函数）红-绿**：test-b2 ⑥ 节先行先红（MODULE_NOT_FOUND）→ `db/skills/topic-interviewer/SKILL.md`（frontier 纪律协议+完成判据）+ `src/lib/content/idea-card.ts`（零依赖纯函数四件：parseInterviewQuestions/distillIdeaCard/validateIdeaCard/ideaCardBlock；客户端可安全 import，distill 双端共用单一实现）+ topic-interview.ts 消息组装 → b2 42→80（38 条新断言，含无卡字节级不变断言：渲染===剔占位符渲染）
+- **票 02（API 面）红-绿两次**：红 1=采访路由 404（快相 7/7 失败留痕）→ 路由（两档温度 0.4→0.2、停用 409、429 人话、坏卡忽略不阻断）+ runs 路由透传 + run-manager 预置/继承/brief 传卡 → 14/14。红 2=出题 503：**真坑实证**——SKILL.md 协议示形是 {"questions":[...]} 包裹对象，LLM 按示形输出包裹而解析层只认裸数组（单测喂裸数组未暴露）；修复=解包裹+补单测钉住两形态
+- **票 03（前端+E2E+eval+文档）**：wizard 第 1 步采访面板（预填推荐可改/全部按推荐填/409 收起/失败重试可跳过/改题即作废卡）；第 3 步卡三行摘要；三字段齐才发送（对冲服务端静默丢卡）。E2E 五相脚本终跑 **19/19 全绿**（出题 6 问三维度带推荐/409 降级链/卡即时持久/全链 done 174s+卡终态存活+「选题卡已注入」+4061 字 inBand/坏卡不硬凑）；eval 带卡 m01 同题同配置 **均分 8.0**（宽门 7.88 PASS，门禁 PASS，同家族裁判如实记录；2688 字 inBand）；文档四件：ADR-0009（三决策+两不变量：无卡字节不变/ts 文案例外边界限定 style_block 与 idea_card_block 两处既存先例）、GLOSSARY 43→45 条、worklog 本条
+- **字数判据修正（S3 m02 先例延伸）**：首全跑 4756 字超严格带 2500~4000 → 取证三件套（s3-article-sections 逐节分布 + length-tier.ts:421 容差定义 + artifacts.draft.inBand=true）确认产品自身纪律=带×0.9/1.2 容差——E2E 判据对齐 b1-e2e ③ 同判据；带卡字数样本 2688/4756/4061 留观（卡片证据丰富度可能推高 brief→大纲节数，常态化超带再评估预算收紧）
+- **双轴评审两报告**：Standards 轴 14 条全过+Fowler 自查抓 duplicated code（qa 清洗重复→抽 cleanQaItem 修掉，80/80 复验）+long parameter list 留痕不改；Spec 轴 D1~D9 符合性全过+风险五项复核+零范围蔓延+三已知妥协（均对冲留痕）
+- **回归门**：tsc 零错｜离线 68/80/81（b2 +38）｜c3 冒烟 10/10（管线守卫与入口契约不回退）
+- 卫生：密钥零落盘（本批零密钥接触）；配额纪律遵守（429 不轰炸，冷却重试留痕）
+
+### 环境改进（retro）
+- **E2E 多 run 并行自撞 429**（判断题→测试编排纪律，回写票 03 注记）：一个测试脚本内连发多个会各自触发全管线的 run（带卡 run+坏卡探针）= 双倍 LLM 突发 → 自撞限流且两败俱伤；编排原则=管线类断言串行收尾，快断言（创建即验）先行——重构后 234s/174s 两次全绿
+- **单测输入形态要钉住生产实际形态**（判断题，回写 coding-standards 第 5 条注记）：协议解析单测喂裸数组而 LLM 实际输出协议示形包裹对象——503 实证后补两形态单测；判据=单测样本形态与「调用侧实际会喂什么」对齐，不只与「函数能接什么」对齐
+- **交接摘要可能滞后于仓库状态**（流程观察）：开工先核 git log/远端再定批次（本批实证：摘要说 S3 未开工，仓库显示 S3+S4 首项已推送）；以仓库为准
+
+### 遗留与下一步
+- S4 余项②「文章引用留痕」（research 引用纪律 → 引用来源落 artifacts、正文标注，对齐 A4 降级链遗留）：下一可开工批次
+- 带卡字数观察项：样本三证留观（见票 03 注记）；若常态化超严格带→大纲预算收紧评估
+- 票 03 真密钥收口 / 全 agnes 3/3 i2v 成片：外部约束不变（真密钥待补 / 20-30min 不中断窗口）
+- db/custom.db 留有本批 E2E 探针 run（含 401 假键旧留）：非交付物，不影响产线

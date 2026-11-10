@@ -14,7 +14,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
-import { PenLine, ArrowRight, ArrowLeft, Play, Loader2, Lightbulb, CheckCircle2, Sparkles, BookOpen } from "lucide-react"
+import { PenLine, ArrowRight, ArrowLeft, Play, Loader2, Lightbulb, CheckCircle2, Sparkles, BookOpen, MessageCircleQuestion } from "lucide-react"
+import { distillIdeaCard, type IdeaCard, type InterviewQuestion } from "@/lib/content/idea-card"
 
 interface PersonaInfo { id: string; label: string; desc: string }
 interface ThemeInfo { id: string; label: string; category: string; description: string }
@@ -30,6 +31,14 @@ export interface WizardPayload {
   exemplarId: string
   ideaId?: string // 关联选题池条目（选题池直达/情报中心送入时携带，闭环回写状态）
   lengthTier?: string // A2 篇幅档位（short/medium/deep）
+  ideaCard?: IdeaCard // S4 选题卡（采访蒸馏：受众/边界/证据可得性；三字段齐才发送）
+}
+
+/** 采访维度标签（S4 选题采访器） */
+const DIM_LABEL: Record<string, string> = {
+  audience: "受众",
+  boundary: "边界",
+  evidence: "证据",
 }
 
 const STEP_META = [
@@ -92,6 +101,12 @@ export function Wizard({
   const tierList = tiers && tiers.length > 0 ? tiers : [{ id: "medium", label: "标准深度", desc: "2500~4000 字 · 6~9 节" }]
   const [lengthTier, setLengthTier] = useState("medium")
   const selectedTier = tierList.find((t) => t.id === lengthTier)
+  // S4 选题采访器（frontier 轮次：一轮问齐，每问预填推荐答案可改）
+  const [interviewing, setInterviewing] = useState(false)
+  const [questions, setQuestions] = useState<InterviewQuestion[]>([])
+  const [answers, setAnswers] = useState<Record<string, string>>({})
+  const [interviewError, setInterviewError] = useState("")
+  const [interviewHidden, setInterviewHidden] = useState(false) // 停用（409）→收起入口；流水线不受影响
 
   // 选题种子（情报中心「去创作」/ ⌘K「新图文」）→ 回第一步并填入；
   // 空标题种子也响应（重置到第一步聚焦输入）；手动改写标题时解绑选题关联
@@ -106,7 +121,45 @@ export function Wizard({
   const onTitleChange = (v: string) => {
     setIdeaTitle(v)
     if (ideaId && v.trim() !== ideaTitle.trim()) setIdeaId(undefined) // 改题即解绑，避免误推进池内状态
+    if (v.trim() !== ideaTitle.trim()) {
+      // S4：改题即作废采访（问题与卡都是旧选题的答案）
+      setQuestions([])
+      setAnswers({})
+      setInterviewError("")
+    }
   }
+
+  const startInterview = async () => {
+    if (!ideaTitle.trim() || interviewing) return
+    setInterviewing(true)
+    setInterviewError("")
+    try {
+      const res = await fetch("/api/topic-interview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ideaTitle: ideaTitle.trim(), ideaAngle: ideaAngle.trim() }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        if (res.status === 409) setInterviewHidden(true) // 技能停用 → 收起入口（诚实降级，可跳过直接创作）
+        throw new Error(json.error ?? "出题失败")
+      }
+      const qs: InterviewQuestion[] = Array.isArray(json.questions) ? json.questions : []
+      setQuestions(qs)
+      setAnswers(Object.fromEntries(qs.map((q) => [q.id, q.recommended]))) // 预填推荐（frontier 纪律：推荐可直接采纳）
+    } catch (e) {
+      setInterviewError((e as Error).message)
+    } finally {
+      setInterviewing(false)
+    }
+  }
+
+  // 蒸馏选题卡（与服务端共用的纯函数；三字段齐才算就绪——部分作答不发送，避免服务端静默丢卡）
+  const ideaCard = useMemo(
+    () => distillIdeaCard(questions.map((q) => ({ ...q, answer: answers[q.id] ?? "" }))),
+    [questions, answers],
+  )
+  const ideaCardReady = Boolean(ideaCard?.audience && ideaCard?.boundary && ideaCard?.evidence)
 
   const newIdeas = useMemo(() => ideas.filter((i) => i.status === "new").slice(0, 6), [ideas])
   const themeGroups = useMemo(() => {
@@ -167,6 +220,67 @@ export function Wizard({
                   rows={2}
                 />
               </div>
+              {/* S4 选题采访器（frontier 轮次：一轮问齐，每问预填推荐可改；停用/失败可跳过不阻断） */}
+              {!interviewHidden && (
+                <div className="rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50/40 dark:bg-indigo-950/20 p-2.5 space-y-2">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <MessageCircleQuestion className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
+                    <span className="text-[11px] font-semibold">AI 补全选题卡</span>
+                    <span className="text-[10px] text-muted-foreground">受众·边界·证据——任务书按你的答案写，不凭空猜</span>
+                    <div className="flex-1" />
+                    {questions.length === 0 ? (
+                      <Button variant="outline" size="sm" className="h-7 text-[11px]" onClick={() => void startInterview()} disabled={!ideaTitle.trim() || interviewing}>
+                        {interviewing ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Sparkles className="h-3 w-3 mr-1" />}
+                        {interviewing ? "出题中…" : "开始采访"}
+                      </Button>
+                    ) : (
+                      <Button variant="ghost" size="sm" className="h-7 text-[11px]" onClick={() => { setQuestions([]); setAnswers({}) }} disabled={interviewing}>
+                        重新采访
+                      </Button>
+                    )}
+                  </div>
+                  {interviewError && (
+                    <p className="text-[10px] text-red-500 leading-snug">
+                      {interviewError}
+                      <button onClick={() => void startInterview()} className="underline ml-1">重试</button>
+                      <span className="text-muted-foreground ml-1">（也可跳过直接下一步）</span>
+                    </p>
+                  )}
+                  {questions.map((q) => (
+                    <div key={q.id} className="rounded-md border bg-background/60 p-2 space-y-1">
+                      <div className="flex items-start gap-1.5">
+                        <Badge variant="outline" className="text-[9px] shrink-0 h-4 px-1">{DIM_LABEL[q.dimension] ?? q.dimension}</Badge>
+                        <span className="text-[11px] font-medium leading-snug">{q.question}</span>
+                      </div>
+                      <Textarea
+                        value={answers[q.id] ?? ""}
+                        onChange={(e) => setAnswers((a) => ({ ...a, [q.id]: e.target.value }))}
+                        rows={2}
+                        className="text-[11px]"
+                        aria-label={`采访作答：${q.question}`}
+                      />
+                      <p className="text-[10px] text-muted-foreground leading-snug">推荐：{q.recommended}</p>
+                    </div>
+                  ))}
+                  {questions.length > 0 && (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-[11px]"
+                        onClick={() => setAnswers(Object.fromEntries(questions.map((q) => [q.id, q.recommended])))}
+                      >
+                        全部按推荐填
+                      </Button>
+                      {ideaCardReady ? (
+                        <span className="text-[10px] text-emerald-600 dark:text-emerald-400">✓ 选题卡已就绪，将随启动注入任务书</span>
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground">三个维度各有一句作答即成卡；空答维度跳过</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
               {newIdeas.length > 0 && (
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="text-[10px] text-muted-foreground flex items-center gap-0.5"><Lightbulb className="h-3 w-3" />选题池直达：</span>
@@ -281,6 +395,14 @@ export function Wizard({
                   <div><span className="text-muted-foreground">篇幅：</span><span className="font-medium">{selectedTier?.label ?? "标准深度"}</span></div>
                   <div><span className="text-muted-foreground">文风：</span><span className="font-medium">{selectedExemplar ? `${selectedExemplar.name}（结构节奏）` : "不校准"}</span></div>
                   {ideaAngle.trim() && <div className="col-span-full"><span className="text-muted-foreground">角度：</span><span>{ideaAngle.trim()}</span></div>}
+                  {ideaCardReady && ideaCard && (
+                    <div className="col-span-full rounded-md border border-indigo-200/70 dark:border-indigo-800/70 bg-indigo-50/30 dark:bg-indigo-950/20 px-2 py-1.5 space-y-0.5">
+                      <div className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-300">选题卡（采访确认）</div>
+                      <div className="text-[10px] leading-snug"><span className="text-muted-foreground">受众：</span>{ideaCard.audience}</div>
+                      <div className="text-[10px] leading-snug"><span className="text-muted-foreground">边界：</span>{ideaCard.boundary}</div>
+                      <div className="text-[10px] leading-snug"><span className="text-muted-foreground">证据：</span>{ideaCard.evidence}</div>
+                    </div>
+                  )}
                 </div>
                 <p className="text-[10px] text-muted-foreground leading-snug">{selectedPersona?.desc}</p>
               </div>
@@ -315,7 +437,7 @@ export function Wizard({
               下一步<ArrowRight className="h-3.5 w-3.5 ml-1" />
             </Button>
           ) : (
-            <Button size="sm" onClick={() => onStart({ ideaTitle, ideaAngle, persona, theme, exemplarId, ideaId, lengthTier })} disabled={!ideaTitle.trim() || starting} className="bg-amber-500 hover:bg-amber-600 text-white">
+            <Button size="sm" onClick={() => onStart({ ideaTitle, ideaAngle, persona, theme, exemplarId, ideaId, lengthTier, ideaCard: ideaCardReady ? (ideaCard ?? undefined) : undefined })} disabled={!ideaTitle.trim() || starting} className="bg-amber-500 hover:bg-amber-600 text-white">
               {starting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Play className="h-4 w-4 mr-1" />}
               启动九步流水线
             </Button>

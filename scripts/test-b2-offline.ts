@@ -17,8 +17,10 @@ import { illustrationPlanMessages, dataCardMessages } from "../src/lib/runtime/s
 import { LENGTH_TIERS, tierIllustrationRule, resolveLengthTier } from "../src/lib/runtime/length-tier.ts"
 import { NARRATIVE_SKELETONS, pickSkeleton, resolveSkeleton, skeletonBlock, SKELETON_IDS } from "../src/lib/runtime/narrative-skeletons.ts"
 import { outlineMessages } from "../src/lib/runtime/skills/radar-outline.ts"
-import { expandMessages } from "../src/lib/runtime/skills/radar-write.ts"
-import { extractPromptSection } from "../src/lib/runtime/skill-prompt.ts"
+import { briefMessages, expandMessages } from "../src/lib/runtime/skills/radar-write.ts"
+import { extractPromptSection, loadSkillPrompt, renderPromptTemplate, PIPELINE_SKILL_IDS } from "../src/lib/runtime/skill-prompt.ts"
+import { validateIdeaCard, distillIdeaCard, ideaCardBlock, parseInterviewQuestions } from "../src/lib/content/idea-card.ts"
+import { interviewerMessages } from "../src/lib/runtime/skills/topic-interview.ts"
 
 let pass = 0
 let fail = 0
@@ -149,6 +151,86 @@ console.log("━━ ⑤ A5 扩写补救（不注水纪律） ━━")
   for (const sec of ["section", "single", "expand"]) {
     assert(extractPromptSection(draftSrc.body, sec).length > 50, `draft SKILL.md ${sec} 分节存在`)
   }
+}
+
+// ---------- ⑥ S4 选题采访器 ----------
+
+console.log("━━ ⑥ S4 选题采访器（frontier 轮次产品化） ━━")
+{
+  // 事实源：SKILL.md 存在、frontier 纪律要素、三维度、完成判据
+  const src = await loadSkillPrompt("topic-interviewer")
+  assert(src.from === "product", "产品库命中（两级加载）")
+  assert(src.body.length > 200, "正文非空且足量", `${src.body.length} 字`)
+  assert(src.body.includes("一轮") && src.body.includes("推荐"), "frontier 纪律（一轮问齐+每问推荐）")
+  for (const d of ["audience", "boundary", "evidence"]) assert(src.body.includes(d), `维度 ${d} 在协议中`)
+  assert(src.body.includes("完成判据"), "完成判据可判定")
+  assert(!PIPELINE_SKILL_IDS.has("topic-interviewer"), "非产线技能（停用=入口隐藏而非断线）")
+
+  // 问题协议校验：合法过、越界拒、缺维拒、空推荐拒、非数组拒
+  const good = [
+    { id: "q1", dimension: "audience", question: "写给谁？", recommended: "刚接触该领域的工程师" },
+    { id: "q2", dimension: "audience", question: "读者处境？", recommended: "正在做技术选型" },
+    { id: "q3", dimension: "boundary", question: "只看国内吗？", recommended: "只看国内，海外仅作对照" },
+    { id: "q4", dimension: "boundary", question: "失效条件？", recommended: "新规落地后失效" },
+    { id: "q5", dimension: "evidence", question: "哪些公开数据？", recommended: "价格表与融资新闻" },
+    { id: "q6", dimension: "evidence", question: "还有吗？", recommended: "学术基准测试结果" },
+  ]
+  assert(parseInterviewQuestions(good)?.length === 6, "合法协议通过（6 问三维度）")
+  assert(parseInterviewQuestions({ questions: good })?.length === 6, "协议示形包裹对象解包（LLM 实际输出形态）")
+  assert(parseInterviewQuestions({ questions: good.slice(0, 4) }) === null, "包裹内越界同样拒收")
+  assert(parseInterviewQuestions(good.slice(0, 4)) === null, "4 问（<5）拒收")
+  assert(parseInterviewQuestions([...good, { id: "q7", dimension: "audience", question: "x", recommended: "y" }, { id: "q8", dimension: "audience", question: "x", recommended: "y" }, { id: "q9", dimension: "audience", question: "x", recommended: "y" }]) === null, "9 问（>8）拒收")
+  assert(parseInterviewQuestions(good.filter((q) => q.dimension !== "evidence")) === null, "维度缺失拒收")
+  const badRec = good.map((q, i) => (i === 0 ? { ...q, recommended: "" } : q))
+  assert(parseInterviewQuestions(badRec) === null, "空推荐拒收")
+  assert(parseInterviewQuestions("not-an-array") === null, "非数组拒收")
+
+  // 蒸馏：同维度归并、全空拒收
+  const qa = good.map((q) => ({ ...q, answer: q.recommended }))
+  const distilled = distillIdeaCard(qa)
+  assert(distilled?.audience === "刚接触该领域的工程师；正在做技术选型", "同维度归并（；连接）")
+  assert(distilled?.boundary.includes("只看国内") && distilled?.evidence.includes("价格表"), "边界/证据维度蒸馏")
+  assert(distilled?.qa?.length === 6, "qa 留痕随卡")
+  assert(distillIdeaCard(good.map((q) => ({ ...q, answer: "" }))) === null, "全空作答 → null")
+
+  // 卡校验：钳长、截断、空白拒收、非对象拒收
+  const long = "字".repeat(600)
+  const validated = validateIdeaCard({ audience: long, boundary: "边界", evidence: "证据", qa: [...qa, ...qa] })
+  assert(validated !== null && validated.audience.length === 500, "超长钳 500")
+  assert(validated?.qa?.length === 8, "qa 超限截到 8")
+  assert(validated?.qa?.every((x) => x.question.length <= 200 && x.answer.length <= 200 && x.recommended.length <= 200) === true, "qa 逐条截 200")
+  assert(validateIdeaCard({ audience: " ", boundary: "b", evidence: "e" }) === null, "空白字段拒收")
+  assert(validateIdeaCard(null) === null, "非对象拒收")
+
+  // 注入帧：结构完整、约束语义在帧内
+  const block = ideaCardBlock({ audience: "A 读者", boundary: "B 边界", evidence: "E 证据" })
+  assert(block.includes("【选题卡（用户采访确认）】"), "帧头")
+  assert(block.includes("目标受众：A 读者") && block.includes("适用边界：B 边界") && block.includes("证据可得性：E 证据"), "三字段行")
+  assert(block.includes("为准"), "卡优先约束语义在帧内")
+
+  // brief 无卡字节级不变：占位符零字节贡献
+  const briefSrc = await loadSkillPrompt("wewrite-brief")
+  const rendered = renderPromptTemplate(briefSrc.body, { style_block: "", idea_card_block: "" })
+  const withoutToken = renderPromptTemplate(briefSrc.body.replace(/\{\{idea_card_block\}\}/g, ""), { style_block: "" })
+  assert(rendered === withoutToken, "无卡占位符零字节贡献（字节级不变）")
+  assert(!/\{\{/.test(rendered), "无占位符残留")
+  assert(!rendered.includes("选题卡"), "无卡渲染不含选题卡语义")
+
+  // briefMessages 组装：无卡不注入；有卡注入；user 形态不变
+  const noCardMsgs = await briefMessages("测试选题", "")
+  assert(noCardMsgs[0].content === rendered, "briefMessages 无卡 = SKILL.md 直渲染（逐字节）")
+  const card = validateIdeaCard({ audience: "刚接触该领域的工程师", boundary: "只看国内", evidence: "价格表与融资新闻" })
+  const withCardMsgs = await briefMessages("测试选题", "", undefined, card ?? undefined)
+  assert(withCardMsgs[0].content.includes("【选题卡（用户采访确认）】"), "有卡注入帧")
+  assert(withCardMsgs[0].content.includes("刚接触该领域的工程师"), "卡字段值进 system")
+  assert(withCardMsgs[1].content.includes("测试选题"), "user 消息形态不变")
+
+  // 采访消息组装：system=SKILL.md 渲染；user 含选题与角度
+  const ivMsgs = await interviewerMessages("某选题", "某角度")
+  assert(ivMsgs[0].content === renderPromptTemplate((await loadSkillPrompt("topic-interviewer")).body, {}), "system=SKILL.md 渲染")
+  assert(ivMsgs[1].content.includes("某选题") && ivMsgs[1].content.includes("某角度"), "user 含选题与角度")
+  const ivMsgs2 = await interviewerMessages("某选题", "")
+  assert(ivMsgs2[1].content.includes("自行判断"), "无角度时自行判断提示")
 }
 
 console.log("")

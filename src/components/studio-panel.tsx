@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast"
 import { RunDetail } from "./run-detail"
 import { Wizard } from "./wizard"
 import { PenLine, Play, Loader2, RefreshCw, Lightbulb, FileText, CheckCircle2, XCircle, BookOpen, Sparkles, Trash2, Wand2, SlidersHorizontal } from "lucide-react"
+import type { IdeaCard } from "@/lib/content/idea-card"
 
 interface RunItem {
   id: string
@@ -122,7 +123,7 @@ export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { tit
     return () => clearInterval(t)
   }, [runs, refresh])
 
-  const start = async (payload?: { ideaTitle: string; ideaAngle: string; persona: string; theme: string; exemplarId: string; ideaId?: string; lengthTier?: string; skeleton?: string }) => {
+  const start = async (payload?: { ideaTitle: string; ideaAngle: string; persona: string; theme: string; exemplarId: string; ideaId?: string; lengthTier?: string; skeleton?: string; ideaCard?: IdeaCard }) => {
     const t = payload?.ideaTitle ?? ideaTitle
     if (!t.trim()) return
     setStarting(true)
@@ -139,6 +140,7 @@ export function StudioPanel({ seed, wizardFocus = 0, jumpRunId }: { seed?: { tit
           ideaId: payload?.ideaId,
           lengthTier: payload?.lengthTier ?? tier,
           skeleton: payload?.skeleton ?? skeleton,
+          ideaCard: payload?.ideaCard, // S4 选题卡（无则 undefined，不传键）
         }),
       })
       const json = await res.json()

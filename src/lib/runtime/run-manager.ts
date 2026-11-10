@@ -38,6 +38,7 @@ import {
 import { renderCardToAsset, CARD_FAMILIES, type CardPlanItem } from "./card-engine"
 import { vlmCheckImage, type VlmCheckResult } from "@/lib/gateway/vlm"
 import { resolveTuneInstruction } from "./tune"
+import { validateIdeaCard, type IdeaCard } from "@/lib/content/idea-card"
 
 export interface RunStep {
   name: string
@@ -75,6 +76,8 @@ export interface CreateArticleRunArgs {
   lengthTier?: string
   /** A3 叙事骨架（五选一；空=runId 哈希自动轮换，同选题重跑换骨架） */
   skeleton?: string
+  /** S4 选题卡（采访蒸馏：受众/边界/证据可得性）；空=无卡 run（brief 自行推断，向后兼容） */
+  ideaCard?: IdeaCard
 }
 
 export async function createArticleRun(args: CreateArticleRunArgs): Promise<string> {
@@ -91,6 +94,8 @@ export async function createArticleRun(args: CreateArticleRunArgs): Promise<stri
       input: args.ideaTitle,
       status: "queued",
       steps: JSON.stringify(initialSteps()),
+      // S4 选题卡预置：创建即落 artifacts（执行侧起始继承，终态不被抹；无卡=空对象=与旧形态一致）
+      artifacts: JSON.stringify(args.ideaCard ? { ideaCard: args.ideaCard } : {}),
     },
   })
   // 选题闭环：从选题池启动的 Run 回填关联（采纳后去向可追）
@@ -114,7 +119,14 @@ async function executeArticleRun(runId: string): Promise<void> {
 
   const steps = initialSteps()
   let mode = "DEMO"
-  const artifacts: Record<string, unknown> = {}
+  // S4：起始继承预置产物键（选题卡在 createArticleRun 预置；损坏/旧行→空对象不阻断）
+  let artifacts: Record<string, unknown> = {}
+  try {
+    const pre = JSON.parse(run.artifacts || "{}")
+    if (pre && typeof pre === "object" && !Array.isArray(pre)) artifacts = pre as Record<string, unknown>
+  } catch { /* 损坏按空对象 */ }
+  // S4 选题卡（重新校验：防手改库/坏行——无效则当无卡）
+  const ideaCard = validateIdeaCard(artifacts.ideaCard) ?? undefined
   const settings = await getSettings()
   const stylePrompt = styleProfilePrompt(settings.style)
   // A2 篇幅档位：run 级覆盖 > 设置中心默认（medium）
@@ -165,7 +177,7 @@ async function executeArticleRun(runId: string): Promise<void> {
       // 降温重试：0.4 偶发非 JSON / 缺字段 / 空返回 → 0.2 保守档 → 0.3 第三档（同 ideas/refresh 已验证模式）
       let parsed: Brief | null = null
       for (const temp of [0.4, 0.2, 0.3]) {
-        const raw = await chatRetry(await briefMessages(run.ideaTitle, run.ideaAngle, stylePrompt), { temperature: temp })
+        const raw = await chatRetry(await briefMessages(run.ideaTitle, run.ideaAngle, stylePrompt, ideaCard), { temperature: temp })
         if (!raw || raw.replace(/\s/g, "").length < 20) continue // 空返回按失败重试
         parsed = extractJson<Brief>(raw)
         if (parsed?.coreJudgment) break
@@ -174,7 +186,7 @@ async function executeArticleRun(runId: string): Promise<void> {
       if (!brief?.coreJudgment) throw new Error("任务书解析失败（三档温度重试后仍不合格式，请重试）")
       artifacts.brief = brief
       const claimsCount = Array.isArray(brief.claims) ? brief.claims.length : 0
-      return `读者：${brief.targetReader?.slice(0, 24) ?? "?"}｜核心判断：${brief.coreJudgment?.slice(0, 40) ?? "?"}｜待核主张 ${claimsCount} 条${stylePrompt ? "｜风格定位已注入" : ""}`
+      return `读者：${brief.targetReader?.slice(0, 24) ?? "?"}｜核心判断：${brief.coreJudgment?.slice(0, 40) ?? "?"}｜待核主张 ${claimsCount} 条${ideaCard ? "｜选题卡已注入" : ""}${stylePrompt ? "｜风格定位已注入" : ""}`
     })
 
     // ========== Step 2: claims 取证（每条 fact 联网核对） ==========

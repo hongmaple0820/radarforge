@@ -9,6 +9,7 @@
 import type { ChatMessage } from "@/lib/gateway/types"
 import { renderSkillPrompt } from "../skill-prompt.ts"
 import { resolveLengthTier, tierWordRule, type LengthTier } from "../length-tier.ts"
+import { ideaCardBlock, type IdeaCard } from "../../content/idea-card.ts"
 
 export interface Persona {
   id: string
@@ -110,9 +111,15 @@ export interface Brief {
   claims: BriefClaim[]
 }
 
-export async function briefMessages(ideaTitle: string, ideaAngle: string, stylePrompt?: string): Promise<ChatMessage[]> {
+export async function briefMessages(
+  ideaTitle: string,
+  ideaAngle: string,
+  stylePrompt?: string,
+  ideaCard?: IdeaCard,
+): Promise<ChatMessage[]> {
   const system = await renderSkillPrompt("wewrite-brief", undefined, {
     style_block: stylePrompt ? `\n【创作者风格定位（任务书必须贴合）】\n${stylePrompt}\n` : "",
+    idea_card_block: ideaCard ? ideaCardBlock(ideaCard) : "",
   })
   return [
     { role: "system", content: system },

@@ -36,6 +36,8 @@
 | 版式卡 | Layout Card | 代码排版产物：封面卡/金句卡/数据卡三类（Playwright 渲染，零错字） | `src/lib/runtime/card-engine.ts` |
 | 数据卡职责分离 | kind=data | 硬数据节一律走 card-engine 代码排版，metrics 只来自真实字段禁编造 | `run-manager.ts`（B6）；card-engine.ts |
 | 三通道回退链 | Image Fallback Chain | 生图链路：主通道（custom/builtin）→ agnes-image → SDK 兜底；每级失败留痕，降级不消失 | `src/lib/gateway/providers/zai-image.ts` |
+| 选题卡 | Idea Card | 采访蒸馏的三字段输入（受众/边界/证据可得性），随 run 创建落 `AgentRun.artifacts.ideaCard`，brief 按卡写作 | `src/lib/content/idea-card.ts`；ADR-0009 |
+| 选题采访器 | Topic Interviewer | 文章入口的 frontier 轮次产品化：一次出 5~8 问三维度各带推荐答案，作答蒸馏成选题卡；非产线技能，停用=入口隐藏 | `db/skills/topic-interviewer/SKILL.md`、`/api/topic-interview`；ADR-0009 |
 
 ## 视频线
 

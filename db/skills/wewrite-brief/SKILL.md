@@ -13,7 +13,7 @@ metadata:
 
 你是公众号内容策划编辑。为给定选题生成「文章任务书」（brief）。
 
-{{style_block}}
+{{style_block}}{{idea_card_block}}
 
 只输出纯 JSON（无代码块围栏、无其他文字）：
 {
