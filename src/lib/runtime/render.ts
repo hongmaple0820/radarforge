@@ -106,6 +106,8 @@ interface InlineCtx {
   theme: WechatTheme
   /** claims 渲染上标 [n]（已核实脚注）；markdown 原生链接追加到 linkRefs */
   linkRefs: string[]
+  /** claims 上标占用 [1..claimsCount] 编号空间；md 链接脚注从 claimsCount+1 起（与 allRefs 一致，S4 引用留痕修复编号错位） */
+  claimsCount: number
 }
 
 function inlineMd(s: string, ctx: InlineCtx): string {
@@ -122,10 +124,11 @@ function inlineMd(s: string, ctx: InlineCtx): string {
   out = out.replace(/~~([^~]+)~~/g, `<del style="color:${t.colors.text_light ?? "#666"};">$1</del>`)
   // 斜体
   out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, `$1<em style="${emStyle}">$2</em>`)
-  // markdown 链接 [text](url) → text + 脚注编号（微信正文不支持 a）
+  // markdown 链接 [text](url) → text + 脚注编号（微信正文不支持 a）；
+  // 编号 = claimsCount + linkRefs.length：与 allRefs 的 claims.length + i + 1 同空间（修复旧版正文 [1] 对不上脚注区 [N+1] 的错位）
   out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_m, text: string, url: string) => {
     ctx.linkRefs.push(url)
-    const n = ctx.linkRefs.length
+    const n = ctx.claimsCount + ctx.linkRefs.length
     return `${text}<sup style="color:${t.colors.primary ?? "#2563eb"};font-size:0.72em;font-weight:600;">[${n}]</sup>`
   })
   // claims 上标 [n]
@@ -196,7 +199,7 @@ export function renderWechatHtml(markdown: string, claims: RenderClaim[], opts: 
   }
 
   // ---- Step 2: 行级扫描 ----
-  const ctx: InlineCtx = { theme: t, linkRefs: [] }
+  const ctx: InlineCtx = { theme: t, linkRefs: [], claimsCount: claims.length }
   const bodyBlocks: string[] = []
   const lines = workText.split(/\r?\n/)
 

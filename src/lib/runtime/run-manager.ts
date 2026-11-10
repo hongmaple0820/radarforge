@@ -14,6 +14,7 @@ import { getSettings, styleProfilePrompt } from "@/lib/settings"
 import { exemplarPrompt, type StyleExemplar } from "./skills/radar-learn"
 import { extractJson, clampNum } from "./json"
 import { renderWechatHtml, resolveThemeId, type RenderClaim } from "./render"
+import { lintArticleCitations, stripOrphanAnchors, citationsArtifact, type CitationSource } from "@/lib/content/citations"
 import { briefMessages, draftMessages, expandMessages, getPersona, type Brief, type BriefClaim } from "./skills/radar-write"
 import { parseReview, reviewMessages, reviseMessages, pairwiseMessages, parsePairwise, reviewSummary, type Review } from "./skills/radar-review"
 import { outlineMessages, parseOutline, sectionMessages, assembleDraft, type Outline } from "./skills/radar-outline"
@@ -582,7 +583,7 @@ async function executeArticleRun(runId: string): Promise<void> {
           if (assertions.length > 0) break
         }
         if (assertions.length === 0) return "断言抽取失败，跳过（不阻断）"
-        const items: { text: string; verified: boolean; sourceUrl: string; sourceSite: string }[] = []
+        const items: { text: string; verified: boolean; sourceUrl: string; sourceSite: string; sourceTitle: string; sourceDate: string }[] = []
         let verifiedCount = 0
         for (let i = 0; i < assertions.length; i++) {
           const a = assertions[i]
@@ -590,7 +591,7 @@ async function executeArticleRun(runId: string): Promise<void> {
           const { best, hits } = bestMatch(a.text, resp.results)
           const ok = Boolean(best && resp.mode === "REAL" && hits >= MIN_HITS)
           if (ok) verifiedCount++
-          items.push({ text: a.text, verified: ok, sourceUrl: ok ? best!.url : "", sourceSite: ok ? best!.site : "" })
+          items.push({ text: a.text, verified: ok, sourceUrl: ok ? best!.url : "", sourceSite: ok ? best!.site : "", sourceTitle: ok ? best!.title : "", sourceDate: ok ? best!.date : "" })
           // 落账本（kind=ASSERT，idx=0 不进脚注渲染；UI 从 artifacts 断言卡展示）
           await db.claim.create({
             data: {
@@ -609,7 +610,7 @@ async function executeArticleRun(runId: string): Promise<void> {
           })
         }
         const stats = assertionStats(verifiedCount, items.length)
-        artifacts.assertions = { ...stats, items: items.map((x) => ({ text: x.text.slice(0, 100), verified: x.verified, sourceUrl: x.sourceUrl, sourceSite: x.sourceSite })) }
+        artifacts.assertions = { ...stats, items: items.map((x) => ({ text: x.text.slice(0, 500), verified: x.verified, sourceUrl: x.sourceUrl, sourceSite: x.sourceSite, sourceTitle: x.sourceTitle, sourceDate: x.sourceDate })) }
         const pct = (stats.unsupportedRate * 100).toFixed(0)
         return stats.gateBlocked
           ? `⚠️ ${stats.total} 条断言：${stats.verified} 有据 / ${stats.unsupported} 无据（无据率 ${pct}% > ${(stats.threshold * 100).toFixed(0)}% 阈值）→ 发布门禁拦截`
@@ -859,24 +860,48 @@ async function executeArticleRun(runId: string): Promise<void> {
       { optional: true },
     )
 
-    // ========== Step 9: 微信排版 ==========
+    // ========== Step 9: 微信排版 + 引用留痕（S4 余项② citation-provenance） ==========
     await step(8, async () => {
       const theme = resolveThemeId(run.theme)
+      // 引用留痕：lint + 机械修复 + 账本落 artifacts（D3：排版步内同报；纯函数
+      // 无搜索依赖，DEMO 模式照跑——与 Step 6 断言核验的 REAL 守门形成对照）。
+      // 悬空锚 = 编号超范围 或 对应 claim 未证实（脚注区跳号缺位）；机械移除
+      // 保留句子（D2 最小干预），orphan 清单随 artifacts.citations 留痕。
+      const citationClaims: CitationSource[] = verifiedClaims
+        .filter((c) => c.idx > 0)
+        .map((c) => ({ idx: c.idx, claimType: c.claimType, text: c.text, verified: c.verified, sourceSite: c.sourceSite, sourceTitle: c.sourceTitle, sourceDate: c.sourceDate, sourceUrl: c.sourceUrl }))
+      const lint = lintArticleCitations(finalDraft, citationClaims)
+      const stripped = lint.orphanOccurrences > 0 ? stripOrphanAnchors(finalDraft, citationClaims) : { text: finalDraft, removed: 0 }
+      const articleText = stripped.text
+      const cit = citationsArtifact(citationClaims, lint, stripped.removed)
+      artifacts.citations = cit
+      if (stripped.removed > 0) finalDraft = articleText // 修正稿写回（IN2 三处一致：output 在步外统一落）
       const renderClaims: RenderClaim[] = verifiedClaims
         .filter((c) => c.verified)
         .map((c) => ({ idx: c.idx, sourceSite: c.sourceSite, sourceTitle: c.sourceTitle, sourceDate: c.sourceDate, sourceUrl: c.sourceUrl }))
-      const title = finalDraft.match(/^#\s+(.+)$/m)?.[1] ?? run.ideaTitle
-      const html = renderWechatHtml(finalDraft, renderClaims, {
+      const title = articleText.match(/^#\s+(.+)$/m)?.[1] ?? run.ideaTitle
+      const wordCount = articleText.replace(/\s/g, "").length
+      const html = renderWechatHtml(articleText, renderClaims, {
         theme,
         title,
-        wordCount: finalDraft.replace(/\s/g, "").length,
+        wordCount,
       })
       const latest = await db.article.findFirst({ where: { runId }, orderBy: { version: "desc" } })
       if (latest) {
-        await db.article.update({ where: { id: latest.id }, data: { formatted: html } })
+        // 三处一致（IN2）：修正非空时 markdown/wordCount 同步重写（formatted 恒同步）
+        await db.article.update({
+          where: { id: latest.id },
+          data: stripped.removed > 0 ? { formatted: html, markdown: articleText, wordCount } : { formatted: html },
+        })
       }
       artifacts.layout = { theme, htmlLength: html.length, refs: renderClaims.length }
-      return `${html.length} 字符 HTML｜${theme} 主题｜${renderClaims.length} 条来源脚注｜7 项质量点`
+      const citationNote =
+        stripped.removed > 0
+          ? `｜⚠ 引用留痕：${lint.anchors} 锚点中 ${stripped.removed} 个悬空已移除留痕（${lint.orphanNumbers.join("/")}）`
+          : lint.anchors > 0
+            ? `｜引用留痕：${lint.anchors} 锚点全部可解析，${cit.cited}/${cit.total} 来源被引用`
+            : "｜引用留痕：0 锚点（无证据引用，账本已留痕）"
+      return `${html.length} 字符 HTML｜${theme} 主题｜${renderClaims.length} 条来源脚注${citationNote}`
     })
 
     await db.agentRun.update({

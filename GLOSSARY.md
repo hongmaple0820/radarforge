@@ -38,6 +38,8 @@
 | 三通道回退链 | Image Fallback Chain | 生图链路：主通道（custom/builtin）→ agnes-image → SDK 兜底；每级失败留痕，降级不消失 | `src/lib/gateway/providers/zai-image.ts` |
 | 选题卡 | Idea Card | 采访蒸馏的三字段输入（受众/边界/证据可得性），随 run 创建落 `AgentRun.artifacts.ideaCard`，brief 按卡写作 | `src/lib/content/idea-card.ts`；ADR-0009 |
 | 选题采访器 | Topic Interviewer | 文章入口的 frontier 轮次产品化：一次出 5~8 问三维度各带推荐答案，作答蒸馏成选题卡；非产线技能，停用=入口隐藏 | `db/skills/topic-interviewer/SKILL.md`、`/api/topic-interview`；ADR-0009 |
+| 引用留痕 | Citation Provenance | run 终态的 [n] 脚注来源审计账本：fact claims 四元组+citedCount 落 `artifacts.citations`，排版步内 lint+机械修复同报 | `src/lib/content/citations.ts`；ADR-0010 |
+| 悬空锚 | Orphan Anchor | 正文 [n] 编号超范围或对应 claim 未证实（脚注区跳号缺位）——机械移除保留句子，orphanRemoved 留痕 | `citations.ts` stripOrphanAnchors；ADR-0010 |
 
 ## 视频线
 

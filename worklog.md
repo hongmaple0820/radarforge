@@ -1259,3 +1259,28 @@ Work Log:
 - 带卡字数观察项：样本三证留观（见票 03 注记）；若常态化超严格带→大纲预算收紧评估
 - 票 03 真密钥收口 / 全 agnes 3/3 i2v 成片：外部约束不变（真密钥待补 / 20-30min 不中断窗口）
 - db/custom.db 留有本批 E2E 探针 run（含 401 假键旧留）：非交付物，不影响产线
+
+---
+Task ID: S4-CITATION-PROVENANCE
+Agent: 主 Agent（Z.ai）
+Task: S4 余项②「文章引用留痕」落地——引用来源落 artifacts + 正文锚点机器校验（用户开工令「继续推进」）——frontier 轮次 → spec → .scratch 三票 → 红-绿实现 → 双轴评审 → retro 全链留痕（S2 流程第三次全链首演）
+
+Work Log:
+- **进度核对**：开工先核 git/远端（0/0 同步，HEAD 4d5d104）——交接摘要再次滞后（摘要说 S3 未开工，实际 S3+S4 首项+余项① 均已在远端）；以仓库为准。本批=S4 余项②引用留痕（worklog「遗留与下一步」明确项），真密钥收口与全 agnes i2v 成片受外部约束不做。
+- **Frontier 轮次（事实自查证 F1~F10 + 决策 D1~D10）**：关键取证——claims 来源四元组落 db.claim 但 run 终态 artifacts 只留计数（layout.refs）不留明细；正文 [n] 零机器校验（超范围/引用未证实编号=悬空锚无告警）；**抓到既有编号错位缺陷**：正文 md 链接 sup 从 1 起编而脚注区在 claims.length+1 起（正文 [1] 读者会误读为 claims[1]）；AIGC 声明「均标注 [n]」是未验证承诺；assertions items 截 100 字缺 title/date。D1~D10 全按选项 A（依据开工令+既有按推荐模式，方案 §5 可翻案）：citations 独立键/悬空锚机械移除留痕/lint 内嵌 Step 9（DEMO 照跑——纯函数无搜索依赖，与 Step 6 REAL 守门对照）/fact 全量 flagged/assertions 补全/run-detail 卡/AIGC 文案维持/eval m01 宽门/文档四件/编号错位纳入修复。
+- **规范与拆票**：`docs/citation-provenance-plan.md`（模板全节）；`.scratch/citation-provenance/` 三票 tracer-bullet 线性链 01→02→03
+- **票 01（纯函数）红-绿**：test-b2 新增 ⑦ 节先红（ERR_MODULE_NOT_FOUND）→ `src/lib/content/citations.ts` 三件（lintArticleCitations/stripOrphanAnchors/citationsArtifact，零依赖，fence 口径与 render `/^```/` 一致）→ b2 80→101（21 新断言）。**空账本快捷路径 bug**（ok.size===0 跳过 replace）被断言抓出：空账本恰是全悬空场景应全移除——修掉复验全绿。
+- **票 02（管线+render）红-绿**：render-smoke.mjs 新增引用一致性块——**红线实证 link-sup 编号错位**（正文链接上标 [1] vs 脚注区 [N+1]）→ render.ts 修复（InlineCtx.claimsCount 偏移，空 claims 回落 [1] 字节一致）→ 全绿。**红线形态教训两条**：① paste-safe 会给脚注区也包 leaf span，正文判据必须切「参考来源」标题之前；② AIGC 声明文案含「参考来源」四字，判据用标题闭合形态。首次断言形态写错导致 3 条假红（claim-sup/IN1），修正后红线干净收敛=唯一功能红。run-manager Step 9 内嵌 lint+机械修复+三处一致（修正稿写回 output/article.markdown/formatted+wordCount 重算）；Step 6 assertions items 补全（text 500+四元组）；tsc 零错｜离线 68/101/81。
+- **票 03（前端+E2E+eval+文档）**：run-detail「引用留痕」卡（循断言卡先例：Badge/引用率进度条/来源列表 citedCount，旧 run 无键 null 不炸）。E2E `scripts/tmp/s4-citation-e2e.mjs`（一 run 双用省配额 + 只读复验模式）：首跑 6/7——相⑤红=摘要文案不统一（修复口径「引用体检」vs 断言「引用留痕」）+ **DEMO 模式极限场景实证**（SEARCH_KEY 外部约束→claims 全未证实→draft 引 6 锚全悬空→机械移除+留痕+三处一致+零残留）；修文案统一后复跑 **7/7 全绿**（14 悬空锚全移除留痕）+ eval 同 run 8.3（宽门 7.88 PASS，同题同配置不回退）+ 锚点可解析率 100%。文档四件：ADR-0010（三决策+两不变量 IN1 无来源字节不变/IN2 三处一致）+ GLOSSARY 45→47（+引用留痕/悬空锚）+ worklog 本条 + 方案 §0 拍板注记。
+- **回归门**：tsc 零错｜离线 b1 68/b2 101/c 81｜render-smoke 全主题 PASS（含编号一致性块）｜c3 冒烟 10/10
+- 卫生：密钥零落盘（本批零密钥接触）；配额纪律（E2E 一 run 双用 + 只读复验模式，全链 run 共 2 个：红证跑+全绿跑）
+
+### 环境改进（retro）
+- **render 断言的 leaf-span 干扰**（机械错误→确定性检查，回写 render-smoke 注释）：paste-safe 会给全部文本节点（含脚注区）包 leaf span——正文 vs 脚注区判据必须按「参考来源」标题切片；标题判据用闭合形态（`参考来源</span>`）避开 AIGC 声明文案的同名字符串
+- **with-server 传 .sh 须裸路径**（铁律 1 本批再犯一次）：`bash scripts/with-server.sh "bash scripts/tmp/x.sh"` → No such file；正确=`bash scripts/with-server.sh scripts/tmp/x.sh`——铁律已有但肌肉记忆未固化，worklog 留痕强化
+- **交接摘要滞后于仓库状态**（S4 余项① 已记，本批再证实）：开工先核 git log/远端再定批次，两次连续实证该模式有效
+
+### 遗留与下一步
+- REAL 搜索模式全绿路径实证（orphanRemoved=0 且 anchors>0 的「部分 verified」跳号场景）：离线 b2 ⑦ 节已钉语义，线上留观（SEARCH_KEY 外部约束，与 A4 降级链同源）
+- mattpocock/skills 采纳方案 S1~S4 全部落地（含余项②）；后续待办=真密钥收口（票 03 一条命令）+ 全 agnes 3/3 i2v 成片（外部窗口）
+- db/custom.db 留本批 E2E 探针 run 2 个（DEMO 模式，claims 全未证实）：非交付物

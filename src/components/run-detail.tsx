@@ -1080,6 +1080,55 @@ export function RunDetail({ runId, onBack }: { runId: string | null; onBack: () 
             )
           })()}
 
+          {/* 引用留痕（S4 citation-provenance：[n] 脚注来源审计账本） */}
+          {(() => {
+            let cit: { total: number; verified: number; cited: number; orphanRemoved: number; sources?: { idx: number; text: string; verified: boolean; citedCount: number; sourceSite: string; sourceTitle: string; sourceDate: string; sourceUrl: string }[] } | null = null
+            try { cit = JSON.parse(run.artifacts).citations ?? null } catch { /* ignore */ }
+            if (!cit) return null
+            const citedPct = cit.total > 0 ? Math.round((cit.cited / cit.total) * 100) : 0
+            return (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm flex items-center justify-between">
+                    <span>引用留痕</span>
+                    <Badge variant={cit.orphanRemoved > 0 ? "destructive" : "default"} className={`text-[9px] ${cit.orphanRemoved > 0 ? "" : "bg-emerald-600"}`}>
+                      {cit.orphanRemoved > 0 ? `${cit.orphanRemoved} 锚已修` : `${cit.cited}/${cit.total} 已引用`}
+                    </Badge>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-0 space-y-1.5">
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <span className="text-muted-foreground">引用率</span>
+                    <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                      <div className="h-full rounded-full bg-emerald-500" style={{ width: `${Math.min(100, citedPct)}%` }} />
+                    </div>
+                    <span className="font-semibold text-emerald-600">{citedPct}%</span>
+                    <span className="text-[9px] text-muted-foreground">{cit.verified} 有据</span>
+                  </div>
+                  {(cit.sources ?? []).map((s) => (
+                    <div key={s.idx} className="flex items-start gap-1.5">
+                      <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0 mt-0.5">[{s.idx}]</Badge>
+                      {s.verified ? <CheckCircle2 className="h-3 w-3 text-emerald-600 shrink-0 mt-0.5" /> : <XCircle className="h-3 w-3 text-red-400 shrink-0 mt-0.5" />}
+                      <p className="text-[10px] leading-snug line-clamp-1 flex-1">
+                        {s.verified && s.sourceSite ? `${s.sourceSite}《${s.sourceTitle}》` : s.text}
+                        {s.citedCount > 0 && <span className="text-muted-foreground">（被引 {s.citedCount} 次）</span>}
+                      </p>
+                      {s.verified && s.sourceUrl && (
+                        <a href={s.sourceUrl} target="_blank" rel="noreferrer" className="text-[9px] text-muted-foreground hover:text-amber-600 shrink-0 max-w-[70px] truncate">{(s.sourceDate || "").slice(0, 10) || s.sourceSite}</a>
+                      )}
+                    </div>
+                  ))}
+                  {cit.orphanRemoved > 0 && (
+                    <p className="text-[9px] text-amber-600">⚠ {cit.orphanRemoved} 个悬空锚点已机械移除（超范围或未证实编号）；正文保留句子的来源以参考来源区可对上的编号为准</p>
+                  )}
+                  {(cit.sources ?? []).length === 0 && (
+                    <p className="text-[9px] text-muted-foreground">本次 run 无 fact 主张入账本（引用面零证据，如实留痕）</p>
+                  )}
+                </CardContent>
+              </Card>
+            )
+          })()}
+
           {/* 原子断言核验（P0 事实层产物） */}
           {(() => {
             let assertions: { total: number; verified: number; unsupported: number; unsupportedRate: number; threshold: number; gateBlocked: boolean; items?: { text: string; verified: boolean; sourceUrl: string; sourceSite: string }[] } | null = null

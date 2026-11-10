@@ -21,6 +21,10 @@ import { briefMessages, expandMessages } from "../src/lib/runtime/skills/radar-w
 import { extractPromptSection, loadSkillPrompt, renderPromptTemplate, PIPELINE_SKILL_IDS } from "../src/lib/runtime/skill-prompt.ts"
 import { validateIdeaCard, distillIdeaCard, ideaCardBlock, parseInterviewQuestions } from "../src/lib/content/idea-card.ts"
 import { interviewerMessages } from "../src/lib/runtime/skills/topic-interview.ts"
+import {
+  lintArticleCitations, stripOrphanAnchors, citationsArtifact,
+  type CitationSource,
+} from "../src/lib/content/citations.ts"
 
 let pass = 0
 let fail = 0
@@ -233,6 +237,69 @@ console.log("━━ ⑥ S4 选题采访器（frontier 轮次产品化） ━━"
   assert(ivMsgs2[1].content.includes("自行判断"), "无角度时自行判断提示")
 }
 
+// ---------- ⑦ S4 引用留痕（citation-provenance） ----------
+
+console.log("━━ ⑦ S4 引用留痕（A4 引用面闭环，S4 余项②） ━━")
+{
+  // 账本：1/3 号 verified，2 号未证实（脚注区跳号缺位），编号空间=3
+  const claims: CitationSource[] = [
+    { idx: 1, claimType: "fact", text: "甲公司完成 B 轮融资", verified: true, sourceSite: "36氪", sourceTitle: "甲公司获 B 轮融资", sourceDate: "2026-10-01", sourceUrl: "https://36kr.com/p/1" },
+    { idx: 2, claimType: "fact", text: "乙市发布新规", verified: false, sourceSite: "", sourceTitle: "", sourceDate: "", sourceUrl: "" },
+    { idx: 3, claimType: "fact", text: "丙产品 Q3 增长 40%", verified: true, sourceSite: "虎嗅", sourceTitle: "丙产品 Q3 财报", sourceDate: "2026-11-01", sourceUrl: "https://huxiu.com/2" },
+  ]
+  const md = [
+    "# 标题",
+    "",
+    "甲公司完成 B 轮融资[1]，业内关注[2]，相关传闻[2]。",
+    "丙产品 Q3 增长 40%[3]。",
+    "另有夸张说法[9]与宽编号[123]。",
+    "```",
+    "代码块内 [4] 不是锚点（排版不走 inlineMd 锚点）",
+    "```",
+    "结尾[0]。",
+  ].join("\n")
+
+  // lint：锚点统计 / 悬空两种形态 / fence 口径 / 三位编号与 [0] 语义
+  const lint = lintArticleCitations(md, claims)
+  assert(lint.anchors === 6, "锚点总数（fence 内 [4] 与三位 [123] 不计）", `${lint.anchors}`)
+  assert(lint.valid === 2, "可解析锚点（[1]×1+[3]×1）", `${lint.valid}`)
+  assert(JSON.stringify(lint.orphanNumbers) === JSON.stringify([0, 2, 9]), "悬空编号去重排序（[2]未证实/[9]超范围/[0]越界）")
+  assert(lint.orphanOccurrences === 4, "悬空出现次数（[2]×2+[9]×1+[0]×1）", `${lint.orphanOccurrences}`)
+  assert(JSON.stringify(lint.used) === JSON.stringify([1, 3]), "被引用且可解析编号集")
+
+  // strip：机械移除悬空锚保留句子；valid 不动；fence 不误伤；无悬空字节级不变
+  const strip = stripOrphanAnchors(md, claims)
+  assert(strip.removed === 4, "移除计数（[2]×2+[9]×1+[0]×1）", `${strip.removed}`)
+  assert(!strip.text.includes("[2]") && !strip.text.includes("[9]") && !strip.text.includes("[0]"), "悬空锚全移除")
+  assert(strip.text.includes("B 轮融资[1]") && strip.text.includes("40%[3]"), "valid 锚保留")
+  assert(strip.text.includes("代码块内 [4] 不是锚点"), "fence 内 [4] 不误伤（口径与排版一致）")
+  assert(strip.text.includes("宽编号[123]"), "三位编号不属于锚点正则（\\d{1,2} 口径对齐 render）")
+  const clean = "干净稿[1]一句[3]两句。\n```py\nx[9]\n```"
+  const stripClean = stripOrphanAnchors(clean, claims)
+  assert(stripClean.text === clean && stripClean.removed === 0, "无悬空 → 字节级不变（零改动路径）")
+
+  // citationsArtifact：fact 全量含未证实 flagged；四元组与 citedCount；REF/ASSERT 不入由调用侧保证
+  const art = citationsArtifact(claims, lint, strip.removed)
+  assert(art.total === 3 && art.verified === 2 && art.cited === 2, "total/verified/cited 计数")
+  assert(art.orphanRemoved === 4, "orphanRemoved 留痕随账本")
+  assert(art.sources[0].sourceSite === "36氪" && art.sources[0].sourceTitle === "甲公司获 B 轮融资", "四元组字段名与 db.claim 一致")
+  assert(art.sources[0].sourceUrl === "https://36kr.com/p/1" && art.sources[2].sourceDate === "2026-11-01", "url/date 完整")
+  assert(art.sources[0].citedCount === 1 && art.sources[1].citedCount === 0 && art.sources[2].citedCount === 1, "citedCount 逐条")
+  assert(art.sources[1].verified === false, "未证实 flagged 入账本（审计视角）")
+
+  // 空账本：全部锚悬空；artifact 空；strip 后正文无锚
+  const lintEmpty = lintArticleCitations("提到[1]和[2]", [])
+  assert(lintEmpty.anchors === 2 && lintEmpty.valid === 0 && lintEmpty.orphanOccurrences === 2, "空账本 → 全悬空")
+  const artEmpty = citationsArtifact([], lintEmpty, 2)
+  assert(artEmpty.total === 0 && artEmpty.sources.length === 0, "空 sources 不硬凑")
+  const stripEmpty = stripOrphanAnchors("提到[1]和[2]", [])
+  assert(stripEmpty.text === "提到和" && stripEmpty.removed === 2, "空账本机械移除")
+
+  // wordCount 口径对齐（票 02 重算留缝）：锚点字符计入正文体字数
+  const wc = (s: string) => s.replace(/\s/g, "").length
+  assert(wc(md) - wc(strip.text) === 12, "移除 4 锚 × 3 字符 = 12（\\s 剔除同口径）", `${wc(md) - wc(strip.text)}`)
+}
+
 console.log("")
-console.log(`━━━ 结果：${pass} 通过 / ${fail} 失败 ━━`)
+console.log(`━━━ 结果：${pass} 通过 / ${fail} 失败 ━━━`)
 process.exit(fail > 0 ? 1 : 0)
