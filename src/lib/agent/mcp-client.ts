@@ -15,6 +15,7 @@
 import { db } from "@/lib/db"
 import { McpClient } from "@/lib/mcp/client"
 import { toolRegistry } from "@/lib/agent/tool-registry"
+import { DEFAULT_MCP_SERVERS } from "@/lib/agent/mcp-seeds"
 
 export interface McpToolInfo {
   name: string
@@ -457,18 +458,22 @@ export function listRegisteredMcpTools(): { name: string; serverId: string }[] {
   return [...registeredMcpTools.entries()].map(([name, serverId]) => ({ name, serverId }))
 }
 
-/** 预置一个公开可用的 MCP server（DeepWiki，真实 JSON-RPC 握手可验证） */
+/** 预置公开可用的 MCP server（空库首播：DeepWiki 公开示例 + AIHOT 资讯，aihot-access P1 票 01）
+ *  种子表独立于本模块（src/lib/agent/mcp-seeds.ts，零依赖可离线测）；count>0 即返回——
+ *  既有库不补种、用户删除默认服务器不复活，循 DeepWiki 先例（方案 §5 D5）。 */
 export async function seedDefaultServer(): Promise<void> {
   const count = await db.mcpServer.count()
   if (count > 0) return
-  await db.mcpServer.create({
-    data: {
-      name: "DeepWiki MCP（公开示例）",
-      transport: "http",
-      url: "https://mcp.deepwiki.com/mcp",
-      enabled: true,
-    },
-  })
+  for (const seed of DEFAULT_MCP_SERVERS) {
+    await db.mcpServer.create({
+      data: {
+        name: seed.name,
+        transport: seed.transport,
+        url: seed.url,
+        enabled: seed.enabled,
+      },
+    })
+  }
 }
 
 // ---------- mcpServers 标准格式导入导出（D.3：一份 JSON 多处可用） ----------

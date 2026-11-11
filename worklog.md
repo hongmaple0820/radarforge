@@ -1307,3 +1307,31 @@ Work Log:
 - 待用户拍板四决策点：D1 P1 产品化两票（`seedDefaultServer()` 加 AIHOT 行与 DeepWiki 并列 + `DEFAULT_FEEDS` 加精选/全部动态，走 `.scratch/aihot-access/` 票制）；D2 RSS 源选择（推荐 feed.xml + feed/all.xml）；D3 P2 增强（rss ETag 条件请求 / AIHOT 原文直链抽取）；D4 aihot_actor 策略（推荐不带）
 - P0 状态留在 db/custom.db（gitignored，沙箱回收即清）——持久性靠 P1 默认种子；25 源刷新的 240+ 条探针数据同库，非交付物
 - 若要在 wewrite-brief / topic-interviewer 提示词告知 mcp__AIHOT__* 工具可用：SKILL.md 改动须走 S3 同款纪律（token 基线 + 聚焦 E2E + eval 不回退），列为 S3 后独立增强票
+---
+Task ID: AIHOT-ACCESS-P1
+Agent: 主 Agent（Z.ai）
+Task: AIHOT 接入 P1 产品化——用户批复调研报告四决策点（原话「1. 要的 2. 全都要 3. 可以的 4. 可以的」：D1 推进 P1 / D2 RSS 源 18 条全量 / D3 两增强立项 / D4 不带 aihot_actor）→ 方案 → .scratch 四票 → 红-绿实现 → 双轴评审 → retro 全链留痕
+
+Work Log:
+- **进度核对**：开工先核仓库（AIHOT 调研 b1c3e6b 已在远端；S3/S4 均已收口——交接摘要再滞后一次，三连实证「以仓库为准」模式）。本批=P1 产品化，用户四批复即 D1~D4 拍板记录。
+- **规范与拆票**：`docs/aihot-access-plan.md`（模板全节+D1~D4 拍板结果列+实现级 D5~D8）；`.scratch/aihot-access/` 四票线性链 01（MCP 种子）→02（18 源+feedIds 透传）→03（ETag）→04（原文直链+文档四件）。
+- **票 01 红-绿**：b2 ⑧ 先红（mcp-seeds MODULE_NOT_FOUND）→ 新模块 `src/lib/agent/mcp-seeds.ts`（独立零依赖：b2 直读规避 mcp-client 的 `@/` 别名值导入不可达，strip-types 无 tsconfig 路径映射）+ `seedDefaultServer` 改遍历种子表（空库首播语义循 DeepWiki 先例，方案 D5）→ b2 101→104。E2E A 相清库重播确定性实证（db 行=2+握手 615ms+10 工具）。
+- **票 02 红-绿 + 红线探究（本批最有价值的一课）**：b2 先红（24≠42）→ DEFAULT_FEEDS 24→42（18 条 AIHOT：6 主源+6 分类+6 全文分类，统一 AI聚合/aihot.news，插中文源后使「精选版」先入池）+ POST refresh 透传 feedIds（方案 D6）→ b2 104→109。**预判红线被证伪**：原设计「先刷 feed.xml 再刷 full.xml 应 inserted>0（同 guid 双条入池，需跨站 guid 去重）」，实测 0 红——duplicates=40 全拦截。机制取证：同 guid 条目跨 feed 同标题 + cleanSummary 截断 300 字后全文版与摘要版同文本 → 同 SimHash。按「无红线不写防御代码」纪律（Fowler speculative generality）跨站 guid 去重缓议留观（触发条件成文于 ADR-0011），方案 §5 D7 与票 02 Comments 同步改写为证伪结论。
+- **票 03 红-绿**：b2 ⑧ 本地 HTTP 服务器 304 往返先红（3 断言红+TypeError：旧返回形态无 notModified）→ `SourceFeed.etag` 列（prisma generate+db push，PRAGMA 实证列落地）+ `fetchAndParse` 第 4 参 etag（直连/代理两路径均带 If-None-Match、捕获响应 ETag；304 → notModified 零正文）+ `FeedRefreshResult.notModified` + summary 计数 + test-rss-proxy 调用点随新形态更新 → b2 109→116，test-rss-proxy 19/0。E2E D 相：周期源（日报/周报/月报）二轮 2/3 命中 304（周报在两轮间真实轮换出新 ETag → 200 重解析如实留痕，断言容差 ≥2 并记录单源轮换——上游成刊轮换是真实行为非缺陷）。
+- **票 04 红-绿**：b2 函数族先红（SyntaxError 无导出）→ `originalLinkFromDescription`（只认「阅读原文」锚文本的 href，非 http 拒收）+ `RawFeedItem.originalUrl`（解析层只发现不改写）+ 存储层按 `site==="aihot.news"` 门控回填（url←原文、摘要尾附「（AIHOT 条目页：…）」；SimHash 哈希口径保持解析层原值不掺回填后缀=IN3，部署边界两侧同条目哈希可比）→ b2 116→127。E2E E 相先红（0/30 原文直链）后绿：删源重种确定性路径（既有条目 known 跳过不回溯——删级联+重播种+刷新是重取正路）→ 30/30 条 url host≠aihot.news（样例 techcrunch 原文可点）+ 条目页链接在摘要尾 + 转选题闭环。
+- **E2E 全量**：`scripts/tmp/aihot-p1-demo.mjs` 五相 22/22 全绿且幂等复跑稳定（A/B/C/D/E 覆盖种子/握手/去重/304/直链/转选题；复跑兼容断言适配 304 态）。
+- **回归门**：tsc 零错｜离线 b1 68/b2 127/c 81｜c3 冒烟 10/10｜RSS 层 test-rss-proxy 19/0 + test-rss 37/0（42 源下 ≥24 断言兼容）｜full-regression 主线绿（文章九步/评测/导出全过）。
+- **外部约束如实留痕**：full-regression 视频直出段 `POST /api/video-runs` 研究腿 zai 共享配额 429（71s 重试后 500+三个级联红，铁律 7 外部约束非本批代码——改动不触视频线/gateway）；配额冷却约 20 分钟后独立脚本复跑 7/7 收口（`scripts/tmp/aihot-video-retry.mjs`）。纯图线「生图全降级」断言红属同 429 家族（zai 生图端点降级，脚本自身标注非代码问题）。
+- **文档四件**：ADR-0011（五决策+三不变量 IN1 无 etag 行为不变/IN2 非 AIHOT 字节不变/IN3 哈希口径部署一致）+ GLOSSARY 47→50（+AIHOT 接入/ETag 条件请求/原文直链）+ 研究文档 §6 拍板注记 + 双轴评审两报告（Standards 轴 14 条全过+Fowler 自查两条留痕不修理由+speculative generality 主动规避亮点；Spec 轴 D1~D4 符合+四票验收全勾+不变量三项+风险五项对冲+零范围蔓延+三已知妥协）。
+- 卫生：密钥零落盘（本批全程匿名只读零密钥接触）；AIHOT 实跑约 40+ 请求零 429（限流线 60/分钟远未触）。
+
+### 环境改进（retro）
+- **预判型红线要先证伪再写防御代码**（判断题，回写本 log 与方案 §5 D7 留档）：跨站 guid 去重是「为想象的未来写代码」——E2E 红线探究用一次定向刷新证伪假设，省掉一段无红线支撑的查询代码；判据=防御性设计的每个分支都要能指认一条让它变红的现实场景，否则缓议并写明触发条件。
+- **full-regression 超过 Bash 10 分钟窗**（机械事实，流程观察）：脚本自带 REG_SKIP_VIDEO 分段设计，本批实证分段跑+冷却复跑收口的编排有效；后续全量回归超窗即分段，不在单窗口硬等。
+- **交接摘要滞后三连证**（S4 余项①已记两次）：开工先核 git log/远端定批次已成为肌肉记忆级流程。
+
+### 遗留与下一步
+- 后续增强票（独立排期，须走 S3 同款纪律）：wewrite-brief / topic-interviewer 提示词告知 `mcp__AIHOT__*` 工具可用（token 基线+聚焦 E2E+eval 不回退）
+- P2 远期候选不变：早报参考输入（/api/v1/dailies JSON）/ 资讯类 MCP 工具放宽 8000 字符截断 / 跨站 guid 去重留观（触发条件见 ADR-0011）
+- db/custom.db 留本批 E2E 探针数据（AIHOT 条目/成刊条目/已转选题 1 条）：非交付物，不影响产线
+- 真密钥收口与全 agnes 3/3 i2v 成片：外部约束不变（密钥待补 / 20-30min 不中断窗口）

@@ -34,15 +34,24 @@ export async function GET() {
   })
 }
 
-// ---------- POST：refresh（全量刷新）/ promote（转选题）/ add（加源） ----------
+// ---------- POST：refresh（全量或定向刷新）/ promote（转选题）/ add（加源） ----------
+// body.feedIds?: string[] → 只刷指定源（与 PATCH url 变更重抓的定向能力对称，方案 D6；
+// 不传即全量——既有调用方零影响）
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as { action?: string; itemId?: string; name?: string; url?: string; category?: string; limit?: number }
+    const body = (await req.json()) as { action?: string; itemId?: string; name?: string; url?: string; category?: string; limit?: number; feedIds?: unknown }
     const action = body.action ?? "refresh"
 
     if (action === "refresh") {
-      const results = await refreshFeeds({ limit: body.limit && body.limit > 0 ? body.limit : undefined })
+      const feedIds = Array.isArray(body.feedIds)
+        ? body.feedIds.filter((x): x is string => typeof x === "string" && x.length > 0)
+        : undefined
+      const results = await refreshFeeds({
+        limit: body.limit && body.limit > 0 ? body.limit : undefined,
+        ...(feedIds && feedIds.length > 0 ? { feedIds } : {}),
+      })
       const inserted = results.reduce((s, r) => s + r.inserted, 0)
+      const notModified = results.filter((r) => r.notModified).length
       return NextResponse.json({
         results,
         summary: {
@@ -53,8 +62,9 @@ export async function POST(req: Request) {
           stale: results.reduce((s, r) => s + r.stale, 0),
           known: results.reduce((s, r) => s + r.known, 0),
           duplicates: results.reduce((s, r) => s + r.duplicates, 0),
+          notModified, // ETag 304 命中数（未变化源零正文传输，aihot-access P1 票 03）
         },
-        message: `${results.length} 个源已刷新：新增 ${inserted} 条（${results.filter((r) => r.status === "error").length} 个源失败已留痕）`,
+        message: `${results.length} 个源已刷新：新增 ${inserted} 条（${notModified} 个源未变化零传输，${results.filter((r) => r.status === "error").length} 个源失败已留痕）`,
       })
     }
 

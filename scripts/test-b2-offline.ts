@@ -6,6 +6,9 @@
 //   ③ B6 密度分档 + 职责分离：illustrationPlanMessages 注入、dataCardMessages 事实源
 //   ④ A3 叙事骨架：五骨架、轮换稳定性、outline 消息注入
 //   ⑤ A5 扩写消息：SKILL.md expand 分节事实源
+//   ⑥ S4 选题采访器（topic-interviewer）
+//   ⑦ S4 引用留痕（citation-provenance）
+//   ⑧ AIHOT 接入（aihot-access P1：MCP 种子 / 18 源 / ETag / 原文直链）
 // 运行：node --experimental-strip-types scripts/test-b2-offline.ts
 // ============================================================
 
@@ -25,6 +28,9 @@ import {
   lintArticleCitations, stripOrphanAnchors, citationsArtifact,
   type CitationSource,
 } from "../src/lib/content/citations.ts"
+import { DEFAULT_MCP_SERVERS } from "../src/lib/agent/mcp-seeds.ts"
+import { DEFAULT_FEEDS, fetchAndParse, parseFeed, originalLinkFromDescription } from "../src/lib/sources/rss.ts"
+import http from "node:http"
 
 let pass = 0
 let fail = 0
@@ -298,6 +304,82 @@ console.log("━━ ⑦ S4 引用留痕（A4 引用面闭环，S4 余项②） �
   // wordCount 口径对齐（票 02 重算留缝）：锚点字符计入正文体字数
   const wc = (s: string) => s.replace(/\s/g, "").length
   assert(wc(md) - wc(strip.text) === 12, "移除 4 锚 × 3 字符 = 12（\\s 剔除同口径）", `${wc(md) - wc(strip.text)}`)
+}
+
+// ---------- ⑧ AIHOT 接入（aihot-access P1：MCP 种子 / 18 源 / ETag / 原文直链） ----------
+
+console.log("━━ ⑧ AIHOT 接入 ━━")
+{
+  // 票 01：MCP 默认种子常量（独立零依赖模块，mcp-client 消费）
+  assert(DEFAULT_MCP_SERVERS.length === 2, "MCP 默认种子两行（DeepWiki + AIHOT）", DEFAULT_MCP_SERVERS.map((s) => s.name).join(" / "))
+  const aihotSeed = DEFAULT_MCP_SERVERS.find((s) => s.name === "AIHOT")
+  assert(aihotSeed?.transport === "http" && aihotSeed?.url === "https://aihot.news/api/mcp" && aihotSeed?.enabled === true, "AIHOT 行四元组精确（http / api/mcp / enabled）", JSON.stringify(aihotSeed ?? null))
+  // 票 02：DEFAULT_FEEDS 18 条 AIHOT 源（D2「全都要」：6 主源 + 6 分类 + 6 全文分类）
+  assert(DEFAULT_FEEDS.length === 42, "默认源 24 → 42（+18 AIHOT）", `n=${DEFAULT_FEEDS.length}`)
+  const aihotFeeds = DEFAULT_FEEDS.filter((f) => f.site === "aihot.news")
+  assert(aihotFeeds.length === 18, "AIHOT 源 18 条（D2 全都要）", `n=${aihotFeeds.length}`)
+  const urlSet = new Set(DEFAULT_FEEDS.map((f) => f.url))
+  assert(urlSet.size === DEFAULT_FEEDS.length, "全表 url 唯一（幂等补种兜底）", `dup=${DEFAULT_FEEDS.length - urlSet.size}`)
+  const aihotExpected = new Set([
+    "https://aihot.news/feed.xml", "https://aihot.news/feed/full.xml", "https://aihot.news/feed/all.xml",
+    "https://aihot.news/feed/daily.xml", "https://aihot.news/feed/weekly.xml", "https://aihot.news/feed/monthly.xml",
+    ...["ai-models", "ai-products", "industry", "paper", "tip", "opinion"].map((s) => `https://aihot.news/feed/category/${s}.xml`),
+    ...["ai-models", "ai-products", "industry", "paper", "tip", "opinion"].map((s) => `https://aihot.news/feed/full/category/${s}.xml`),
+  ])
+  assert(aihotFeeds.every((f) => aihotExpected.has(f.url)) && aihotFeeds.length === aihotExpected.size, "18 地址与官方 feed 全表精确相等（6 主源+6 分类+6 全文分类）")
+  assert(aihotFeeds.every((f) => f.category === "AI聚合" && f.name.startsWith("AIHOT") && f.name.length > 4), "统一 category=AI聚合、命名 AIHOT 前缀")
+  const nonAihot = DEFAULT_FEEDS.filter((f) => f.site !== "aihot.news")
+  assert(nonAihot.length === 24 && nonAihot.every((f) => !f.url.includes("aihot")), "原 24 源零改动（IN 语义：非 AIHOT 行不受影响）")
+
+  // 票 03：ETag 条件请求（本地 HTTP 服务器 304 往返，零外网）
+  const localXml = `<?xml version="1.0"?><rss version="2.0"><channel><title>本地测试源</title><item><title>本地条目</title><link>http://127.0.0.1/x</link></item></channel></rss>`
+  const localEtag = 'W/"etag-local-1"'
+  const seenIfNoneMatch: string[] = []
+  const server = http.createServer((req, res) => {
+    seenIfNoneMatch.push(String(req.headers["if-none-match"] ?? ""))
+    if (req.headers["if-none-match"] === localEtag) {
+      res.writeHead(304, { ETag: localEtag })
+      res.end()
+      return
+    }
+    res.writeHead(200, { "Content-Type": "application/rss+xml", ETag: localEtag })
+    res.end(localXml)
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()))
+  const localPort = (server.address() as { port: number }).port
+  const localUrl = `http://127.0.0.1:${localPort}/feed.xml`
+  try {
+    const e1 = await fetchAndParse(localUrl)
+    assert(e1.notModified === false && e1.feed.items.length === 1, "第一轮 200 + 正常解析（无 etag 不发条件头）", `items=${(e1 as { feed?: { items?: unknown[] } }).feed?.items?.length ?? "n/a"}`)
+    assert(e1.etag === localEtag, "第一轮捕获响应 ETag（回存种子）", String((e1 as { etag?: string }).etag ?? "n/a"))
+    const e2 = await fetchAndParse(localUrl, 5_000, "", e1.etag)
+    assert(e2.notModified === true, "第二轮带 If-None-Match → 304 notModified（零正文传输）", `notModified=${(e2 as { notModified?: boolean }).notModified}`)
+    assert(e2.feed.items.length === 0, "notModified 时 feed 为空壳")
+    assert(e2.etag === localEtag, "304 回显 ETag 保留（不清空）")
+    const e3 = await fetchAndParse(localUrl, 5_000, "", "")
+    assert(e3.notModified === false && e3.feed.items.length === 1, "IN1：不带 etag → 200 正常解析（既有行为不变）")
+    assert(seenIfNoneMatch.length === 3 && seenIfNoneMatch[0] === "" && seenIfNoneMatch[1] === localEtag && seenIfNoneMatch[2] === "", "服务器侧验证：仅第二轮携带 If-None-Match", seenIfNoneMatch.join(" / "))
+  } finally {
+    server.close()
+  }
+
+  // 票 04：原文直链（originalLinkFromDescription 函数族 + parseFeed 发现层）
+  assert(originalLinkFromDescription('<p><a href="https://example.com/post/1">🔗 阅读原文</a>｜<a href="https://aihot.news/items/abc">via AIHOT</a></p>') === "https://example.com/post/1", "带「阅读原文」标签锚取 href")
+  assert(originalLinkFromDescription('<a href="https://aihot.news/items/x">via AIHOT</a>') === null, "无标签锚 → null（站内链不误判）")
+  assert(originalLinkFromDescription("无锚文本") === null, "无锚 → null")
+  assert(originalLinkFromDescription('<a href="https://a.com/1">点这里</a><a href="https://a.com/2">阅读原文</a>') === "https://a.com/2", "多锚取带标签者（非首个）")
+  assert(originalLinkFromDescription('<a href="javascript:void(0)">阅读原文</a>') === null, "非 http(s) 协议拒收")
+  assert(originalLinkFromDescription('<a class="x" href="https://a.com/3">阅读原文</a>') === "https://a.com/3", "带属性锚仍取 href")
+
+  // parseFeed AIHOT 样例：originalUrl 只发现不改写（url 仍为站内阅读页）
+  const aihotSampleXml = `<?xml version="1.0"?><rss version="2.0"><channel><title>AIHOT — 精选</title><ttl>30</ttl><item><title><![CDATA[某公司发布新模型]]></title><link>https://aihot.news/items/abc123</link><description><![CDATA[<p>摘要文字。</p><p><a href="https://example.com/post/1">🔗 阅读原文</a>｜<a href="https://aihot.news/items/abc123">via AIHOT</a></p>]]></description><category>AI 模型</category><pubDate>Tue, 11 Nov 2026 08:00:00 GMT</pubDate><guid isPermaLink="false">abc123</guid></item></channel></rss>`
+  const ap = parseFeed(aihotSampleXml)
+  assert(ap.items.length === 1 && ap.items[0].guid === "abc123", "AIHOT 样例：guid 拾取（isPermaLink 属性旁路）")
+  assert(ap.items[0].url === "https://aihot.news/items/abc123", "解析层不改写 url（条目页忠实保留，回填归存储层）")
+  assert(ap.items[0].originalUrl === "https://example.com/post/1", "originalUrl 发现层抽出（阅读原文锚）")
+  assert(ap.items[0].publishedAt !== null && ap.items[0].summary.includes("摘要文字") && !ap.items[0].summary.includes("<a"), "pubDate/去标签摘要既有行为不回退")
+  const plainXml = `<?xml version="1.0"?><rss version="2.0"><channel><title>t</title><item><title>普通源条目</title><link>https://plain.example/x</link><description><![CDATA[<p>无标签链接 <a href="https://plain.example/y">详情</a></p>]]></description></item></channel></rss>`
+  assert(parseFeed(plainXml).items[0].originalUrl === "", "IN2：无「阅读原文」锚的普通形态不产出 originalUrl")
 }
 
 console.log("")

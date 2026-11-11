@@ -12,6 +12,9 @@
 | 报告 | Report | 围绕话题的研究产出（供选题消费） | model Report |
 | 断言 | Claim | 从报告提取的可验证事实句（FACT/REF/ASSERT 三类） | model Claim；`src/lib/runtime/run-manager.ts` |
 | 订阅源 / 条目 | SourceFeed / FeedItem | RSS 等外部情报源与其抓取条目 | model SourceFeed、FeedItem |
+| AIHOT 接入 | AIHOT Access | 中文 AI 聚合服务（aihot.news）双缝接入：MCP 默认种子（10 只读工具）+ 18 条 RSS 默认源（6 主源+6 分类+6 全文分类）；许可=组织内部免费、对外商业须书面授权 | `src/lib/agent/mcp-seeds.ts`、`src/lib/sources/rss.ts`（DEFAULT_FEEDS）；ADR-0011 |
+| ETag 条件请求 | Conditional Request | `SourceFeed.etag` 非空时刷新发 If-None-Match，304 → notModified 零正文传输（未变化≠失败） | `rss.ts` fetchAndParse；model SourceFeed.etag；ADR-0011 |
+| 原文直链 | Original Link | AIHOT 条目 description 内「阅读原文」锚抽出的第三方原文 URL：解析层只发现，存储层按源门控回填条目 url（条目页链接保留在摘要尾） | `rss.ts` originalLinkFromDescription；ADR-0011 |
 | 选题 | Idea | 从情报到文章的中间产物：方向卡 + 证据可得性评估 | model Idea；`run-manager.ts` db.idea |
 | 文章 | Article | 最终发布的成稿 | model Article |
 | 运行 | AgentRun | 一次内容生产任务的执行记录（kind/status/stage/lengthTier） | model AgentRun；`src/lib/runtime/run-manager.ts` |

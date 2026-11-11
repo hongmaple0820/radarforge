@@ -12,7 +12,10 @@ import { simhash64, isDuplicate } from "./simhash.ts"
 import http from "node:http" // 代理路径（P0-2）：绝对形式转发 / CONNECT 隧道
 import https from "node:https"
 
-// ---------- 默认源注册表（24 个 AI 资讯源：中文 8 + 英文 16） ----------
+// ---------- 默认源注册表（42 个 AI 资讯源：中文 5 + AIHOT 18 + 英文 10 + 研究 5 + 观点 4） ----------
+// AIHOT 块（aihot.news，D2 拍板「全都要」）：中文 AI 聚合天线，6 主源 + 6 分类 + 6 全文分类，
+// ETag/304 条件请求与跨站 guid 去重见同文件；许可定性（组织内部使用免费，对外商业须书面授权
+// agent@virxact.com）见 docs/research-aihot-agent-access.md §4 与 docs/adr/0011。
 export interface FeedSeed {
   name: string
   url: string
@@ -27,6 +30,25 @@ export const DEFAULT_FEEDS: FeedSeed[] = [
   { name: "少数派", url: "https://sspai.com/feed", category: "中文社区", site: "sspai.com" },
   { name: "阮一峰科技爱好者周刊", url: "http://www.ruanyifeng.com/blog/atom.xml", category: "中文社区", site: "ruanyifeng.com" },
   { name: "Solidot", url: "https://www.solidot.org/index.rss", category: "中文社区", site: "solidot.org" },
+  // —— AIHOT 聚合（aihot.news；插在中文源后：createdAt 序决定跨 feed 去重时「精选摘要版」先入池） ——
+  { name: "AIHOT 精选", url: "https://aihot.news/feed.xml", category: "AI聚合", site: "aihot.news" },
+  { name: "AIHOT 精选全文", url: "https://aihot.news/feed/full.xml", category: "AI聚合", site: "aihot.news" },
+  { name: "AIHOT 全部动态", url: "https://aihot.news/feed/all.xml", category: "AI聚合", site: "aihot.news" },
+  { name: "AIHOT 日报", url: "https://aihot.news/feed/daily.xml", category: "AI聚合", site: "aihot.news" },
+  { name: "AIHOT 周报", url: "https://aihot.news/feed/weekly.xml", category: "AI聚合", site: "aihot.news" },
+  { name: "AIHOT 月报", url: "https://aihot.news/feed/monthly.xml", category: "AI聚合", site: "aihot.news" },
+  { name: "AIHOT 分类·AI 模型", url: "https://aihot.news/feed/category/ai-models.xml", category: "AI聚合", site: "aihot.news" },
+  { name: "AIHOT 分类·AI 产品", url: "https://aihot.news/feed/category/ai-products.xml", category: "AI聚合", site: "aihot.news" },
+  { name: "AIHOT 分类·行业", url: "https://aihot.news/feed/category/industry.xml", category: "AI聚合", site: "aihot.news" },
+  { name: "AIHOT 分类·论文", url: "https://aihot.news/feed/category/paper.xml", category: "AI聚合", site: "aihot.news" },
+  { name: "AIHOT 分类·技巧", url: "https://aihot.news/feed/category/tip.xml", category: "AI聚合", site: "aihot.news" },
+  { name: "AIHOT 分类·观点", url: "https://aihot.news/feed/category/opinion.xml", category: "AI聚合", site: "aihot.news" },
+  { name: "AIHOT 全文分类·AI 模型", url: "https://aihot.news/feed/full/category/ai-models.xml", category: "AI聚合", site: "aihot.news" },
+  { name: "AIHOT 全文分类·AI 产品", url: "https://aihot.news/feed/full/category/ai-products.xml", category: "AI聚合", site: "aihot.news" },
+  { name: "AIHOT 全文分类·行业", url: "https://aihot.news/feed/full/category/industry.xml", category: "AI聚合", site: "aihot.news" },
+  { name: "AIHOT 全文分类·论文", url: "https://aihot.news/feed/full/category/paper.xml", category: "AI聚合", site: "aihot.news" },
+  { name: "AIHOT 全文分类·技巧", url: "https://aihot.news/feed/full/category/tip.xml", category: "AI聚合", site: "aihot.news" },
+  { name: "AIHOT 全文分类·观点", url: "https://aihot.news/feed/full/category/opinion.xml", category: "AI聚合", site: "aihot.news" },
   // —— 英文资讯 ——
   { name: "Hacker News · AI 高赞", url: "https://hnrss.org/newest?q=AI&points=100", category: "英文社区", site: "news.ycombinator.com" },
   { name: "Hacker News · 头版", url: "https://hnrss.org/frontpage", category: "英文社区", site: "news.ycombinator.com" },
@@ -59,6 +81,7 @@ export interface RawFeedItem {
   url: string
   summary: string
   publishedAt: Date | null
+  originalUrl: string // description 内「阅读原文」锚发现的第三方原文直链（无则 ""；只发现不改写，aihot-access P1 票 04）
 }
 
 export interface ParsedFeed {
@@ -92,6 +115,17 @@ function cleanSummary(raw: string, max = 300): string {
     .replace(/\s+/g, " ")
     .trim()
   return s.length > max ? s.slice(0, max) + "…" : s
+}
+
+/** AIHOT 条目 description HTML 内「阅读原文」锚 → 第三方原文直链（aihot-access P1 票 04）
+ *  只认带「阅读原文」锚文本的 href（「via AIHOT」站内链、成刊条目内链不构成原文信号），
+ *  非 http(s) 协议拒收；无标签锚返回 null。层职责：本函数与 parseFeed 只「发现」不改写，
+ *  是否回填条目 url 由 refreshFeeds 存储层按源门控（site==="aihot.news"，方案 D8）。 */
+export function originalLinkFromDescription(html: string): string | null {
+  const anchors = [...html.matchAll(/<a\s[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)]
+  const labeled = anchors.find((m) => /阅读原文/.test(m[2] ?? ""))
+  const href = (labeled?.[1] ?? "").trim()
+  return /^https?:\/\//i.test(href) ? href.slice(0, 500) : null
 }
 
 function pickField(block: string, tag: string): string {
@@ -164,6 +198,7 @@ export function parseFeed(xml: string): ParsedFeed {
       url: url.slice(0, 500),
       summary: cleanSummary(summaryRaw),
       publishedAt: pickDate(b, isAtom),
+      originalUrl: summaryRaw ? (originalLinkFromDescription(summaryRaw) ?? "") : "",
     }
     item.guid = item.guid || guidFallback(item)
     items.push(item)
@@ -183,6 +218,7 @@ export interface FeedRefreshResult {
   stale: number // 粗粒度：超龄跳过
   known: number // 细粒度：guid 已见
   duplicates: number // 跨源：SimHash 重复
+  notModified: boolean // ETag 304 命中：源未变化零正文（aihot-access P1 票 03）
 }
 
 export interface RefreshOptions {
@@ -209,13 +245,18 @@ interface ProxyGetResult {
   status: number
   contentType: string
   body: string
+  etag: string // 响应 ETag（304 回显或 200 头，无则 ""——aihot-access P1 票 03）
 }
 
-function proxyGet(targetUrl: string, proxyUrl: string, timeoutMs: number): Promise<ProxyGetResult> {
+function proxyGet(targetUrl: string, proxyUrl: string, timeoutMs: number, etag = ""): Promise<ProxyGetResult> {
   return new Promise((resolve, reject) => {
     const t = new URL(targetUrl)
     const p = new URL(proxyUrl)
-    const headers = { "User-Agent": "RadarForge/2.0 (+rss-reader)", Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*" }
+    const headers: Record<string, string> = {
+      "User-Agent": "RadarForge/2.0 (+rss-reader)",
+      Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
+      ...(etag ? { "If-None-Match": etag } : {}),
+    }
     const fail = (e: unknown): void => reject(e instanceof Error ? e : new Error(String(e)))
 
     const collect = (res: import("node:http").IncomingMessage): Promise<ProxyGetResult> =>
@@ -224,10 +265,12 @@ function proxyGet(targetUrl: string, proxyUrl: string, timeoutMs: number): Promi
         res.on("data", (c: Buffer) => chunks.push(c))
         res.on("end", () => {
           const ct = res.headers["content-type"]
+          const et = res.headers.etag
           res2({
             status: res.statusCode ?? 0,
             contentType: Array.isArray(ct) ? String(ct[0]) : String(ct ?? ""),
             body: Buffer.concat(chunks).toString("utf-8"),
+            etag: Array.isArray(et) ? String(et[0]) : String(et ?? ""),
           })
         })
       })
@@ -317,43 +360,62 @@ export function resetGlobalProxyCache(): void {
 }
 
 /** 单源抓取（fetch + 解析；网络类瞬时错误自动重试 1 次——探活实证沙箱外网抖动，curl 三连可达而 fetch 偶发 failed）。
- *  P0-2：proxyUrl 非空时经 undici ProxyAgent 发请求；失败错误信息带「经代理」标记，
- *  让用户能区分是源挂了还是代理挂了。 */
-export async function fetchAndParse(url: string, timeoutMs = 15_000, proxyUrl = ""): Promise<ParsedFeed> {
+ *  P0-2：proxyUrl 非空时经手写代理路径发请求；失败错误信息带「经代理」标记。
+ *  P1（aihot-access 票 03）：etag 非空时发 If-None-Match 条件请求，304 → notModified 零正文返回；
+ *  无 etag 的源不发条件头、解析路径零变化（IN1）。etag 解析单一事实源在本函数：
+ *  304 → 响应回显或保留传入值；200 → 响应 ETag 或 ""（服务器不提供则清空，下轮不首发条件头）。 */
+export interface FeedFetchOutcome {
+  notModified: boolean // 304 命中：源未变化，零正文传输
+  feed: ParsedFeed // notModified=true 时为空壳 { title: "", items: [] }
+  etag: string // 供调用方回存 SourceFeed.etag
+}
+
+export async function fetchAndParse(url: string, timeoutMs = 15_000, proxyUrl = "", etag = ""): Promise<FeedFetchOutcome> {
   const viaProxy = proxyUrl.trim() !== ""
   if (viaProxy) logProxyOnce(proxyUrl.trim())
-  const attempt = async (): Promise<ParsedFeed> => {
+  const attempt = async (): Promise<FeedFetchOutcome> => {
     let status: number
     let ctype: string
     let text: string
+    let etagOut: string
     if (viaProxy) {
       // 代理路径：手写 proxyGet（绝对形式 / CONNECT 隧道），失败快速抛错
-      const res = await proxyGet(url, proxyUrl.trim(), timeoutMs)
+      const res = await proxyGet(url, proxyUrl.trim(), timeoutMs, etag)
       status = res.status
       ctype = res.contentType
       text = res.body
+      etagOut = res.etag
     } else {
-      // 直连路径：全局 fetch（零行为变化）
+      // 直连路径：全局 fetch（零行为变化 + 条件请求头）
       const res = await fetch(url, {
         signal: AbortSignal.timeout(timeoutMs),
-        headers: { "User-Agent": "RadarForge/2.0 (+rss-reader)", Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*" },
+        headers: {
+          "User-Agent": "RadarForge/2.0 (+rss-reader)",
+          Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
+          ...(etag ? { "If-None-Match": etag } : {}),
+        },
         redirect: "follow",
       })
       status = res.status
       ctype = res.headers.get("content-type") ?? ""
-      text = await res.text()
+      etagOut = res.headers.get("etag") ?? ""
+      text = status === 304 ? "" : await res.text()
+    }
+    if (status === 304) {
+      // 条件请求命中（AIHOT 等 ETag 源零正文；实测见外部笔记 §1.3）
+      return { notModified: true, feed: { title: "", items: [] }, etag: etagOut || etag }
     }
     if (status < 200 || status >= 300) throw new Error(`HTTP ${status}${viaProxy ? "（经代理）" : ""}`)
     if (!/<(rss|feed|rdf|RDF)[:\s>]/i.test(text) && !/<(item|entry)[\s>]/i.test(text)) {
       throw new Error(`非 RSS/Atom 内容（${ctype || "未知类型"}，${text.length} 字符）${viaProxy ? "（经代理）" : ""}`)
     }
-    return parseFeed(text)
+    return { notModified: false, feed: parseFeed(text), etag: etagOut }
   }
   try {
     return await attempt()
   } catch (e) {
     const firstMsg = String((e as Error).message ?? "")
-    // 只重试网络类瞬时错误（fetch failed / timeout / aborted / ECONNRESET / 5xx）；4xx 与内容错误不重试
+    // 只重试网络类瞬时错误（fetch failed / timeout / aborted / ECONNRESET / 5xx）；304 不入此路径，4xx 与内容错误不重试
     const transient = /fetch failed|timeout|aborted|ECONNRESET|ECONNREFUSED|HTTP 5\d\d/i.test(firstMsg)
     if (!transient) {
       // 代理连接类错误（ProxyAgent 典型报错）补「经代理」标记，区分源故障与代理故障
@@ -402,46 +464,59 @@ export async function refreshFeeds(opts: RefreshOptions = {}): Promise<FeedRefre
     url: string
     site: string
     proxyUrl?: string
+    etag?: string
   }): Promise<FeedRefreshResult> => {
-    const r: FeedRefreshResult = { feedId: feed.id, feedName: feed.name, status: "ok", error: "", fetched: 0, inserted: 0, stale: 0, known: 0, duplicates: 0 }
+    const r: FeedRefreshResult = { feedId: feed.id, feedName: feed.name, status: "ok", error: "", fetched: 0, inserted: 0, stale: 0, known: 0, duplicates: 0, notModified: false }
     // 代理优先级（P0-2）：按源 proxyUrl > 全局代理 > 直连
     const effectiveProxy = feed.proxyUrl?.trim() || globalProxy
+    let nextEtag: string | undefined // 抓取成功才回存（undefined = 失败轮保持库中旧值）
     try {
-      const parsed = await fetchAndParse(feed.url, timeoutMs, effectiveProxy)
-      r.fetched = parsed.items.length
-      const now = Date.now()
-      for (const it of parsed.items) {
-        // 粗粒度新鲜度：超龄跳过（无日期字段视为新鲜，宽容）
-        if (it.publishedAt && now - it.publishedAt.getTime() > maxAgeDays * 86400_000) {
-          r.stale++
-          continue
+      const out = await fetchAndParse(feed.url, timeoutMs, effectiveProxy, feed.etag ?? "")
+      r.notModified = out.notModified
+      nextEtag = out.etag
+      if (!out.notModified) {
+        r.fetched = out.feed.items.length
+        const now = Date.now()
+        for (const it of out.feed.items) {
+          // 粗粒度新鲜度：超龄跳过（无日期字段视为新鲜，宽容）
+          if (it.publishedAt && now - it.publishedAt.getTime() > maxAgeDays * 86400_000) {
+            r.stale++
+            continue
+          }
+          // 细粒度新鲜度：feed 内 guid 已见
+          const exists = await db.feedItem.findUnique({ where: { feedId_guid: { feedId: feed.id, guid: it.guid } }, select: { id: true } })
+          if (exists) {
+            r.known++
+            continue
+          }
+          // 跨源去重：SimHash（标题+摘要——用解析层原值，不掺存储层回填后缀，
+          // 部署前后哈希口径一致，跨 feed 同条目判重不受票 04 变换影响）
+          const hash = simhash64(`${it.title} ${it.summary}`)
+          if (hash !== "0".repeat(16) && knownHashes.some((h) => isDuplicate(hash, h))) {
+            r.duplicates++
+            continue
+          }
+          // 原文直链回填（票 04，存储层门控）：AIHOT 源条目 url 指向第三方原文，
+          // 条目页链接保留在摘要尾（溯源 + 条款「保留机器来源信息」双满足）
+          const isAihotFeed = feed.site === "aihot.news"
+          const backfilled = isAihotFeed && it.originalUrl !== "" && it.originalUrl !== it.url
+          const finalUrl = backfilled ? it.originalUrl : it.url
+          const finalSummary = backfilled ? `${it.summary}（AIHOT 条目页：${it.url}）`.slice(0, 400) : it.summary
+          await db.feedItem.create({
+            data: {
+              feedId: feed.id,
+              guid: it.guid,
+              title: it.title,
+              url: finalUrl,
+              site: feed.site || hostOf(it.url),
+              summary: finalSummary,
+              simhash: hash,
+              publishedAt: it.publishedAt,
+            },
+          })
+          knownHashes.push(hash)
+          r.inserted++
         }
-        // 细粒度新鲜度：feed 内 guid 已见
-        const exists = await db.feedItem.findUnique({ where: { feedId_guid: { feedId: feed.id, guid: it.guid } }, select: { id: true } })
-        if (exists) {
-          r.known++
-          continue
-        }
-        // 跨源去重：SimHash（标题+摘要）
-        const hash = simhash64(`${it.title} ${it.summary}`)
-        if (hash !== "0".repeat(16) && knownHashes.some((h) => isDuplicate(hash, h))) {
-          r.duplicates++
-          continue
-        }
-        await db.feedItem.create({
-          data: {
-            feedId: feed.id,
-            guid: it.guid,
-            title: it.title,
-            url: it.url,
-            site: feed.site || hostOf(it.url),
-            summary: it.summary,
-            simhash: hash,
-            publishedAt: it.publishedAt,
-          },
-        })
-        knownHashes.push(hash)
-        r.inserted++
       }
     } catch (e) {
       r.status = "error"
@@ -454,12 +529,14 @@ export async function refreshFeeds(opts: RefreshOptions = {}): Promise<FeedRefre
         lastStatus: r.status,
         lastError: r.error,
         lastItemCount: r.inserted,
+        // 抓取失败（nextEtag 未定义）保持库中旧值；成功轮次回存（304 → 回显/旧值，200 → 新值或清空）
+        ...(nextEtag !== undefined ? { etag: nextEtag } : {}),
       },
     })
     return r
   }
 
-  // 有界并发（6 路）：24 源顺序抓取 ~4 分钟 → ~1 分钟；SQLite 写入天然串行安全
+  // 有界并发（6 路）：42 源顺序抓取的吞吐上限收敛；SQLite 写入天然串行安全
   const results: FeedRefreshResult[] = []
   const queue = [...feeds]
   const workers = Array.from({ length: Math.min(6, queue.length) }, async () => {

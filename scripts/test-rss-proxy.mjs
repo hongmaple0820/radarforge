@@ -85,7 +85,7 @@ try {
   // ---------- ② 经代理抓取 E2E ----------
   console.log("── ② 经代理抓取 ──")
   const parsed = await rss.fetchAndParse(TARGET_URL, 5000, P1)
-  ok("经代理抓取成功且解析出 2 条", parsed.items.length === 2, `got ${parsed.items.length}`)
+  ok("经代理抓取成功且解析出 2 条", parsed.feed.items.length === 2, `got ${parsed.feed.items.length}`)
   ok("代理确实收到请求（计数 ≥1）", proxy1.hits() >= 1, `hits=${proxy1.hits()}`)
   ok("代理收到的是绝对形式 URL（含目标 host）", proxy1.lastPaths().some((u) => u.includes(String(target.port))))
   const before = proxy1.hits()

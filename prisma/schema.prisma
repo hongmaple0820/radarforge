@@ -228,6 +228,7 @@ model SourceFeed {
   lastStatus    String    @default("pending") // ok | partial | error | pending（诚实留痕）
   lastError     String    @default("") // 失败原因（人话；经代理失败带「经代理」标记）
   lastItemCount Int       @default(0) // 最近一次新增条目数
+  etag          String    @default("") // 上次响应 ETag（aihot-access P1 票 03：非空时刷新发 If-None-Match，304 零正文）
   note          String    @default("")
   createdAt     DateTime  @default(now())
   items         FeedItem[]
