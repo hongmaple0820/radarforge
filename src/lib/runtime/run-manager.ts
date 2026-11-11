@@ -16,6 +16,8 @@ import { extractJson, clampNum } from "./json"
 import { renderWechatHtml, resolveThemeId, type RenderClaim } from "./render"
 import { lintArticleCitations, stripOrphanAnchors, citationsArtifact, type CitationSource } from "@/lib/content/citations"
 import { briefMessages, draftMessages, expandMessages, getPersona, type Brief, type BriefClaim } from "./skills/radar-write"
+import { aihotContext } from "../sources/aihot-context.ts"
+import { aihotBlock } from "../content/aihot-block.ts"
 import { parseReview, reviewMessages, reviseMessages, pairwiseMessages, parsePairwise, reviewSummary, type Review } from "./skills/radar-review"
 import { outlineMessages, parseOutline, sectionMessages, assembleDraft, type Outline } from "./skills/radar-outline"
 import { countWords, resolveLengthTier, rollingContext, sectionWordNeedsRetry, tierIllustrationRule, type LengthTier } from "./length-tier"
@@ -171,6 +173,9 @@ async function executeArticleRun(runId: string): Promise<void> {
     await save()
   }
 
+  // AIHOT 热点参考（aihot-access 05）：尽力而为查询，无数据/失败 → 空串零字节（IN1）
+  const aihotRef = aihotBlock(await aihotContext())
+
   try {
     // ========== Step 1: brief 任务书 ==========
     let brief: Brief | null = null
@@ -178,7 +183,7 @@ async function executeArticleRun(runId: string): Promise<void> {
       // 降温重试：0.4 偶发非 JSON / 缺字段 / 空返回 → 0.2 保守档 → 0.3 第三档（同 ideas/refresh 已验证模式）
       let parsed: Brief | null = null
       for (const temp of [0.4, 0.2, 0.3]) {
-        const raw = await chatRetry(await briefMessages(run.ideaTitle, run.ideaAngle, stylePrompt, ideaCard), { temperature: temp })
+        const raw = await chatRetry(await briefMessages(run.ideaTitle, run.ideaAngle, stylePrompt, ideaCard, aihotRef), { temperature: temp })
         if (!raw || raw.replace(/\s/g, "").length < 20) continue // 空返回按失败重试
         parsed = extractJson<Brief>(raw)
         if (parsed?.coreJudgment) break
@@ -187,7 +192,7 @@ async function executeArticleRun(runId: string): Promise<void> {
       if (!brief?.coreJudgment) throw new Error("任务书解析失败（三档温度重试后仍不合格式，请重试）")
       artifacts.brief = brief
       const claimsCount = Array.isArray(brief.claims) ? brief.claims.length : 0
-      return `读者：${brief.targetReader?.slice(0, 24) ?? "?"}｜核心判断：${brief.coreJudgment?.slice(0, 40) ?? "?"}｜待核主张 ${claimsCount} 条${ideaCard ? "｜选题卡已注入" : ""}${stylePrompt ? "｜风格定位已注入" : ""}`
+      return `读者：${brief.targetReader?.slice(0, 24) ?? "?"}｜核心判断：${brief.coreJudgment?.slice(0, 40) ?? "?"}｜待核主张 ${claimsCount} 条${ideaCard ? "｜选题卡已注入" : ""}${stylePrompt ? "｜风格定位已注入" : ""}${aihotRef ? "｜AIHOT 热点已注入" : ""}`
     })
 
     // ========== Step 2: claims 取证（每条 fact 联网核对） ==========

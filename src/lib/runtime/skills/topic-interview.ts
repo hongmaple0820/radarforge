@@ -8,9 +8,15 @@
 import type { ChatMessage } from "@/lib/gateway/types"
 import { renderSkillPrompt } from "../skill-prompt.ts"
 
-/** 采访消息：system=SKILL.md 渲染；user=选题标题与切入角度 */
-export async function interviewerMessages(ideaTitle: string, ideaAngle: string): Promise<ChatMessage[]> {
-  const system = await renderSkillPrompt("topic-interviewer", undefined, {})
+/** 采访消息：system=SKILL.md 渲染；user=选题标题与切入角度；第 3 参=AIHOT 热点参考块（aihot-access 05，调用方查传） */
+export async function interviewerMessages(
+  ideaTitle: string,
+  ideaAngle: string,
+  aihotBlockText?: string,
+): Promise<ChatMessage[]> {
+  const system = await renderSkillPrompt("topic-interviewer", undefined, {
+    aihot_block: aihotBlockText ?? "",
+  })
   return [
     { role: "system", content: system },
     { role: "user", content: `选题：${ideaTitle}\n切入角度：${ideaAngle || "（无，自行判断最佳角度）"}` },

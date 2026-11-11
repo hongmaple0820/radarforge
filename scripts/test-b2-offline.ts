@@ -9,6 +9,7 @@
 //   ⑥ S4 选题采访器（topic-interviewer）
 //   ⑦ S4 引用留痕（citation-provenance）
 //   ⑧ AIHOT 接入（aihot-access P1：MCP 种子 / 18 源 / ETag / 原文直链）
+//   ⑨ AIHOT 增强票（05：热点参考注入 aihot-context-block）
 // 运行：node --experimental-strip-types scripts/test-b2-offline.ts
 // ============================================================
 
@@ -30,6 +31,7 @@ import {
 } from "../src/lib/content/citations.ts"
 import { DEFAULT_MCP_SERVERS } from "../src/lib/agent/mcp-seeds.ts"
 import { DEFAULT_FEEDS, fetchAndParse, parseFeed, originalLinkFromDescription } from "../src/lib/sources/rss.ts"
+import { aihotBlock, type AihotTopic } from "../src/lib/content/aihot-block.ts"
 import http from "node:http"
 
 let pass = 0
@@ -380,6 +382,56 @@ console.log("━━ ⑧ AIHOT 接入 ━━")
   assert(ap.items[0].publishedAt !== null && ap.items[0].summary.includes("摘要文字") && !ap.items[0].summary.includes("<a"), "pubDate/去标签摘要既有行为不回退")
   const plainXml = `<?xml version="1.0"?><rss version="2.0"><channel><title>t</title><item><title>普通源条目</title><link>https://plain.example/x</link><description><![CDATA[<p>无标签链接 <a href="https://plain.example/y">详情</a></p>]]></description></item></channel></rss>`
   assert(parseFeed(plainXml).items[0].originalUrl === "", "IN2：无「阅读原文」锚的普通形态不产出 originalUrl")
+}
+
+// ---------- ⑨ AIHOT 增强票（aihot-context-block：热点参考注入） ----------
+console.log("━━ ⑨ AIHOT 热点参考注入（aihot-access 05） ━━")
+{
+  // 帧纪律（纯函数层，b2 直读零依赖口径）
+  assert(aihotBlock([]) === "", "空数组 → 空串（无数据零贡献）")
+  const topics: AihotTopic[] = [
+    { title: "某公司发布新模型", summary: "官方给出总参 280B 与 1M 上下文规格，权重将开源。" },
+    { title: "某厂商 IPO 定价", summary: "发行价区间 70 至 78 美元，估值接近 1.3 万亿美元。" },
+    { title: "某基准测试出结果", summary: "编码与 Agent 任务上进入第一梯队。" },
+  ]
+  const blk = aihotBlock(topics)
+  assert(blk.includes("【AIHOT 热点参考"), "帧头")
+  assert(blk.includes("某公司发布新模型") && blk.includes("某厂商 IPO 定价") && blk.includes("某基准测试出结果"), "三条目行全部入帧")
+  assert(blk.includes("仅作视野参考") || blk.includes("视野参考"), "纪律句在帧内（事实仍须走证据链）")
+  assert(!blk.includes("undefined") && !blk.includes("NaN"), "无 undefined/NaN 残留")
+
+  // 截断纪律：title 80 / summary 120
+  const longTopic: AihotTopic = { title: "长".repeat(100), summary: "摘".repeat(300) }
+  const longBlk = aihotBlock([longTopic])
+  assert(!longBlk.includes("长".repeat(81)), "title 截 80（无超长残留）")
+  assert(!longBlk.includes("摘".repeat(121)), "summary 截 120（无超长残留）")
+  assert(longBlk.includes("长".repeat(80)) && longBlk.includes("摘".repeat(120)), "截断边界保留（80/120 内容完整）")
+
+  // 占位符事实源：两 SKILL.md 持 {{aihot_block}}
+  const briefSrc05 = await loadSkillPrompt("wewrite-brief")
+  assert(briefSrc05.body.includes("{{aihot_block}}"), "wewrite-brief 持 {{aihot_block}} 占位符")
+  assert(/\{\{style_block\}\}\{\{idea_card_block\}\}\{\{aihot_block\}\}/.test(briefSrc05.body), "三占位符同线相邻（渲染行形态）")
+  const ivSrc05 = await loadSkillPrompt("topic-interviewer")
+  assert(ivSrc05.body.includes("{{aihot_block}}"), "topic-interviewer 持 {{aihot_block}} 占位符")
+
+  // IN1 无数据字节级不变：三占位符全空渲染 === 剔占位符渲染
+  const stripped = briefSrc05.body.replace(/\{\{style_block\}\}\{\{idea_card_block\}\}\{\{aihot_block\}\}/g, "")
+  const rendered05 = renderPromptTemplate(briefSrc05.body, { style_block: "", idea_card_block: "", aihot_block: "" })
+  assert(rendered05 === renderPromptTemplate(stripped, { style_block: "" }), "IN1：无数据字节级不变（渲染 === 剔占位符渲染）")
+  assert(!/\{\{/.test(rendered05), "无占位符残留")
+
+  // briefMessages 第 5 参：默认空 = SKILL.md 直渲染（⑥ 节旧断言兼容）；传入块注入 system
+  const noBlkMsgs = await briefMessages("测试选题", "")
+  assert(noBlkMsgs[0].content === rendered05, "briefMessages 默认参数 = 直渲染（逐字节）")
+  const withBlkMsgs = await briefMessages("测试选题", "", undefined, undefined, aihotBlock(topics))
+  assert(withBlkMsgs[0].content.includes("【AIHOT 热点参考"), "brief system 注入热点帧")
+  assert(withBlkMsgs[0].content.includes("某公司发布新模型"), "条目值进 system")
+
+  // interviewerMessages 第 3 参：默认空 = SKILL.md 直渲染；传入块注入
+  const ivNoBlk = await interviewerMessages("某选题", "")
+  assert(ivNoBlk[0].content === renderPromptTemplate(ivSrc05.body, { aihot_block: "" }), "interviewerMessages 默认 = 直渲染")
+  const ivWithBlk = await interviewerMessages("某选题", "", aihotBlock(topics))
+  assert(ivWithBlk[0].content.includes("【AIHOT 热点参考"), "interviewer system 注入热点帧")
 }
 
 console.log("")

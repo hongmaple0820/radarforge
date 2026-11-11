@@ -116,10 +116,12 @@ export async function briefMessages(
   ideaAngle: string,
   stylePrompt?: string,
   ideaCard?: IdeaCard,
+  aihotBlockText?: string,
 ): Promise<ChatMessage[]> {
   const system = await renderSkillPrompt("wewrite-brief", undefined, {
     style_block: stylePrompt ? `\n【创作者风格定位（任务书必须贴合）】\n${stylePrompt}\n` : "",
     idea_card_block: ideaCard ? ideaCardBlock(ideaCard) : "",
+    aihot_block: aihotBlockText ?? "",
   })
   return [
     { role: "system", content: system },

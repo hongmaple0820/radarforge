@@ -94,3 +94,12 @@ AIHOT 从 P0 验证型接入升级为 P1 产品化默认能力：MCP 默认种�
 - 不带 `aihot_actor`（D4）；不做 12 分类源的 UI 开关（全部直入默认种子，用户可逐源停用）。
 - 不碰 `/api/v1/selected/snapshot+changes` 全量同步通道（许可第 7 条「不要把临时缓存变成历史数据库」红线，启用前须单独过许可评估）。
 - 不放宽 mcp-client 8000 字符截断（研究文档 §3.1 注记，Agent 侧 limit 取 5-8 已够用）。
+
+## 9. 增强票（05：AIHOT 热点参考注入，2026-11-11 落地）
+
+§8 第 1 条点名的后续独立增强票，走 S3 同款纪律收口（票 `.scratch/aihot-access/issues/05-aihot-context-block.md`，ADR-0012）：
+
+- **形态证伪先于设计**：原设想「提示词告知 `mcp__AIHOT__*` 工具可用」被证伪——brief / 采访器两步均为纯 chat 补全（`chatRetry` 无 tools 参数），告知不产生行为；正确形态 = 数据注入（ADR-0009 `{{idea_card_block}}` 先例延伸）。P1 retro「预判型红线先证伪」纪律的直接再应用。
+- **落地形态**：`db/skills/wewrite-brief` 与 `db/skills/topic-interviewer` 各加一行 `{{aihot_block}}`；`content/aihot-block.ts`（零依赖帧组装：近 7 天 5 条，title 80 / summary 120 截断）+ `sources/aihot-context.ts`（查询 + 失败降级空数组）；调用方查传（run-manager Step1 / topic-interview 路由），消息组装层不碰 db。
+- **不变量**：IN1 无数据字节级不变（渲染 === 剔占位符渲染，b2 ⑨ 钉死）；IN2 注入是增强不是依赖（查询失败留 warn 不产 error 终态）。
+- **验收**：b2 127→145（⑨ 节 18 断言）；E2E 三相 15/16（查询层 5 条真实热点 / 出题 7 问三维度 / brief 步「AIHOT 热点已注入」确定性留痕，run done 132s）；唯一红=成稿 5087 字超容差带（S3 m02 4023 / S4 4756 / 本批 5087 三证同族大纲裁量偶发，观察项）；eval m01 同题同配置宽门 ≥7.88（429 冷却后复跑收口，见票 Comments）。

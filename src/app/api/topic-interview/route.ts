@@ -4,6 +4,8 @@ import { extractJson } from "@/lib/runtime/json"
 import { getDisabledSkills } from "@/lib/skills/state"
 import { parseInterviewQuestions } from "@/lib/content/idea-card"
 import { interviewerMessages } from "@/lib/runtime/skills/topic-interview"
+import { aihotContext } from "@/lib/sources/aihot-context"
+import { aihotBlock } from "@/lib/content/aihot-block"
 
 // ============================================================
 // /api/topic-interview —— S4 选题采访器（frontier 轮次产品化）
@@ -41,9 +43,11 @@ export async function POST(req: Request) {
     }
 
     const t0 = Date.now()
+    // AIHOT 热点参考（aihot-access 05）：尽力而为查询，无数据/失败 → 空串零字节（IN1）
+    const aihotRef = aihotBlock(await aihotContext())
     // 出题重试：0.4 偶发非 JSON / 越界数量 → 0.2 保守档（brief 步同模式两档）
     for (const temp of [0.4, 0.2]) {
-      const raw = await chatRetry(await interviewerMessages(ideaTitle, ideaAngle), { temperature: temp })
+      const raw = await chatRetry(await interviewerMessages(ideaTitle, ideaAngle, aihotRef), { temperature: temp })
       if (!raw || raw.replace(/\s/g, "").length < 20) continue // 空返回按失败重试
       const questions = parseInterviewQuestions(extractJson(raw))
       if (questions) {
