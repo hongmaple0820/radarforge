@@ -1284,3 +1284,26 @@ Work Log:
 - REAL 搜索模式全绿路径实证（orphanRemoved=0 且 anchors>0 的「部分 verified」跳号场景）：离线 b2 ⑦ 节已钉语义，线上留观（SEARCH_KEY 外部约束，与 A4 降级链同源）
 - mattpocock/skills 采纳方案 S1~S4 全部落地（含余项②）；后续待办=真密钥收口（票 03 一条命令）+ 全 agnes 3/3 i2v 成片（外部窗口）
 - db/custom.db 留本批 E2E 探针 run 2 个（DEMO 模式，claims 全未证实）：非交付物
+---
+Task ID: AIHOT-RESEARCH
+Agent: 主 Agent（Z.ai）+ 后台调研代理（research 技能）
+Task: 用户指令「研究一下这个，看看能不能接入到我们的项目里去 AGENT 接入」——AIHOT（aihot.news）四通道调研 + RadarForge 缝对缝映射 + P0 运行时实证（纯文档批次，零产品代码改动）
+
+Work Log:
+- **方法**：research 技能后台代理做外部一手文档精读 + 匿名实测约 30 请求（aihot.news 各页 / openapi-v1.json 141KB 解析 / GitHub 引擎源码 / terms+privacy 全文，笔记落 `scripts/tmp/aihot-external-findings.md` 266 行含条款原文引用）；主代理并行做仓库代码锚点核对（mcp-client/tool-registry/rss.ts/sources+agent 路由/prisma 模型）+ 协议兼容探针 + dev server 内 P0。
+- **四通道事实**：Skill（装 ~/.agents/skills/aihot，3 文件 + SHA-256，本体零逻辑读 /api/v1/agent，装一次永不需要更新）｜MCP（https://aihot.news/api/mcp，Streamable HTTP+SSE，**无状态**（无 mcp-session-id），10 工具全 readOnlyHint:true）｜RSS（6 主源 + 12 分类源，RSS 2.0，ETag/304 实测通过，ttl 30min）｜REST（/api/v1 34 匿名 GET，OpenAPI 3.1，Problem JSON）。旧接口 /api/public/* 已 2026-10-31 停服、旧域名仅 301——旧教程别照抄。
+- **决定性兼容验证**：RadarForge `mcp-client.ts` 硬编码协议 **2025-06-18** 实测被 AIHOT 接受并原样回显（后台代理只测过 2025-03-26，本会话补测 RadarForge 精确请求序列：initialize 200 → notifications/initialized 202 → tools/call 200 + _meta 信任元数据）；AIHOT 无状态设计与 `callHttpTool` 每调用重新 initialize 的实现完美咬合——**零代码兼容**。
+- **P0 运行时实证**（`scripts/tmp/aihot-p0-demo.mjs`，with-server 走产品自己的 API）：缝A MCP——create → test 握手 aihot v2.0.0（延迟 520-685ms）→ 10 工具以 `mcp__AIHOT__` 前缀接入 toolRegistry → 实调 `aihot_get_hot_topics`（limit=3）返回 1124 字符中文热点 Markdown；缝B RSS——add「AIHOT 精选」→ 全量刷新 status=ok → fetched=40 / inserted=40 → 转选题闭环（真实当日标题：Culper Research 做空 Nvidia 报道）。三次运行覆盖创建路径与幂等路径，**12/12 全绿**。
+- **断言修正两课**（研究型 demo 的预期值要先读代码）：① fetched=40 而非 feed 实际 50 条——产品解析器单源 `slice(0,40)` 防洪水上限，既定行为非缺陷，断言已钉住正确语义；② GET /api/sources 只回最新 30 条 status=new——非首跑时 AIHOT 条目被其他源新条目挤出窗口，promote 判据改条件式（首跑已实证闭环）。
+- **许可评估**（决策门）：组织内部使用（内部研究/情报/知识库/决策）**永久免费无需申请**——RadarForge 当前个人+内部定性合规；对外商业产品/收费服务/客户交付/代理接口/转售/镜像/白标/对外训练微调评测 RAG 须 agent@virxact.com **书面授权**（每响应带 x-aihot-commercial-use: written-authorization-required 头）；MIT 仅覆盖代码与 Skill 文件不覆盖数据输出；免费范围不强制界面署名但保留机器来源信息（RSS author 字段天然满足）。
+- **诚实留痕**：25 源全量刷新 ok 14-18 / error 7-11（沙箱网络对部分海外源不可达的既定现象，非 AIHOT 因素）；SimHash 对 AIHOT 中文重写文本命中率低——同一事件可能双条入池（选题池容忍近重复，人工 promote 过滤，精确去重列 P2）；mcp-client 工具包装 text 截 8000 字符而 agent/latest 默认 10 条约 8KB 贴线——Agent 调用 limit 取 5-8。
+- **交付**：`docs/research-aihot-agent-access.md`（七节：是什么/四通道一览/四缝映射含代码锚点与实测表/许可评估/风险清单/分阶段方案/结论，研究文档豁免票制）+ 两份 scripts/tmp 资产（外部调研笔记 + P0 幂等可复现脚本）。
+
+### 环境改进（retro）
+- **研究型 demo 的断言预期先读代码再定值**：首跑 1 条假红（fetched 预期 50）源于没读 `parseFeed` 的单源上限——机械错误 → 确定性检查：跨产品断言前先核产品既定行为，已回写 demo 注释
+- **后台调研代理只验证了它会用的协议版本**（2025-03-26），本仓客户端用的是 2025-06-18——委托调研的结论要对着本仓调用代码再核一遍关键参数，本批「主代理补测」模式有效
+
+### 遗留与下一步
+- 待用户拍板四决策点：D1 P1 产品化两票（`seedDefaultServer()` 加 AIHOT 行与 DeepWiki 并列 + `DEFAULT_FEEDS` 加精选/全部动态，走 `.scratch/aihot-access/` 票制）；D2 RSS 源选择（推荐 feed.xml + feed/all.xml）；D3 P2 增强（rss ETag 条件请求 / AIHOT 原文直链抽取）；D4 aihot_actor 策略（推荐不带）
+- P0 状态留在 db/custom.db（gitignored，沙箱回收即清）——持久性靠 P1 默认种子；25 源刷新的 240+ 条探针数据同库，非交付物
+- 若要在 wewrite-brief / topic-interviewer 提示词告知 mcp__AIHOT__* 工具可用：SKILL.md 改动须走 S3 同款纪律（token 基线 + 聚焦 E2E + eval 不回退），列为 S3 后独立增强票
