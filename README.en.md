@@ -29,15 +29,16 @@ One pipeline covers **topic → research → writing → artwork → video**, wi
 
 ### 📡 Intelligence radar (search + RSS dual backend)
 - **AI search** (Yuanbao SearchPro): real web results with real citations, not model hallucinations
-- **RSS feeds**: 24 curated AI sources (qbitai / InfoQ / Hacker News / OpenAI / DeepMind / arXiv …, probe-verified), refreshed with bounded concurrency, dual-granularity freshness filtering and **SimHash cross-source dedup**; any item promotes into the idea pool in one click — see first, then produce
+- **RSS feeds**: 42 curated AI sources (qbitai / InfoQ / Hacker News / OpenAI / DeepMind / arXiv … probe-verified, plus 18 AIHOT aggregate feeds: 6 main / 6 category / 6 full-text), refreshed with bounded concurrency, dual-granularity freshness filtering and **SimHash cross-source dedup**; any item promotes into the idea pool in one click — see first, then produce
+- **AIHOT dual-channel access** (aihot.news · anonymous, read-only, no key): a **default MCP seed** (10 read-only tools auto-registered as `mcp__AIHOT__*` on a fresh database, alongside DeepWiki) plus the RSS feeds above; refreshes carry **ETag conditional requests** (unchanged feeds → 304, zero-body transfer), and AIHOT items get third-party **original-article links** back-filled (extracted from the "read the original" anchor; the item-page link stays at the end of the summary). Data license: free for internal organizational use; external commercial use requires prior written authorization from AIHOT
 - **Topic tracking**: subscribe to the beats you care about; fresh signals land in your inbox
 - **Source tracing**: every claim carries its original source link; per-feed fetch status is honestly recorded (failures never block the rest)
 
 ### ✍️ Article pipeline (9 steps · P0 quality pipeline)
-brief → claims fact-gathering (keyword-overlap matching) → **outline-first** (JSON: per-section thesis / evidence ids / illustration slots) → **sectioned drafting** → **cross-family review** (different LLM family · pairwise adjudication · ≤2 rounds) → **atomic-assertion verification** (FActScore-style per-claim search; unsupported-rate gate blocks publishing) → inline illustrations → cover → WeChat layout (18 themes)
+brief (the system prompt pre-injects an **AIHOT trending-topics frame** — 5 picks from the last 7 days, horizon only; facts still go through the evidence chain) → claims fact-gathering (keyword-overlap matching) → **outline-first** (JSON: per-section thesis / evidence ids / illustration slots) → **sectioned drafting** → **cross-family review** (different LLM family · pairwise adjudication · ≤2 rounds) → **atomic-assertion verification** (FActScore-style per-claim search; unsupported-rate gate blocks publishing) → inline illustrations → cover → WeChat layout (18 themes, with **citation provenance** built in: citation lint, mechanical removal of orphan anchors, and a citation ledger)
 
 ### 🖱️ Interaction (P1)
-**3-step wizard** (topic → persona cards → confirm with preview; power users switch to advanced mode) | **⌘K command palette** (cross-line actions + recent-run jump) | **point-and-rewrite for articles** (hover any section → rewrite just that section → article version tree) | **run feedforward** (core judgment & outline preview while drafting) | **draft-first detail page** (evidence chain folded into a "why it's written this way" drawer)
+**3-step wizard** (topic → persona cards → confirm with preview; step 1 offers "AI-complete the topic card" — 5–8 questions across three dimensions, each with a recommended answer, distilled into a card that travels with the pipeline; power users switch to advanced mode) | **⌘K command palette** (cross-line actions + recent-run jump) | **point-and-rewrite for articles** (hover any section → rewrite just that section → article version tree) | **run feedforward** (core judgment & outline preview while drafting) | **draft-first detail page** (evidence chain folded into a "why it's written this way" drawer)
 
 ### 🎬 Video pipeline (3 channels + direct-from-topic + hybrid)
 Two sources: **adapt from a finished article** (recommended) or **direct from topic** (skip the article pipeline entirely); director's three directions → storyboard → motion commercial / art animation / Agnes AI model / **hybrid channel** (data & typography scenes via code animation, live-footage & mood scenes via AI inserts — cost ≈ 1/3 of pure-model) + BGM + per-scene revision tree
@@ -88,7 +89,7 @@ bun run dev        # http://localhost:3000
 
 - `tsc` and `eslint src/` both at zero
 - 40+ item end-to-end main regression (`scripts/full-regression.mjs`): 9-step pipeline / eval set / video direct-from-topic / image line / 5-platform export / publish gate
-- P1 suites: layout cards 33/33, point-and-rewrite 28/28 offline + 34/34 browser + 18/18 live, RSS feeds 37/37 incl. local-HTTP E2E, tuning loop 27/27
+- P1 suites: layout cards 33/33, point-and-rewrite 28/28 offline + 34/34 browser + 18/18 live, RSS feeds 37/37 + ETag conditional requests 19/19 incl. local-HTTP E2E (`test-rss.mjs` / `test-rss-proxy.mjs`), tuning loop 27/27
 - Eval runner (`scripts/eval-set.mjs`) and tuning runner (`scripts/tune-prompts.mjs`): same-topic before/after comparison, scores are regressable
 - Every change logged in `worklog.md`: what was built, what broke, how it was fixed
 
@@ -104,6 +105,8 @@ src/
 │   └── ...         # radar / article / video pipelines
 prisma/schema.prisma # data model, 14 tables
 scripts/            # regression / build / maintenance scripts
+docs/               # ADRs (0001–0012) / agent workflow docs / per-batch plans
+GLOSSARY.md         # bilingual domain glossary (51 entries: Chinese ↔ code identifiers)
 worklog.md          # full development log (Chinese)
 download/           # screenshots & delivered assets
 ```
